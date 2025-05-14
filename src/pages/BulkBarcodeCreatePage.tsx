@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, ChangeEvent } from 'react';
 import Layout from '../components/Layout';
 
@@ -111,14 +110,23 @@ const BulkBarcodeCreatePage: React.FC = () => {
               <p className="text-sm text-gray-600 mb-2">
                 Click to browse or drag and drop your file here
               </p>
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-gray-500 mb-2">
                 Supported formats: Excel (.xlsx, .xls), CSV
               </p>
+              
+              <button 
+                type="button"
+                className="mt-2 px-4 py-2 bg-green text-white rounded hover:opacity-90"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isLoading || isSubmitting}
+              >
+                Browse Files
+              </button>
               
               <input
                 ref={fileInputRef}
                 type="file"
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                className="hidden"
                 onChange={handleFileChange}
                 accept=".xlsx,.xls,.csv"
                 disabled={isLoading || isSubmitting}
