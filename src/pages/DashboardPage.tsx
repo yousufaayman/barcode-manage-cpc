@@ -1,10 +1,9 @@
-
 import React from 'react';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer, ChartTooltip } from '@/components/ui/chart';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
 const DashboardPage: React.FC = () => {
   const { user } = useAuth();
@@ -24,9 +23,9 @@ const DashboardPage: React.FC = () => {
 
   // Production phase data for Admin
   const productionPhaseData = [
-    { phase: 'Cutting', count: 432 },
-    { phase: 'Sewing', count: 378 },
-    { phase: 'Packaging', count: 435 },
+    { phase: 'Cutting', count: 432, color: '#118B50' }, // primary green
+    { phase: 'Sewing', count: 378, color: '#5DB996' },  // mint green
+    { phase: 'Packaging', count: 435, color: '#E3F0AF' }, // light lime
   ];
 
   // Role-specific metrics
@@ -106,36 +105,29 @@ const DashboardPage: React.FC = () => {
             </CardHeader>
             <CardContent className="pt-2">
               <div className="h-80 w-full">
-                <ChartContainer
-                  config={{
-                    Cutting: { color: '#118B50' },    // primary green
-                    Sewing: { color: '#5DB996' },     // mint green
-                    Packaging: { color: '#E3F0AF' },  // light lime
-                  }}
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={productionPhaseData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                      <XAxis dataKey="phase" />
-                      <YAxis />
-                      <Tooltip content={(props) => {
-                        if (!props.active || !props.payload?.length) return null;
-                        const data = props.payload[0].payload;
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={productionPhaseData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                    <XAxis dataKey="phase" />
+                    <YAxis />
+                    <Tooltip
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null;
+                        const data = payload[0].payload;
                         return (
-                          <div className="bg-white p-2 border border-gray-200 shadow-sm rounded">
-                            <p className="font-medium">{data.phase}</p>
-                            <p className="text-sm">Count: {data.count}</p>
+                          <div className="bg-white p-3 border border-gray-200 shadow-md rounded-md">
+                            <p className="font-medium text-gray-800">{data.phase}</p>
+                            <p className="text-sm mt-1">Count: <span className="font-medium">{data.count}</span></p>
                           </div>
                         );
-                      }} />
-                      <Bar dataKey="count" fill="#118B50">
-                        {productionPhaseData.map((entry, index) => {
-                          const colors = ['#118B50', '#5DB996', '#E3F0AF'];
-                          return <Bar key={`bar-${index}`} dataKey="count" fill={colors[index % colors.length]} />
-                        })}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </ChartContainer>
+                      }}
+                    />
+                    <Bar dataKey="count">
+                      {productionPhaseData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </CardContent>
           </Card>
