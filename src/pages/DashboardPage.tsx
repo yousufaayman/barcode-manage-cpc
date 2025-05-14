@@ -105,29 +105,36 @@ const DashboardPage: React.FC = () => {
               <CardTitle className="text-lg font-medium">Items in Each Production Phase</CardTitle>
             </CardHeader>
             <CardContent className="pt-2">
-              <div className="h-80">
+              <div className="h-80 w-full">
                 <ChartContainer
                   config={{
-                    Cutting: { color: '#4299E1' },  // blue
-                    Sewing: { color: '#9F7AEA' },   // purple
-                    Packaging: { color: '#ED8936' }, // orange
+                    Cutting: { color: '#118B50' },    // primary green
+                    Sewing: { color: '#5DB996' },     // mint green
+                    Packaging: { color: '#E3F0AF' },  // light lime
                   }}
                 >
-                  <BarChart data={productionPhaseData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                    <XAxis dataKey="phase" />
-                    <YAxis />
-                    <Tooltip content={(props) => {
-                      if (!props.active || !props.payload?.length) return null;
-                      const data = props.payload[0].payload;
-                      return (
-                        <div className="bg-white p-2 border border-gray-200 shadow-sm rounded">
-                          <p className="font-medium">{data.phase}</p>
-                          <p className="text-sm">Count: {data.count}</p>
-                        </div>
-                      );
-                    }} />
-                    <Bar dataKey="count" fill="#8884d8" radius={[4, 4, 0, 0]} />
-                  </BarChart>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={productionPhaseData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                      <XAxis dataKey="phase" />
+                      <YAxis />
+                      <Tooltip content={(props) => {
+                        if (!props.active || !props.payload?.length) return null;
+                        const data = props.payload[0].payload;
+                        return (
+                          <div className="bg-white p-2 border border-gray-200 shadow-sm rounded">
+                            <p className="font-medium">{data.phase}</p>
+                            <p className="text-sm">Count: {data.count}</p>
+                          </div>
+                        );
+                      }} />
+                      <Bar dataKey="count" fill="#118B50">
+                        {productionPhaseData.map((entry, index) => {
+                          const colors = ['#118B50', '#5DB996', '#E3F0AF'];
+                          return <Bar key={`bar-${index}`} dataKey="count" fill={colors[index % colors.length]} />
+                        })}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
                 </ChartContainer>
               </div>
             </CardContent>
