@@ -2,6 +2,9 @@
 import React from 'react';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ChartContainer, ChartTooltip } from '@/components/ui/chart';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const DashboardPage: React.FC = () => {
   const { user } = useAuth();
@@ -18,6 +21,13 @@ const DashboardPage: React.FC = () => {
       { id: 4, action: 'Phase Changed', user: 'Sarah', barcode: '12345678', time: '1 hour ago' },
     ]
   };
+
+  // Production phase data for Admin
+  const productionPhaseData = [
+    { phase: 'Cutting', count: 432 },
+    { phase: 'Sewing', count: 378 },
+    { phase: 'Packaging', count: 435 },
+  ];
 
   // Role-specific metrics
   const roleMetrics = {
@@ -83,6 +93,47 @@ const DashboardPage: React.FC = () => {
           <div className="text-2xl font-bold">{stats.pendingPhase}</div>
         </div>
       </div>
+
+      {/* Production Phase Distribution for Admin */}
+      {user && user.role === 'Admin' && (
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-3 text-gray-700">
+            Production Phase Distribution
+          </h2>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg font-medium">Items in Each Production Phase</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-2">
+              <div className="h-80">
+                <ChartContainer
+                  config={{
+                    Cutting: { color: '#4299E1' },  // blue
+                    Sewing: { color: '#9F7AEA' },   // purple
+                    Packaging: { color: '#ED8936' }, // orange
+                  }}
+                >
+                  <BarChart data={productionPhaseData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                    <XAxis dataKey="phase" />
+                    <YAxis />
+                    <Tooltip content={(props) => {
+                      if (!props.active || !props.payload?.length) return null;
+                      const data = props.payload[0].payload;
+                      return (
+                        <div className="bg-white p-2 border border-gray-200 shadow-sm rounded">
+                          <p className="font-medium">{data.phase}</p>
+                          <p className="text-sm">Count: {data.count}</p>
+                        </div>
+                      );
+                    }} />
+                    <Bar dataKey="count" fill="#8884d8" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ChartContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Role specific metrics */}
       {user && roleMetrics[user.role as keyof typeof roleMetrics] && (
