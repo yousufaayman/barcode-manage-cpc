@@ -1,4 +1,3 @@
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -150,4 +149,13 @@
   .pagination-btn.active {
     @apply bg-green text-white;
   }
+}
+
+/* --- Animation/Performance Optimizations --- */
+.inventory-table-container {
+  will-change: transform;
+}
+
+.chart-container {
+  will-change: transform;
 }

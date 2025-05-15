@@ -228,18 +228,6 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
     # Update only the fields that are provided
     update_data = batch.dict(exclude_unset=True)
     
-    # Handle automatic phase advancement when status is set to completed
-    if update_data.get('status') == 'Completed':
-        current_phase = db_batch.current_phase
-        # If in Cutting (1) or Sewing (2), advance to next phase with Pending status
-        if current_phase == 1:  # Cutting
-            update_data['current_phase'] = 2  # Move to Sewing
-            update_data['status'] = 'Pending'  # Set status to Pending
-        elif current_phase == 2:  # Sewing
-            update_data['current_phase'] = 3  # Move to Packaging
-            update_data['status'] = 'Pending'  # Set status to Pending
-        # If in Packaging (3), stay in Packaging with Completed status
-    
     # Update the SQLAlchemy model instance
     for field, value in update_data.items():
         setattr(db_batch, field, value)

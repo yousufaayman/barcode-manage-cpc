@@ -113,7 +113,7 @@ class BatchBase(BaseModel):
     color_id: int
     quantity: int = Field(ge=1, le=999)
     layers: int = Field(ge=1, le=99)
-    serial: int = Field(ge=1, le=999)
+    serial: str = Field(min_length=1, max_length=3)
     current_phase: int
     status: str
 
@@ -123,7 +123,7 @@ class BatchCreate(BatchBase):
 class BatchUpdate(BaseModel):
     quantity: Optional[int] = Field(None, ge=1, le=999)
     layers: Optional[int] = Field(None, ge=1, le=99)
-    serial: Optional[int] = Field(None, ge=1, le=999)
+    serial: Optional[str] = Field(None, min_length=1, max_length=3)
     current_phase: Optional[int] = None
     status: Optional[str] = None
 
@@ -147,7 +147,7 @@ class BatchResponse(BaseModel):
     color_name: str
     quantity: int
     layers: int
-    serial: int
+    serial: str
     phase_name: str
     status: str
 
@@ -181,4 +181,23 @@ class BulkSubmitResponse(BaseModel):
     message: str
 
     class Config:
-        from_attributes = True 
+        from_attributes = True
+
+class BatchStats(BaseModel):
+    total_batches: int
+    in_production: int
+    completed: int
+
+class PackagingStats(BaseModel):
+    completed: int
+    pending: int
+    in_progress: int  # Separate from pending now
+
+class PhaseStatusStats(BaseModel):
+    pending: int
+    in_progress: int
+
+class PhaseStats(BaseModel):
+    cutting: PhaseStatusStats
+    sewing: PhaseStatusStats
+    packaging: PackagingStats 

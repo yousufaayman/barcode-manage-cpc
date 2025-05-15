@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import Navbar from './Navbar';
 import Sidebar from './Sidebar';
 import { cn } from '../lib/utils';
 
@@ -29,7 +28,18 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       </div>
 
       <div className="flex flex-col flex-1 overflow-hidden">
-        <Navbar onMenuClick={() => setIsSidebarOpen(true)} />
+        {/* Mobile Menu Button */}
+        <div className="md:hidden p-4">
+          <button
+            onClick={() => setIsSidebarOpen(true)}
+            className="p-2 text-gray-500 hover:text-gray-700"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        </div>
+
         <main className="flex-1 p-6 overflow-y-auto">
           {children}
         </main>

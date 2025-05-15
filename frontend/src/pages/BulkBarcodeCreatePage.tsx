@@ -279,6 +279,25 @@ const BulkBarcodeCreatePage: React.FC = () => {
       return;
     }
 
+    // Validate data before submission
+    const validationErrors = [];
+    preview.forEach((item, index) => {
+      if (item.quantity < 1 || item.quantity > 999) {
+        validationErrors.push(`Row ${index + 1}: Quantity must be between 1 and 999`);
+      }
+      if (item.layers < 1 || item.layers > 99) {
+        validationErrors.push(`Row ${index + 1}: Layers must be between 1 and 99`);
+      }
+      if (item.serial < 1 || item.serial > 999) {
+        validationErrors.push(`Row ${index + 1}: Serial must be between 1 and 999`);
+      }
+    });
+
+    if (validationErrors.length > 0) {
+      setError(validationErrors.join('\n'));
+      return;
+    }
+
     // Filter out invalid rows but allow submission of valid ones
     const validRows = preview.filter(item => {
       const isValid = item.brand_id && 
@@ -312,7 +331,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
         color_id: item.color_id,
         quantity: Number(item.quantity),
         layers: Number(item.layers),
-        serial: Number(item.serial),
+        serial: String(item.serial).padStart(3, '0'),  // Convert to string and pad with zeros
         current_phase: 1,
         status: "pending"
       }));
@@ -345,7 +364,20 @@ const BulkBarcodeCreatePage: React.FC = () => {
       );
       setIsSubmitted(true);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to submit barcodes');
+      if (err.response?.status === 422) {
+        // Handle validation errors
+        const validationErrors = err.response.data.detail;
+        if (Array.isArray(validationErrors)) {
+          const errorMessages = validationErrors.map((error: any) => 
+            `${error.loc[error.loc.length - 1]}: ${error.msg}`
+          ).join('\n');
+          setError(errorMessages);
+        } else {
+          setError('Validation error: ' + JSON.stringify(validationErrors));
+        }
+      } else {
+        setError(err.response?.data?.detail || 'Failed to submit barcodes');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -459,7 +491,11 @@ const BulkBarcodeCreatePage: React.FC = () => {
             </div>
             
             {error && (
-              <p className="mt-2 text-sm text-red-600">{error}</p>
+              <div className="mt-2 text-sm text-red-600 max-h-32 overflow-y-auto border border-red-200 rounded-md p-2">
+                {error.split('\n').map((line, index) => (
+                  <p key={index} className="mb-1">{line}</p>
+                ))}
+              </div>
             )}
             
             {file && !error && (

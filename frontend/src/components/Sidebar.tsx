@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 interface SidebarProps {
@@ -8,10 +8,16 @@ interface SidebarProps {
 
 const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const location = useLocation();
-  const { user } = useAuth();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
   const isActive = (path: string) => {
     return location.pathname === path;
+  };
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
   };
 
   const NavItem = ({ to, label }: { to: string; label: string }) => (
@@ -58,12 +64,24 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
         <NavItem to="/barcode-management" label="Barcode Management" />
       </nav>
       
-      <div className="mt-auto pt-4 border-t border-gray-200">
-        <div className="text-xs text-gray-500 mb-2">Role</div>
-        <div className="bg-lime rounded-md p-2">
-          <div className="font-medium">{user?.role}</div>
-          <div className="text-xs text-gray-600">Access Level</div>
-        </div>
+      <div className="mt-auto space-y-4">
+        {user && (
+          <>
+            <div className="text-xs text-gray-500 mb-2">Logged in as</div>
+            <div className="bg-lime rounded-md p-3">
+              <div className="font-medium text-gray-800">{user.username}</div>
+              <div className="flex items-center justify-between mt-1">
+                <div className="text-xs text-gray-600">{user.role}</div>
+                <button 
+                  onClick={handleLogout} 
+                  className="text-xs text-gray-600 hover:text-green transition-colors"
+                >
+                  Logout
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -86,7 +86,7 @@ class Batch(Base):
     color_id = Column(Integer, ForeignKey("colors.color_id"))
     quantity = Column(Integer)
     layers = Column(Integer)
-    serial = Column(Integer)
+    serial = Column(String(3))
     current_phase = Column(Integer, ForeignKey("production_phases.phase_id"))
     status = Column(String(50))
 

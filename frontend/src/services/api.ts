@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = 'http://127.0.0.1:8000/api/v1';
+const API_URL = 'http://192.168.1.9:8000/api/v1';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -66,6 +66,29 @@ export interface BarcodeUpdate {
   status?: string;
 }
 
+export interface BatchStats {
+  total_batches: number;
+  in_production: number;
+  completed: number;
+}
+
+export interface PackagingStats {
+  completed: number;
+  pending: number;
+  in_progress: number;
+}
+
+export interface PhaseStatusStats {
+  pending: number;
+  in_progress: number;
+}
+
+export interface PhaseStats {
+  cutting: PhaseStatusStats;
+  sewing: PhaseStatusStats;
+  packaging: PackagingStats;
+}
+
 export const authApi = {
   login: async (username: string, password: string): Promise<LoginResponse> => {
     const formData = new URLSearchParams();
@@ -120,6 +143,16 @@ export const barcodeApi = {
 
   updateBarcode: async (barcode: string, updateData: BarcodeUpdate): Promise<BarcodeData> => {
     const response = await api.put<BarcodeData>(`/batches/barcode/${barcode}`, updateData);
+    return response.data;
+  },
+
+  getBatchStats: async (): Promise<BatchStats> => {
+    const response = await api.get<BatchStats>('/batches/stats');
+    return response.data;
+  },
+
+  getPhaseStats: async (): Promise<PhaseStats> => {
+    const response = await api.get<PhaseStats>('/batches/phase-stats');
     return response.data;
   },
 };
