@@ -1,4 +1,3 @@
-
 import React, { useState, FormEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -136,28 +135,6 @@ const LoginPage: React.FC = () => {
                 )}
               </button>
             </form>
-
-            <div className="mt-8 p-4 bg-lime bg-opacity-40 rounded-lg">
-              <h3 className="text-green font-medium text-center mb-2">Demo Credentials</h3>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div className="bg-white p-2 rounded shadow-sm">
-                  <span className="font-semibold block">Admin</span>
-                  <span className="text-gray-600">admin / admin123</span>
-                </div>
-                <div className="bg-white p-2 rounded shadow-sm">
-                  <span className="font-semibold block">Cutting</span>
-                  <span className="text-gray-600">cutting / cutting123</span>
-                </div>
-                <div className="bg-white p-2 rounded shadow-sm">
-                  <span className="font-semibold block">Sewing</span>
-                  <span className="text-gray-600">sewing / sewing123</span>
-                </div>
-                <div className="bg-white p-2 rounded shadow-sm">
-                  <span className="font-semibold block">Packaging</span>
-                  <span className="text-gray-600">packaging / packaging123</span>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
         

@@ -1,20 +1,25 @@
-
 import React, { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
+import api from '../services/api';
+import { cn } from '../lib/utils';
+import { Label } from '../components/ui/label';
+import { Input } from '../components/ui/input';
+import { Button } from '../components/ui/button';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/select';
 
 interface Barcode {
-  id: number;
+  batch_id: number;
   barcode: string;
-  brandId: string;
-  modelId: string;
-  sizeId: string;
-  colorId: string;
+  brand_name: string;
+  model_name: string;
+  size_value: string;
+  color_name: string;
   quantity: number;
   layers: number;
-  serial: string;
-  currentPhase: string;
-  status: string;
+  serial: number;
+  phase_name: string;
+  status: 'Pending' | 'In Progress' | 'Completed';
 }
 
 const BarcodeManagementPage: React.FC = () => {
@@ -26,62 +31,68 @@ const BarcodeManagementPage: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [filters, setFilters] = useState({
     barcode: '',
-    brandId: '',
-    modelId: '',
-    sizeId: '',
-    colorId: '',
-    currentPhase: '',
+    brand: '',
+    model: '',
+    size: '',
+    color: '',
+    phase: '',
     status: ''
   });
+  const [printCount, setPrintCount] = useState<number>(1);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printers, setPrinters] = useState<string[]>([]);
+  const [selectedPrinter, setSelectedPrinter] = useState<string>("");
   
   // Temporary state for edited values
   const [editValues, setEditValues] = useState({
-    currentPhase: '',
-    status: '',
+    phase_name: '',
+    status: '' as 'Pending' | 'In Progress' | 'Completed',
     quantity: 0,
     layers: 0,
-    serial: ''
+    serial: 0
   });
   
   // Items per page
-  const itemsPerPage = 10; // Changed to 10 for demo to make pagination more visible
-  
-  // Generate mock data on component mount
+  const itemsPerPage = 10;
+
+  // Temporary state for mobile responsiveness
+  const [showAllColumns, setShowAllColumns] = useState(false);
+
+  // Fetch barcodes from the database
   useEffect(() => {
-    // Simulate API call to fetch barcodes
-    setLoading(true);
-    
-    setTimeout(() => {
-      const mockBarcodes: Barcode[] = Array.from({ length: 50 }, (_, i) => {
-        // Generate random phase more likely to match user's role if not admin
-        let phase = ['Cutting', 'Sewing', 'Packaging'][Math.floor(Math.random() * 3)];
-        if (user && user.role !== 'Admin') {
-          // 70% chance to match user's role for non-admin users
-          if (Math.random() < 0.7) {
-            phase = user.role;
-          }
+    const fetchBarcodes = async () => {
+      try {
+        setLoading(true);
+        const response = await api.get('/batches/');
+        setBarcodes(response.data);
+      } catch (error) {
+        console.error('Error fetching barcodes:', error);
+        // You might want to show an error message to the user here
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBarcodes();
+  }, []);
+
+  // Fetch available printers
+  useEffect(() => {
+    const fetchPrinters = async () => {
+      try {
+        const response = await api.get('/barcodes/printers');
+        setPrinters(response.data.printers);
+        if (response.data.printers.length > 0) {
+          setSelectedPrinter(response.data.printers[0]);
         }
-        
-        return {
-          id: i + 1,
-          barcode: `BC${(1000000 + i).toString()}`,
-          brandId: `BR-${(100 + i % 10).toString()}`,
-          modelId: `MD-${(200 + i % 15).toString()}`,
-          sizeId: `SZ-${(i % 5 + 1).toString()}`,
-          colorId: `CL-${(i % 8 + 1).toString()}`,
-          quantity: Math.floor(Math.random() * 50) + 1,
-          layers: Math.floor(Math.random() * 5) + 1,
-          serial: `SR-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-          currentPhase: phase,
-          status: ['Active', 'Inactive', 'Processing', 'Complete'][Math.floor(Math.random() * 4)],
-        };
-      });
-      
-      setBarcodes(mockBarcodes);
-      setLoading(false);
-    }, 1000);
-  }, [user]);
-  
+      } catch (err) {
+        console.error('Error fetching printers:', err);
+      }
+    };
+
+    fetchPrinters();
+  }, []);
+
   // Handle changes to filter inputs
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -93,11 +104,11 @@ const BarcodeManagementPage: React.FC = () => {
   const filteredBarcodes = barcodes.filter(barcode => {
     return (
       (filters.barcode === '' || barcode.barcode.toLowerCase().includes(filters.barcode.toLowerCase())) &&
-      (filters.brandId === '' || barcode.brandId.toLowerCase().includes(filters.brandId.toLowerCase())) &&
-      (filters.modelId === '' || barcode.modelId.toLowerCase().includes(filters.modelId.toLowerCase())) &&
-      (filters.sizeId === '' || barcode.sizeId.toLowerCase().includes(filters.sizeId.toLowerCase())) &&
-      (filters.colorId === '' || barcode.colorId.toLowerCase().includes(filters.colorId.toLowerCase())) &&
-      (filters.currentPhase === '' || barcode.currentPhase === filters.currentPhase) &&
+      (filters.brand === '' || barcode.brand_name.toLowerCase().includes(filters.brand.toLowerCase())) &&
+      (filters.model === '' || barcode.model_name.toLowerCase().includes(filters.model.toLowerCase())) &&
+      (filters.size === '' || barcode.size_value.toLowerCase().includes(filters.size.toLowerCase())) &&
+      (filters.color === '' || barcode.color_name.toLowerCase().includes(filters.color.toLowerCase())) &&
+      (filters.phase === '' || barcode.phase_name === filters.phase) &&
       (filters.status === '' || barcode.status === filters.status)
     );
   });
@@ -131,15 +142,15 @@ const BarcodeManagementPage: React.FC = () => {
     if (selectedBarcodes.length === currentBarcodes.length) {
       setSelectedBarcodes([]);
     } else {
-      setSelectedBarcodes(currentBarcodes.map(barcode => barcode.id));
+      setSelectedBarcodes(currentBarcodes.map(barcode => barcode.batch_id));
     }
   };
   
   // Start editing a barcode
   const handleEdit = (barcode: Barcode) => {
-    setEditingId(barcode.id);
+    setEditingId(barcode.batch_id);
     setEditValues({
-      currentPhase: barcode.currentPhase,
+      phase_name: barcode.phase_name,
       status: barcode.status,
       quantity: barcode.quantity,
       layers: barcode.layers,
@@ -152,20 +163,42 @@ const BarcodeManagementPage: React.FC = () => {
     const { name, value } = e.target;
     setEditValues(prev => ({ 
       ...prev, 
-      [name]: name === 'quantity' || name === 'layers' ? parseInt(value) || 0 : value
+      [name]: name === 'quantity' || name === 'layers' || name === 'serial' ? parseInt(value) || 0 : value
     }));
   };
   
   // Save edits
-  const handleSaveEdit = (id: number) => {
-    setBarcodes(prev => 
-      prev.map(barcode => 
-        barcode.id === id 
-          ? { ...barcode, ...editValues } 
-          : barcode
-      )
-    );
-    setEditingId(null);
+  const handleSaveEdit = async (id: number) => {
+    try {
+      // Map phase_name to current_phase based on the phase name
+      const phaseMap: { [key: string]: number } = {
+        'Cutting': 1,
+        'Sewing': 2,
+        'Packaging': 3
+      };
+
+      const updateData = {
+        quantity: editValues.quantity,
+        layers: editValues.layers,
+        serial: editValues.serial,
+        current_phase: phaseMap[editValues.phase_name],
+        status: editValues.status
+      };
+
+      const response = await api.put(`/batches/${id}`, updateData);
+
+      setBarcodes(prev => 
+        prev.map(barcode => 
+          barcode.batch_id === id 
+            ? { ...barcode, ...response.data } 
+            : barcode
+        )
+      );
+      setEditingId(null);
+    } catch (error) {
+      console.error('Error updating barcode:', error);
+      // You might want to show an error message to the user here
+    }
   };
   
   // Cancel editing
@@ -174,35 +207,78 @@ const BarcodeManagementPage: React.FC = () => {
   };
   
   // Handle delete
-  const handleDelete = (id: number) => {
+  const handleDelete = async (id: number) => {
     if (window.confirm('Are you sure you want to delete this barcode?')) {
-      setBarcodes(prev => prev.filter(barcode => barcode.id !== id));
-      setSelectedBarcodes(prev => prev.filter(barcodeId => barcodeId !== id));
+      try {
+        await api.delete(`/batches/${id}`);
+        setBarcodes(prev => prev.filter(barcode => barcode.batch_id !== id));
+        setSelectedBarcodes(prev => prev.filter(barcodeId => barcodeId !== id));
+      } catch (error) {
+        console.error('Error deleting barcode:', error);
+        // You might want to show an error message to the user here
+      }
     }
   };
   
   // Handle bulk delete
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
     if (selectedBarcodes.length === 0) {
       alert('Please select at least one barcode to delete.');
       return;
     }
     
     if (window.confirm(`Are you sure you want to delete ${selectedBarcodes.length} selected barcodes?`)) {
-      setBarcodes(prev => prev.filter(barcode => !selectedBarcodes.includes(barcode.id)));
-      setSelectedBarcodes([]);
+      try {
+        await Promise.all(selectedBarcodes.map(id => api.delete(`/batches/${id}`)));
+        setBarcodes(prev => prev.filter(barcode => !selectedBarcodes.includes(barcode.batch_id)));
+        setSelectedBarcodes([]);
+      } catch (error) {
+        console.error('Error deleting barcodes:', error);
+        // You might want to show an error message to the user here
+      }
     }
   };
   
   // Handle print selected
-  const handlePrintSelected = () => {
+  const handlePrintSelected = async () => {
     if (selectedBarcodes.length === 0) {
       alert('Please select at least one barcode to print.');
       return;
     }
     
-    // In a real app, this would trigger a print dialog or similar
-    alert(`Printing ${selectedBarcodes.length} barcodes`);
+    if (!selectedPrinter) {
+      alert('Please select a printer.');
+      return;
+    }
+    
+    try {
+      setIsPrinting(true);
+      const barcodesToPrint = barcodes
+        .filter(barcode => selectedBarcodes.includes(barcode.batch_id))
+        .map(barcode => ({
+          barcode: barcode.barcode,
+          brand: barcode.brand_name,
+          model: barcode.model_name,
+          size: barcode.size_value,
+          color: barcode.color_name,
+          quantity: barcode.quantity,
+          layers: barcode.layers,
+          serial: barcode.serial
+        }));
+
+      await api.post('/barcodes/print', {
+        barcodes: barcodesToPrint,
+        count: printCount,
+        printer_name: selectedPrinter
+      });
+
+      alert(`Successfully printed ${selectedBarcodes.length} barcodes ${printCount} times each on ${selectedPrinter}`);
+    } catch (error) {
+      console.error('Error printing barcodes:', error);
+      alert('Failed to print barcodes. Please try again.');
+    } finally {
+      setIsPrinting(false);
+    }
   };
 
   // Render pagination controls
@@ -223,48 +299,36 @@ const BarcodeManagementPage: React.FC = () => {
     }
     
     return (
-      <div className="pagination">
-        <button
-          className="pagination-btn"
-          onClick={() => handlePageChange(1)}
-          disabled={currentPage === 1}
-        >
-          First
-        </button>
-        
-        <button
-          className="pagination-btn"
-          onClick={() => handlePageChange(currentPage - 1)}
-          disabled={currentPage === 1}
-        >
-          &lt;
-        </button>
-        
-        {pageNumbers.map(number => (
+      <div className="flex justify-center mt-4">
+        <nav className="flex items-center space-x-2">
           <button
-            key={number}
-            className={`pagination-btn ${currentPage === number ? 'active' : ''}`}
-            onClick={() => handlePageChange(number)}
+            onClick={() => handlePageChange(currentPage - 1)}
+            disabled={currentPage === 1}
+            className="px-3 py-1 rounded border disabled:opacity-50"
           >
-            {number}
+            Previous
           </button>
-        ))}
-        
-        <button
-          className="pagination-btn"
-          onClick={() => handlePageChange(currentPage + 1)}
-          disabled={currentPage === totalPages}
-        >
-          &gt;
-        </button>
-        
-        <button
-          className="pagination-btn"
-          onClick={() => handlePageChange(totalPages)}
-          disabled={currentPage === totalPages}
-        >
-          Last
-        </button>
+          
+          {pageNumbers.map(number => (
+            <button
+              key={number}
+              onClick={() => handlePageChange(number)}
+              className={`px-3 py-1 rounded border ${
+                currentPage === number ? 'bg-green text-white' : ''
+              }`}
+            >
+              {number}
+            </button>
+          ))}
+          
+          <button
+            onClick={() => handlePageChange(currentPage + 1)}
+            disabled={currentPage === totalPages}
+            className="px-3 py-1 rounded border disabled:opacity-50"
+          >
+            Next
+          </button>
+        </nav>
       </div>
     );
   };
@@ -296,59 +360,59 @@ const BarcodeManagementPage: React.FC = () => {
             </div>
             
             <div className="form-group">
-              <label htmlFor="brandId" className="text-sm font-medium text-gray-700">Brand ID</label>
+              <label htmlFor="brand" className="text-sm font-medium text-gray-700">Brand</label>
               <input
                 type="text"
-                id="brandId"
-                name="brandId"
-                value={filters.brandId}
+                id="brand"
+                name="brand"
+                value={filters.brand}
                 onChange={handleFilterChange}
                 className="input-field"
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="modelId" className="text-sm font-medium text-gray-700">Model ID</label>
+              <label htmlFor="model" className="text-sm font-medium text-gray-700">Model</label>
               <input
                 type="text"
-                id="modelId"
-                name="modelId"
-                value={filters.modelId}
+                id="model"
+                name="model"
+                value={filters.model}
                 onChange={handleFilterChange}
                 className="input-field"
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="sizeId" className="text-sm font-medium text-gray-700">Size ID</label>
+              <label htmlFor="size" className="text-sm font-medium text-gray-700">Size</label>
               <input
                 type="text"
-                id="sizeId"
-                name="sizeId"
-                value={filters.sizeId}
+                id="size"
+                name="size"
+                value={filters.size}
                 onChange={handleFilterChange}
                 className="input-field"
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="colorId" className="text-sm font-medium text-gray-700">Color ID</label>
+              <label htmlFor="color" className="text-sm font-medium text-gray-700">Color</label>
               <input
                 type="text"
-                id="colorId"
-                name="colorId"
-                value={filters.colorId}
+                id="color"
+                name="color"
+                value={filters.color}
                 onChange={handleFilterChange}
                 className="input-field"
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="currentPhase" className="text-sm font-medium text-gray-700">Current Phase</label>
+              <label htmlFor="phase" className="text-sm font-medium text-gray-700">Phase</label>
               <select
-                id="currentPhase"
-                name="currentPhase"
-                value={filters.currentPhase}
+                id="phase"
+                name="phase"
+                value={filters.phase}
                 onChange={handleFilterChange}
                 className="input-field"
               >
@@ -369,29 +433,73 @@ const BarcodeManagementPage: React.FC = () => {
                 className="input-field"
               >
                 <option value="">All Statuses</option>
-                <option value="Active">Active</option>
-                <option value="Inactive">Inactive</option>
-                <option value="Processing">Processing</option>
-                <option value="Complete">Complete</option>
+                <option value="Pending">Pending</option>
+                <option value="In Progress">In Progress</option>
+                <option value="Completed">Completed</option>
               </select>
             </div>
           </div>
         </div>
         
         {/* Action Buttons */}
-        <div className="flex justify-between items-center mb-4">
-          <div className="text-sm text-gray-600">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
+          <div className="text-sm text-gray-600 mb-2 md:mb-0">
             Showing {currentBarcodes.length} of {filteredBarcodes.length} barcodes
           </div>
           
-          <div className="flex space-x-3">
-            <button 
-              className="btn-outline text-sm" 
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="flex items-center space-x-2">
+              <Label htmlFor="printCount">Print Count:</Label>
+              <Input
+                id="printCount"
+                type="number"
+                min={1}
+                max={100}
+                value={printCount}
+                onChange={(e) => setPrintCount(Math.max(1, Math.min(100, parseInt(e.target.value) || 1)))}
+                className="w-20"
+                disabled={isPrinting}
+              />
+            </div>
+            <div className="flex items-center space-x-2">
+              <Label htmlFor="printer">Printer:</Label>
+              <Select
+                value={selectedPrinter}
+                onValueChange={setSelectedPrinter}
+                disabled={isPrinting}
+              >
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Select printer" />
+                </SelectTrigger>
+                <SelectContent>
+                  {printers.map((printer) => (
+                    <SelectItem key={printer} value={printer}>
+                      {printer}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
               onClick={handlePrintSelected}
-              disabled={selectedBarcodes.length === 0}
+              disabled={isPrinting || selectedBarcodes.length === 0 || !selectedPrinter}
+              className={cn(
+                "bg-blue-600 hover:bg-blue-700 text-white",
+                isPrinting && "opacity-50 cursor-not-allowed"
+              )}
             >
-              Print Selected
-            </button>
+              {isPrinting ? (
+                <span className="flex items-center">
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Printing...
+                </span>
+              ) : (
+                'Print Selected'
+              )}
+            </Button>
             
             {user?.role === 'Admin' && (
               <button 
@@ -414,196 +522,206 @@ const BarcodeManagementPage: React.FC = () => {
         ) : (
           <>
             <div className="table-container mb-4">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>
-                      <input
-                        type="checkbox"
-                        checked={currentBarcodes.length > 0 && selectedBarcodes.length === currentBarcodes.length}
-                        onChange={handleSelectAll}
-                      />
-                    </th>
-                    <th>Barcode</th>
-                    <th>Brand/Model</th>
-                    <th>Size/Color</th>
-                    <th>Quantity</th>
-                    <th>Layers</th>
-                    <th>Serial</th>
-                    <th>Phase</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {currentBarcodes.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="text-center py-4">
-                        No barcodes found matching your filters.
-                      </td>
-                    </tr>
+              <div className="flex justify-end mb-2">
+                <button
+                  onClick={() => setShowAllColumns(!showAllColumns)}
+                  className="text-sm text-gray-600 hover:text-gray-800 flex items-center"
+                >
+                  {showAllColumns ? (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                      Hide Additional Columns
+                    </>
                   ) : (
-                    currentBarcodes.map(barcode => (
-                      <tr 
-                        key={barcode.id} 
-                        className={selectedBarcodes.includes(barcode.id) ? 'bg-lime bg-opacity-30' : ''}
-                      >
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={selectedBarcodes.includes(barcode.id)}
-                            onChange={() => handleSelectBarcode(barcode.id)}
-                          />
-                        </td>
-                        <td>{barcode.barcode}</td>
-                        <td>
-                          {barcode.brandId}<br />
-                          <span className="text-xs text-gray-500">{barcode.modelId}</span>
-                        </td>
-                        <td>
-                          {barcode.sizeId}<br />
-                          <span className="text-xs text-gray-500">{barcode.colorId}</span>
-                        </td>
-                        
-                        <td>
-                          {editingId === barcode.id ? (
-                            <input
-                              type="number"
-                              name="quantity"
-                              value={editValues.quantity}
-                              onChange={handleEditChange}
-                              className="w-16 p-1 border rounded text-sm"
-                              min="0"
-                            />
-                          ) : (
-                            barcode.quantity
-                          )}
-                        </td>
-                        
-                        <td>
-                          {editingId === barcode.id ? (
-                            <input
-                              type="number"
-                              name="layers"
-                              value={editValues.layers}
-                              onChange={handleEditChange}
-                              className="w-16 p-1 border rounded text-sm"
-                              min="0"
-                            />
-                          ) : (
-                            barcode.layers
-                          )}
-                        </td>
-                        
-                        <td>
-                          {editingId === barcode.id ? (
-                            <input
-                              type="text"
-                              name="serial"
-                              value={editValues.serial}
-                              onChange={handleEditChange}
-                              className="w-24 p-1 border rounded text-sm"
-                            />
-                          ) : (
-                            barcode.serial
-                          )}
-                        </td>
-                        
-                        <td>
-                          {editingId === barcode.id ? (
-                            <select
-                              name="currentPhase"
-                              value={editValues.currentPhase}
-                              onChange={handleEditChange}
-                              className="w-24 p-1 border rounded text-sm"
-                            >
-                              <option value="Cutting">Cutting</option>
-                              <option value="Sewing">Sewing</option>
-                              <option value="Packaging">Packaging</option>
-                            </select>
-                          ) : (
-                            <span className={`inline-block px-2 py-1 text-xs rounded-full ${
-                              barcode.currentPhase === 'Cutting' ? 'bg-blue-100 text-blue-800' :
-                              barcode.currentPhase === 'Sewing' ? 'bg-purple-100 text-purple-800' :
-                              'bg-orange-100 text-orange-800'
-                            }`}>
-                              {barcode.currentPhase}
-                            </span>
-                          )}
-                        </td>
-                        
-                        <td>
-                          {editingId === barcode.id ? (
-                            <select
-                              name="status"
-                              value={editValues.status}
-                              onChange={handleEditChange}
-                              className="w-24 p-1 border rounded text-sm"
-                            >
-                              <option value="Active">Active</option>
-                              <option value="Inactive">Inactive</option>
-                              <option value="Processing">Processing</option>
-                              <option value="Complete">Complete</option>
-                            </select>
-                          ) : (
-                            <span className={`inline-block px-2 py-1 text-xs rounded-full ${
-                              barcode.status === 'Active' ? 'bg-green-100 text-green-800' :
-                              barcode.status === 'Inactive' ? 'bg-gray-100 text-gray-800' :
-                              barcode.status === 'Processing' ? 'bg-yellow-100 text-yellow-800' :
-                              'bg-mint bg-opacity-30 text-mint'
-                            }`}>
-                              {barcode.status}
-                            </span>
-                          )}
-                        </td>
-                        
-                        <td>
-                          {editingId === barcode.id ? (
-                            <div className="flex space-x-1">
-                              <button
-                                onClick={() => handleSaveEdit(barcode.id)}
-                                className="p-1 text-xs bg-green text-white rounded hover:bg-opacity-90"
-                              >
-                                Save
-                              </button>
-                              <button
-                                onClick={handleCancelEdit}
-                                className="p-1 text-xs bg-gray-500 text-white rounded hover:bg-opacity-90"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="flex space-x-1">
-                              {user?.role === 'Admin' && (
-                                <>
-                                  <button
-                                    onClick={() => handleEdit(barcode)}
-                                    className="p-1 text-xs bg-mint text-white rounded hover:bg-opacity-90"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    onClick={() => handleDelete(barcode.id)}
-                                    className="p-1 text-xs bg-red-600 text-white rounded hover:bg-opacity-90"
-                                  >
-                                    Delete
-                                  </button>
-                                </>
-                              )}
-                              <button
-                                className="p-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-                              >
-                                Print
-                              </button>
-                            </div>
-                          )}
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                      Show Additional Columns
+                    </>
+                  )}
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th className="md:table-cell hidden md:px-4 md:py-2 px-2 py-1">
+                        <input
+                          type="checkbox"
+                          checked={currentBarcodes.length > 0 && selectedBarcodes.length === currentBarcodes.length}
+                          onChange={handleSelectAll}
+                        />
+                      </th>
+                      <th className="md:px-4 md:py-2 px-2 py-1">Barcode</th>
+                      <th className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Brand</th>
+                      <th className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Model</th>
+                      <th className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Size</th>
+                      <th className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Color</th>
+                      <th className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Quantity</th>
+                      <th className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Layers</th>
+                      <th className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Serial</th>
+                      <th className="md:px-4 md:py-2 px-2 py-1">Phase</th>
+                      <th className="md:px-4 md:py-2 px-2 py-1">Status</th>
+                      <th className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {currentBarcodes.length === 0 ? (
+                      <tr>
+                        <td colSpan={12} className="text-center py-4">
+                          No barcodes found matching your filters.
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    ) : (
+                      currentBarcodes.map(barcode => (
+                        <tr 
+                          key={barcode.batch_id} 
+                          className={selectedBarcodes.includes(barcode.batch_id) ? 'bg-lime bg-opacity-30' : ''}
+                        >
+                          <td className="md:table-cell hidden md:px-4 md:py-2 px-2 py-1">
+                            <input
+                              type="checkbox"
+                              checked={selectedBarcodes.includes(barcode.batch_id)}
+                              onChange={() => handleSelectBarcode(barcode.batch_id)}
+                            />
+                          </td>
+                          <td className="md:px-4 md:py-2 px-2 py-1">{barcode.barcode}</td>
+                          <td className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{barcode.brand_name}</td>
+                          <td className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{barcode.model_name}</td>
+                          <td className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{barcode.size_value}</td>
+                          <td className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{barcode.color_name}</td>
+                          <td className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>
+                            {editingId === barcode.batch_id ? (
+                              <input
+                                type="number"
+                                name="quantity"
+                                value={editValues.quantity}
+                                onChange={handleEditChange}
+                                className="w-16 p-1 border rounded text-sm"
+                                min="0"
+                              />
+                            ) : (
+                              barcode.quantity
+                            )}
+                          </td>
+                          <td className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>
+                            {editingId === barcode.batch_id ? (
+                              <input
+                                type="number"
+                                name="layers"
+                                value={editValues.layers}
+                                onChange={handleEditChange}
+                                className="w-16 p-1 border rounded text-sm"
+                                min="0"
+                              />
+                            ) : (
+                              barcode.layers
+                            )}
+                          </td>
+                          <td className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>
+                            {editingId === barcode.batch_id ? (
+                              <input
+                                type="number"
+                                name="serial"
+                                value={editValues.serial}
+                                onChange={handleEditChange}
+                                className="w-16 p-1 border rounded text-sm"
+                                min="0"
+                              />
+                            ) : (
+                              barcode.serial
+                            )}
+                          </td>
+                          <td className="md:px-4 md:py-2 px-2 py-1">
+                            {editingId === barcode.batch_id ? (
+                              <select
+                                name="phase_name"
+                                value={editValues.phase_name}
+                                onChange={handleEditChange}
+                                className="w-24 p-1 border rounded text-sm"
+                              >
+                                <option value="Cutting">Cutting</option>
+                                <option value="Sewing">Sewing</option>
+                                <option value="Packaging">Packaging</option>
+                              </select>
+                            ) : (
+                              <span className={`inline-block px-2 py-1 text-xs rounded-full ${
+                                barcode.phase_name === 'Cutting' ? 'bg-blue-100 text-blue-800' :
+                                barcode.phase_name === 'Sewing' ? 'bg-purple-100 text-purple-800' :
+                                'bg-orange-100 text-orange-800'
+                              }`}>
+                                {barcode.phase_name}
+                              </span>
+                            )}
+                          </td>
+                          <td className="md:px-4 md:py-2 px-2 py-1">
+                            {editingId === barcode.batch_id ? (
+                              <select
+                                name="status"
+                                value={editValues.status}
+                                onChange={handleEditChange}
+                                className="w-24 p-1 border rounded text-sm"
+                              >
+                                <option value="Pending">Pending</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="Completed">Completed</option>
+                              </select>
+                            ) : (
+                              <span className={`inline-block px-2 py-1 text-xs rounded-full ${
+                                barcode.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
+                                barcode.status === 'In Progress' ? 'bg-blue-100 text-blue-800' :
+                                'bg-green-100 text-green-800'
+                              }`}>
+                                {barcode.status}
+                              </span>
+                            )}
+                          </td>
+                          <td className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>
+                            {editingId === barcode.batch_id ? (
+                              <div className="flex space-x-1">
+                                <button
+                                  onClick={() => handleSaveEdit(barcode.batch_id)}
+                                  className="p-1 text-xs bg-green text-white rounded hover:bg-opacity-90"
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  onClick={handleCancelEdit}
+                                  className="p-1 text-xs bg-gray-500 text-white rounded hover:bg-opacity-90"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex space-x-1">
+                                {user?.role === 'Admin' && (
+                                  <>
+                                    <button
+                                      onClick={() => handleEdit(barcode)}
+                                      className="p-1 text-xs bg-mint text-white rounded hover:bg-opacity-90"
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      onClick={() => handleDelete(barcode.batch_id)}
+                                      className="p-1 text-xs bg-red-600 text-white rounded hover:bg-opacity-90"
+                                    >
+                                      Delete
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
             
             {/* Pagination */}

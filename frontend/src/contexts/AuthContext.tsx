@@ -1,5 +1,5 @@
-
 import React, { createContext, useState, useContext, useEffect } from 'react';
+import { authApi, User } from '../services/api';
 
 // Define user roles
 export type UserRole = 'Admin' | 'Cutting' | 'Sewing' | 'Packaging';
@@ -24,14 +24,6 @@ type AuthContextType = {
 // Create context
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Sample users for demo
-const MOCK_USERS = [
-  { id: 1, username: 'admin', password: 'admin123', role: 'Admin' as UserRole },
-  { id: 2, username: 'cutting', password: 'cutting123', role: 'Cutting' as UserRole },
-  { id: 3, username: 'sewing', password: 'sewing123', role: 'Sewing' as UserRole },
-  { id: 4, username: 'packaging', password: 'packaging123', role: 'Packaging' as UserRole },
-];
-
 // Provider component
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -39,12 +31,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check for existing user session in localStorage
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-    setIsLoading(false);
+    const initializeAuth = async () => {
+      const token = localStorage.getItem('token');
+      if (token) {
+        try {
+          const userData = await authApi.getCurrentUser();
+          setUser(userData);
+        } catch (err) {
+          console.error('Failed to get user data:', err);
+          localStorage.removeItem('token');
+        }
+      }
+      setIsLoading(false);
+    };
+
+    initializeAuth();
   }, []);
 
   const login = async (username: string, password: string) => {
@@ -52,22 +53,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setError(null);
 
     try {
-      // Simulate API call delay
-      await new Promise(resolve => setTimeout(resolve, 800));
-
-      // Find user in mock data (in real app, this would be an API call)
-      const matchedUser = MOCK_USERS.find(
-        u => u.username === username && u.password === password
-      );
-
-      if (!matchedUser) {
-        throw new Error('Invalid username or password');
-      }
-
-      // Store user without password
-      const { password: _, ...userWithoutPassword } = matchedUser;
-      setUser(userWithoutPassword);
-      localStorage.setItem('user', JSON.stringify(userWithoutPassword));
+      const { access_token } = await authApi.login(username, password);
+      localStorage.setItem('token', access_token);
+      
+      const userData = await authApi.getCurrentUser();
+      setUser(userData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred during login');
       console.error('Login error:', err);
@@ -78,7 +68,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem('user');
+    localStorage.removeItem('token');
   };
 
   return (

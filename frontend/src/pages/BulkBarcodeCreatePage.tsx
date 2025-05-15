@@ -1,35 +1,220 @@
-import React, { useState, useRef, ChangeEvent } from 'react';
+import React, { useState, useRef, ChangeEvent, useEffect } from 'react';
 import Layout from '../components/Layout';
+import api from '../services/api';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useNavigate } from "react-router-dom";
 
 interface BarcodeEntry {
-  id: number;
   barcode: string;
-  brandId: string;
-  modelId: string;
-  sizeId: string;
-  colorId: string;
+  brand: string;
+  model: string;
+  size: string;
+  color: string;
   quantity: number;
   layers: number;
+  serial: number;
+  status?: 'success' | 'error' | 'duplicate';
+  brand_id: number;
+  model_id: number;
+  size_id: number;
+  color_id: number;
+}
+
+interface ErrorRow {
+  rowNumber: number;
+  data: any;
+  error: string;
 }
 
 const BulkBarcodeCreatePage: React.FC = () => {
+  const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<BarcodeEntry[]>([]);
+  const [errorRows, setErrorRows] = useState<ErrorRow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [showDuplicatesModal, setShowDuplicatesModal] = useState(false);
+  const [duplicateBarcodes, setDuplicateBarcodes] = useState<any[]>([]);
+  const [submitMessage, setSubmitMessage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [printCount, setPrintCount] = useState<number>(1);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printers, setPrinters] = useState<string[]>([]);
+  const [selectedPrinter, setSelectedPrinter] = useState<string>("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [currentErrorPage, setCurrentErrorPage] = useState(1);
+  const itemsPerPage = 10;
+  const [showAllColumns, setShowAllColumns] = useState(false);
 
-  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+  // Calculate pagination for processed data
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const currentItems = preview.slice(indexOfFirstItem, indexOfLastItem);
+  const totalPages = Math.ceil(preview.length / itemsPerPage);
+
+  // Calculate pagination for error data
+  const indexOfLastError = currentErrorPage * itemsPerPage;
+  const indexOfFirstError = indexOfLastError - itemsPerPage;
+  const currentErrors = errorRows.slice(indexOfFirstError, indexOfLastError);
+  const totalErrorPages = Math.ceil(errorRows.length / itemsPerPage);
+
+  // Handle page change for processed data
+  const handlePageChange = (pageNumber: number) => {
+    setCurrentPage(pageNumber);
+  };
+
+  // Handle page change for error data
+  const handleErrorPageChange = (pageNumber: number) => {
+    setCurrentErrorPage(pageNumber);
+  };
+
+  // Render pagination controls
+  const renderPagination = (currentPage: number, totalPages: number, onPageChange: (page: number) => void) => {
+    const pageNumbers = [];
+    const maxPagesToShow = 5;
+    
+    let startPage = Math.max(1, currentPage - Math.floor(maxPagesToShow / 2));
+    let endPage = startPage + maxPagesToShow - 1;
+    
+    if (endPage > totalPages) {
+      endPage = totalPages;
+      startPage = Math.max(1, endPage - maxPagesToShow + 1);
+    }
+    
+    for (let i = startPage; i <= endPage; i++) {
+      pageNumbers.push(i);
+    }
+    
+    return (
+      <div className="flex justify-center mt-4">
+        <nav className="flex items-center space-x-2">
+          <button
+            onClick={() => onPageChange(currentPage - 1)}
+            disabled={currentPage === 1}
+            className="px-3 py-1 rounded border disabled:opacity-50"
+          >
+            Previous
+          </button>
+          
+          {pageNumbers.map(number => (
+            <button
+              key={number}
+              onClick={() => onPageChange(number)}
+              className={`px-3 py-1 rounded border ${
+                currentPage === number ? 'bg-green text-white' : ''
+              }`}
+            >
+              {number}
+            </button>
+          ))}
+          
+          <button
+            onClick={() => onPageChange(currentPage + 1)}
+            disabled={currentPage === totalPages}
+            className="px-3 py-1 rounded border disabled:opacity-50"
+          >
+            Next
+          </button>
+        </nav>
+      </div>
+    );
+  };
+
+  useEffect(() => {
+    const fetchPrinters = async () => {
+      try {
+        const response = await api.get('/barcodes/printers');
+        setPrinters(response.data.printers);
+        if (response.data.printers.length > 0) {
+          setSelectedPrinter(response.data.printers[0]);
+        }
+      } catch (err) {
+        console.error('Error fetching printers:', err);
+        setError('Failed to fetch available printers');
+      }
+    };
+
+    fetchPrinters();
+  }, []);
+
+  const downloadTemplate = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      const response = await api.get('/barcodes/template', {
+        responseType: 'blob',
+        headers: {
+          'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        }
+      });
+      
+      // Check if the response is actually a blob
+      if (!(response.data instanceof Blob)) {
+        throw new Error('Invalid response format');
+      }
+      
+      // Create blob with the correct MIME type
+      const blob = new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      
+      // Create URL and trigger download
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'bulk_barcode_template.xlsx');
+      document.body.appendChild(link);
+      link.click();
+      
+      // Cleanup
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      console.error('Download error:', error);
+      setError(error.response?.data?.detail || 'Failed to download template. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     setError(null);
     setPreview([]);
+    setErrorRows([]);
     setIsSubmitted(false);
+    setSubmitMessage('');
     
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
     
-    // Check file type (in a real app, you would check for Excel file types)
     if (selectedFile.type !== 'text/csv' && 
         !selectedFile.name.endsWith('.xlsx') && 
         !selectedFile.name.endsWith('.xls')) {
@@ -42,50 +227,182 @@ const BulkBarcodeCreatePage: React.FC = () => {
     setFile(selectedFile);
     setIsLoading(true);
     
-    // Simulate file processing
-    setTimeout(() => {
-      // Generate mock preview data
-      const mockPreview: BarcodeEntry[] = Array.from({ length: 5 }, (_, i) => ({
-        id: i + 1,
-        barcode: `BC${(1000000 + i).toString()}`,
-        brandId: `BR-${(100 + i).toString()}`,
-        modelId: `MD-${(200 + i).toString()}`,
-        sizeId: `SZ-${(i % 5 + 1).toString()}`,
-        colorId: `CL-${(i % 8 + 1).toString()}`,
-        quantity: Math.floor(Math.random() * 50) + 1,
-        layers: Math.floor(Math.random() * 5) + 1,
-      }));
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
       
-      setPreview(mockPreview);
+      const response = await api.post('/barcodes/bulk/process', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      
+      // Transform the data to match the frontend display format
+      const transformedData = response.data.processed_data.map((item: any) => ({
+        barcode: item.barcode || '',
+        brand: item.brand || '',
+        model: item.model || '',
+        size: item.size || '',
+        color: item.color || '',
+        quantity: item.quantity || 0,
+        layers: item.layers || 0,
+        serial: item.serial || 0,
+        brand_id: item.brand_id,
+        model_id: item.model_id,
+        size_id: item.size_id,
+        color_id: item.color_id
+      }));
+
+      // Only set preview if we have valid data
+      if (transformedData.length > 0) {
+        setPreview(transformedData);
+      }
+      
+      // Set error rows if any
+      if (response.data.error_rows && response.data.error_rows.length > 0) {
+        setErrorRows(response.data.error_rows);
+        setError(`Found ${response.data.error_rows.length} rows with errors. Please fix them before submitting.`);
+      }
+    } catch (error: any) {
+      setError(error.response?.data?.detail || 'Failed to process file. Please try again.');
+      setPreview([]);
+      setErrorRows([]);
+    } finally {
       setIsLoading(false);
-    }, 1000);
+    }
   };
 
-  const handleSubmit = () => {
-    if (!file || preview.length === 0) return;
-    
-    setIsSubmitting(true);
-    
-    // Simulate API call to submit data
-    setTimeout(() => {
-      setIsSubmitting(false);
+  const handleSubmit = async () => {
+    if (!preview.length) {
+      const errorMsg = 'No data to submit';
+      setError(errorMsg);
+      return;
+    }
+
+    // Filter out invalid rows but allow submission of valid ones
+    const validRows = preview.filter(item => {
+      const isValid = item.brand_id && 
+        item.model_id && 
+        item.size_id && 
+        item.color_id && 
+        item.quantity && 
+        item.layers && 
+        item.serial && 
+        item.barcode;
+      
+      return isValid;
+    });
+
+    if (validRows.length === 0) {
+      const errorMsg = 'No valid rows to submit. Please fix the data and try again.';
+      setError(errorMsg);
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      setError(null);
+      
+      // Transform only the valid data to match the backend schema
+      const submitData = validRows.map(item => ({
+        barcode: item.barcode,
+        brand_id: item.brand_id,
+        model_id: item.model_id,
+        size_id: item.size_id,
+        color_id: item.color_id,
+        quantity: Number(item.quantity),
+        layers: Number(item.layers),
+        serial: Number(item.serial),
+        current_phase: 1,
+        status: "pending"
+      }));
+      
+      const response = await api.post('/barcodes/bulk/submit', submitData);
+      
+      // Update preview with status for all rows
+      const updatedPreview = preview.map(item => {
+        // Check if this row was valid and submitted
+        const wasSubmitted = validRows.some(valid => valid.barcode === item.barcode);
+        if (!wasSubmitted) {
+          return { ...item, status: 'error' as const };
+        }
+        
+        // Check if it was a duplicate
+        const isDuplicate = response.data.duplicate_barcodes.some(
+          (dup: any) => dup.barcode === item.barcode
+        );
+        return {
+          ...item,
+          status: isDuplicate ? 'duplicate' as const : 'success' as const
+        };
+      });
+
+      setPreview(updatedPreview);
+      setSubmitMessage(
+        `Successfully submitted ${validRows.length} rows. ` +
+        `${response.data.duplicate_barcodes.length} duplicates found. ` +
+        `${preview.length - validRows.length} rows were skipped due to errors.`
+      );
       setIsSubmitted(true);
-    }, 1500);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to submit barcodes');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleReset = () => {
     setFile(null);
     setError(null);
     setPreview([]);
+    setErrorRows([]);
     setIsSubmitted(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
-  const handlePrintBarcodes = () => {
-    // In a real app, this would trigger a barcode printing process
-    alert('Printing barcodes...');
+  const handlePrintBarcodes = async () => {
+    if (!isSubmitted || !selectedPrinter) return;
+
+    try {
+      setIsPrinting(true);
+      
+      // Get barcodes that are either successful or duplicates
+      const barcodesToPrint = preview
+        .filter(item => item.status === 'success' || item.status === 'duplicate')
+        .map(item => ({
+          barcode: item.barcode,
+          brand: item.brand,
+          model: item.model,
+          size: item.size,
+          color: item.color,
+          quantity: item.quantity,
+          layers: item.layers,
+          serial: item.serial
+        }));
+
+      if (barcodesToPrint.length === 0) {
+        setError('No barcodes available for printing');
+        return;
+      }
+
+      // Call the print endpoint
+      const response = await api.post('/barcodes/print', {
+        barcodes: barcodesToPrint,
+        count: printCount,
+        printer_name: selectedPrinter
+      });
+      
+      // Show success message
+      setSubmitMessage(prev => 
+        prev + `\nPrinted ${barcodesToPrint.length} barcodes ${printCount} times each on ${selectedPrinter}.`
+      );
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to print barcodes');
+    } finally {
+      setIsPrinting(false);
+    }
   };
 
   return (
@@ -100,6 +417,14 @@ const BulkBarcodeCreatePage: React.FC = () => {
           <h2 className="text-lg font-semibold mb-3">Upload File</h2>
           
           <div className="mb-4">
+            <button
+              type="button"
+              className="btn-primary mb-4"
+              onClick={downloadTemplate}
+            >
+              Download Template
+            </button>
+
             <div className={`border-2 border-dashed rounded-lg p-6 text-center ${error ? 'border-red-300 bg-red-50' : 'border-gray-300 bg-gray-50'}`}>
               <div className="mb-3">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-gray-400 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -161,89 +486,235 @@ const BulkBarcodeCreatePage: React.FC = () => {
           </div>
         )}
 
-        {!isLoading && preview.length > 0 && !isSubmitted && (
+        {!isLoading && preview.length > 0 && (
           <div className="mb-6">
             <h2 className="text-lg font-semibold mb-3">Preview Data</h2>
-            <p className="text-sm text-gray-600 mb-4">
-              Please verify the data below before submitting. The system detected {preview.length} barcodes.
-            </p>
+            {submitMessage && (
+              <p className="text-sm text-gray-600 mb-4">{submitMessage}</p>
+            )}
+
+            {/* Problem Rows Table */}
+            {errorRows.length > 0 && (
+              <div className="mb-6">
+                <h3 className="text-md font-semibold mb-2 text-red-600">
+                  Problem Rows ({errorRows.length})
+                </h3>
+                <div className="border border-red-200 rounded-md">
+                  <div className="flex justify-end mb-2">
+                    <button
+                      onClick={() => setShowAllColumns(!showAllColumns)}
+                      className="text-sm text-gray-600 hover:text-gray-800 flex items-center"
+                    >
+                      {showAllColumns ? (
+                        <>
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                          Hide Additional Columns
+                        </>
+                      ) : (
+                        <>
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                          Show Additional Columns
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-red-50">
+                          <TableHead className="md:px-4 md:py-2 px-2 py-1">Row #</TableHead>
+                          <TableHead className="md:px-4 md:py-2 px-2 py-1">Error</TableHead>
+                          <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Brand</TableHead>
+                          <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Model</TableHead>
+                          <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Size</TableHead>
+                          <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Color</TableHead>
+                          <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Quantity</TableHead>
+                          <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Layers</TableHead>
+                          <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Serial</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {currentErrors.map((error, index) => (
+                          <TableRow key={`error-${index}`} className="bg-red-50">
+                            <TableCell className="font-medium md:px-4 md:py-2 px-2 py-1">{error.rowNumber}</TableCell>
+                            <TableCell className="text-red-600 md:px-4 md:py-2 px-2 py-1">{error.error}</TableCell>
+                            <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{error.data.brand}</TableCell>
+                            <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{error.data.model}</TableCell>
+                            <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{error.data.size}</TableCell>
+                            <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{error.data.color}</TableCell>
+                            <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{error.data.quantity}</TableCell>
+                            <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{error.data.layers}</TableCell>
+                            <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{error.data.serial}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              </div>
+            )}
             
-            <div className="table-container mb-4">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Barcode</th>
-                    <th>Brand</th>
-                    <th>Model</th>
-                    <th>Size</th>
-                    <th>Color</th>
-                    <th>Quantity</th>
-                    <th>Layers</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.map((entry) => (
-                    <tr key={entry.id}>
-                      <td>{entry.barcode}</td>
-                      <td>{entry.brandId}</td>
-                      <td>{entry.modelId}</td>
-                      <td>{entry.sizeId}</td>
-                      <td>{entry.colorId}</td>
-                      <td>{entry.quantity}</td>
-                      <td>{entry.layers}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {/* Main Preview Table */}
+            <div className="border rounded-md">
+              <div className="flex justify-end mb-2">
+                <button
+                  onClick={() => setShowAllColumns(!showAllColumns)}
+                  className="text-sm text-gray-600 hover:text-gray-800 flex items-center"
+                >
+                  {showAllColumns ? (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                      Hide Additional Columns
+                    </>
+                  ) : (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                      Show Additional Columns
+                    </>
+                  )}
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="md:px-4 md:py-2 px-2 py-1">Status</TableHead>
+                      <TableHead className="md:px-4 md:py-2 px-2 py-1">Barcode</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Brand</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Model</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Size</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Color</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Quantity</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Layers</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Serial</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {currentItems.map((entry, index) => (
+                      <TableRow 
+                        key={index}
+                        className={cn(
+                          entry.status === 'success' && 'bg-green-50',
+                          entry.status === 'error' && 'bg-red-50',
+                          entry.status === 'duplicate' && 'bg-yellow-50'
+                        )}
+                      >
+                        <TableCell className="md:px-4 md:py-2 px-2 py-1">
+                          {entry.status === 'success' && '✅'}
+                          {entry.status === 'error' && '❌'}
+                          {entry.status === 'duplicate' && '⚠️'}
+                        </TableCell>
+                        <TableCell className="md:px-4 md:py-2 px-2 py-1">{entry.barcode}</TableCell>
+                        <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.brand}</TableCell>
+                        <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.model}</TableCell>
+                        <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.size}</TableCell>
+                        <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.color}</TableCell>
+                        <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.quantity}</TableCell>
+                        <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.layers}</TableCell>
+                        <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.serial}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              {totalPages > 1 && renderPagination(currentPage, totalPages, handlePageChange)}
             </div>
             
-            <div className="flex justify-end">
-              <button
-                type="button"
-                className="btn-outline mr-3"
-                onClick={handleReset}
-                disabled={isSubmitting}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={handleSubmit}
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? (
-                  <span className="flex items-center">
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Submitting...
-                  </span>
-                ) : (
-                  'Submit Barcodes'
-                )}
-              </button>
-            </div>
-          </div>
-        )}
-        
-        {isSubmitted && (
-          <div className="text-center py-6 bg-lime bg-opacity-20 rounded-lg border border-lime mb-6">
-            <div className="text-4xl mb-3">✅</div>
-            <h3 className="text-xl font-semibold text-gray-800 mb-2">Barcodes Created Successfully!</h3>
-            <p className="text-gray-600 mb-4">
-              {preview.length} barcodes have been added to the database.
-            </p>
-            <div className="flex justify-center">
-              <button 
-                type="button"
-                className="btn-primary"
-                onClick={handlePrintBarcodes}
-              >
-                Print Barcodes
-              </button>
-            </div>
+            {isSubmitted && (
+              <div className="flex flex-wrap gap-2 items-center justify-end mt-4">
+                <div className="flex items-center space-x-2">
+                  <Label htmlFor="printCount">Print Count:</Label>
+                  <Input
+                    id="printCount"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={printCount}
+                    onChange={(e) => setPrintCount(Math.max(1, Math.min(100, parseInt(e.target.value) || 1)))}
+                    className="w-20"
+                    disabled={isPrinting}
+                  />
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Label htmlFor="printer">Printer:</Label>
+                  <Select
+                    value={selectedPrinter}
+                    onValueChange={setSelectedPrinter}
+                    disabled={isPrinting}
+                  >
+                    <SelectTrigger className="w-[200px]">
+                      <SelectValue placeholder="Select printer" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {printers.map((printer) => (
+                        <SelectItem key={printer} value={printer}>
+                          {printer}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  onClick={handlePrintBarcodes}
+                  disabled={isPrinting || !isSubmitted || !selectedPrinter}
+                  className={cn(
+                    "bg-blue-600 hover:bg-blue-700 text-white",
+                    isPrinting && "opacity-50 cursor-not-allowed"
+                  )}
+                >
+                  {isPrinting ? (
+                    <span className="flex items-center">
+                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Printing...
+                    </span>
+                  ) : (
+                    'Print Barcodes'
+                  )}
+                </Button>
+              </div>
+            )}
+
+            {!isSubmitted && (
+              <div className="flex flex-wrap gap-2 justify-end mt-4">
+                <button
+                  type="button"
+                  className="btn-outline"
+                  onClick={handleReset}
+                  disabled={isSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={handleSubmit}
+                  disabled={isSubmitting || preview.length === 0}
+                >
+                  {isSubmitting ? (
+                    <span className="flex items-center">
+                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Submitting...
+                    </span>
+                  ) : (
+                    'Submit Barcodes'
+                  )}
+                </button>
+              </div>
+            )}
           </div>
         )}
         
@@ -252,7 +723,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
             <h3 className="font-semibold mb-2">File Format Requirements:</h3>
             <ul className="list-disc pl-5 text-sm text-gray-600 space-y-1">
               <li>Excel files (.xlsx, .xls) or CSV format</li>
-              <li>Required columns: barcode, brand_id, model_id, size_id, color_id, quantity, layers</li>
+              <li>Required columns: brand, model, size, color, quantity, layers, serial</li>
               <li>First row must be header row</li>
               <li>Each barcode must be unique</li>
               <li>Maximum 1000 records per upload</li>
@@ -260,6 +731,68 @@ const BulkBarcodeCreatePage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Duplicates Dialog */}
+      <Dialog open={showDuplicatesModal} onOpenChange={(open) => {
+        if (!open) {
+          setShowDuplicatesModal(false);
+          setPreview([]);
+          setErrorRows([]);
+          setFile(null);
+        }
+      }}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Duplicate Barcodes Found</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <p className="text-sm text-gray-600 mb-4">{submitMessage}</p>
+            <div className="border rounded-md">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Barcode</TableHead>
+                    <TableHead>Brand</TableHead>
+                    <TableHead>Model</TableHead>
+                    <TableHead>Size</TableHead>
+                    <TableHead>Color</TableHead>
+                    <TableHead>Quantity</TableHead>
+                    <TableHead>Layers</TableHead>
+                    <TableHead>Serial</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {duplicateBarcodes.map((item, index) => (
+                    <TableRow key={index}>
+                      <TableCell>{item.barcode}</TableCell>
+                      <TableCell>{item.brand}</TableCell>
+                      <TableCell>{item.model}</TableCell>
+                      <TableCell>{item.size}</TableCell>
+                      <TableCell>{item.color}</TableCell>
+                      <TableCell>{item.quantity}</TableCell>
+                      <TableCell>{item.layers}</TableCell>
+                      <TableCell>{item.serial}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setShowDuplicatesModal(false);
+                setPreview([]);
+                setErrorRows([]);
+                setFile(null);
+              }}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Layout>
   );
 };

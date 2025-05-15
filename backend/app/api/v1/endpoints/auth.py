@@ -1,18 +1,45 @@
 from datetime import timedelta
-from typing import Any
+from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
+from app import models, schemas
+from app.crud import (
+    get_user,
+    get_user_by_username,
+    get_users,
+    create_user,
+    update_user,
+    delete_user
+)
+from app.core import security
 from app.core.config import settings
-from app.core.security import create_access_token, get_password_hash, verify_password
-from app.core.deps import get_db, get_current_user, get_current_active_superuser
-from app.models.user import User
-from app.schemas.user import User as UserSchema, UserCreate, Token
+from app.core.deps import get_db, get_current_user, get_current_active_user, get_current_active_superuser
 
 router = APIRouter()
 
-@router.post("/login", response_model=Token)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
+
+@router.post("/register", response_model=schemas.User)
+def register(
+    *,
+    db: Session = Depends(get_db),
+    user_in: schemas.UserCreate,
+) -> Any:
+    """
+    Create new user.
+    """
+    user = get_user_by_username(db, username=user_in.username)
+    if user:
+        raise HTTPException(
+            status_code=400,
+            detail="The user with this username already exists in the system.",
+        )
+    user = create_user(db, obj_in=user_in)
+    return user
+
+@router.post("/login", response_model=schemas.Token)
 def login(
     db: Session = Depends(get_db),
     form_data: OAuth2PasswordRequestForm = Depends()
@@ -20,64 +47,121 @@ def login(
     """
     OAuth2 compatible token login, get an access token for future requests
     """
-    user = db.query(User).filter(User.email == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    # Get user by username
+    user = get_user_by_username(db, username=form_data.username)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+    
+    # Verify password
+    if not security.verify_password(form_data.password, user.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return {
-        "access_token": create_access_token(
-            data={"sub": user.id}, expires_delta=access_token_expires
+        "access_token": security.create_access_token(
+            user.username, expires_delta=access_token_expires
         ),
         "token_type": "bearer",
     }
 
-@router.post("/register", response_model=UserSchema)
-def register(
+@router.get("/me", response_model=schemas.User)
+def read_users_me(
+    current_user: models.User = Depends(get_current_active_user),
+) -> Any:
+    """
+    Get current user.
+    """
+    return current_user
+
+@router.put("/me", response_model=schemas.User)
+def update_user_me(
     *,
     db: Session = Depends(get_db),
-    user_in: UserCreate,
+    user_in: schemas.UserUpdate,
+    current_user: models.User = Depends(get_current_active_user),
+) -> Any:
+    """
+    Update own user.
+    """
+    user = update_user(db, db_obj=current_user, obj_in=user_in)
+    return user
+
+# Admin only endpoints
+@router.get("/users", response_model=list[schemas.User])
+def read_users(
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(get_current_active_superuser),
+) -> Any:
+    """
+    Retrieve users.
+    """
+    users = get_users(db, skip=skip, limit=limit)
+    return users
+
+@router.post("/users", response_model=schemas.User)
+def create_user_endpoint(
+    *,
+    db: Session = Depends(get_db),
+    user_in: schemas.UserCreate,
+    current_user: models.User = Depends(get_current_active_superuser),
 ) -> Any:
     """
     Create new user.
     """
-    user = db.query(User).filter(User.email == user_in.email).first()
-    if user:
-        raise HTTPException(
-            status_code=400,
-            detail="The user with this email already exists in the system.",
-        )
-    user = db.query(User).filter(User.username == user_in.username).first()
+    user = get_user_by_username(db, username=user_in.username)
     if user:
         raise HTTPException(
             status_code=400,
             detail="The user with this username already exists in the system.",
         )
-    
-    user = User(
-        email=user_in.email,
-        username=user_in.username,
-        hashed_password=get_password_hash(user_in.password),
-        role=user_in.role,
-        is_active=True,
-        is_superuser=False,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    user = create_user(db, obj_in=user_in)
     return user
 
-@router.get("/me", response_model=UserSchema)
-def read_users_me(
-    current_user: User = Depends(get_current_user),
+@router.put("/users/{user_id}", response_model=schemas.User)
+def update_user_endpoint(
+    *,
+    db: Session = Depends(get_db),
+    user_id: int,
+    user_in: schemas.UserUpdate,
+    current_user: models.User = Depends(get_current_active_superuser),
 ) -> Any:
     """
-    Get current user.
+    Update a user.
     """
-    return current_user 
+    user = get_user(db, id=user_id)
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="The user with this ID does not exist in the system",
+        )
+    user = update_user(db, db_obj=user, obj_in=user_in)
+    return user
+
+@router.delete("/users/{user_id}", response_model=schemas.User)
+def delete_user_endpoint(
+    *,
+    db: Session = Depends(get_db),
+    user_id: int,
+    current_user: models.User = Depends(get_current_active_superuser),
+) -> Any:
+    """
+    Delete a user.
+    """
+    user = get_user(db, id=user_id)
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="The user with this ID does not exist in the system",
+        )
+    user = delete_user(db, id=user_id)
+    return user 

@@ -1,7 +1,7 @@
-
 import React, { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
 import { UserRole } from '../contexts/AuthContext';
+import { authApi } from '../services/api';
 
 interface User {
   id: number;
@@ -9,7 +9,6 @@ interface User {
   role: UserRole;
   createdAt: string;
   lastActive: string;
-  status: 'Active' | 'Inactive';
 }
 
 const UserManagementPage: React.FC = () => {
@@ -18,56 +17,38 @@ const UserManagementPage: React.FC = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPasswords, setShowPasswords] = useState(false);
   const [role, setRole] = useState<UserRole>('Cutting');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   
   useEffect(() => {
-    // Simulate API call to fetch users
-    setLoading(true);
-    
-    setTimeout(() => {
-      const mockUsers: User[] = [
-        {
-          id: 1,
-          username: 'admin',
-          role: 'Admin',
-          createdAt: '2023-10-15',
-          lastActive: '2023-11-02',
-          status: 'Active'
-        },
-        {
-          id: 2,
-          username: 'cutting',
-          role: 'Cutting',
-          createdAt: '2023-10-20',
-          lastActive: '2023-11-01',
-          status: 'Active'
-        },
-        {
-          id: 3,
-          username: 'sewing',
-          role: 'Sewing',
-          createdAt: '2023-10-22',
-          lastActive: '2023-10-31',
-          status: 'Active'
-        },
-        {
-          id: 4,
-          username: 'packaging',
-          role: 'Packaging',
-          createdAt: '2023-10-25',
-          lastActive: '2023-11-01',
-          status: 'Active'
-        },
-      ];
-      
-      setUsers(mockUsers);
-      setLoading(false);
-    }, 800);
+    loadUsers();
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const loadUsers = async () => {
+    try {
+      setLoading(true);
+      const data = await authApi.getAllUsers();
+      // Transform the data to match the old format
+      const transformedUsers: User[] = data.map(user => ({
+        id: user.user_id,
+        username: user.username,
+        role: user.role,
+        createdAt: new Date().toISOString().split('T')[0],
+        lastActive: new Date().toISOString().split('T')[0]
+      }));
+      setUsers(transformedUsers);
+      setError(null);
+    } catch (err) {
+      setError('Failed to load users');
+      console.error('Error loading users:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     // Reset messages
@@ -90,43 +71,39 @@ const UserManagementPage: React.FC = () => {
       return;
     }
     
-    // Check if username already exists
-    if (users.some(user => user.username.toLowerCase() === username.toLowerCase())) {
-      setError('Username already exists');
-      return;
+    try {
+      // Create new user
+      await authApi.createUser({
+        username,
+        password,
+        role
+      });
+      
+      setSuccess(`User "${username}" created successfully`);
+      
+      // Reset form
+      setUsername('');
+      setPassword('');
+      setConfirmPassword('');
+      setRole('Cutting');
+      
+      // Reload users
+      loadUsers();
+    } catch (err) {
+      setError('Failed to create user');
+      console.error('Error creating user:', err);
     }
-    
-    // Simulate API call to create user
-    const newUser: User = {
-      id: users.length + 1,
-      username,
-      role,
-      createdAt: new Date().toISOString().split('T')[0],
-      lastActive: new Date().toISOString().split('T')[0],
-      status: 'Active'
-    };
-    
-    setUsers([...users, newUser]);
-    setSuccess(`User "${username}" created successfully`);
-    
-    // Reset form
-    setUsername('');
-    setPassword('');
-    setConfirmPassword('');
-    setRole('Cutting');
   };
 
-  const handleDeactivate = (id: number) => {
-    setUsers(users.map(user => 
-      user.id === id 
-        ? { ...user, status: user.status === 'Active' ? 'Inactive' : 'Active' } 
-        : user
-    ));
-  };
-
-  const handleDelete = (id: number) => {
+  const handleDelete = async (id: number) => {
     if (window.confirm('Are you sure you want to delete this user?')) {
-      setUsers(users.filter(user => user.id !== id));
+      try {
+        await authApi.deleteUser(id);
+        loadUsers();
+      } catch (err) {
+        setError('Failed to delete user');
+        console.error('Error deleting user:', err);
+      }
     }
   };
 
@@ -174,28 +151,39 @@ const UserManagementPage: React.FC = () => {
                 <label htmlFor="password" className="text-gray-700 font-medium">
                   Password
                 </label>
-                <input
-                  id="password"
-                  type="password"
-                  className="input-field"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter password"
-                />
+                <div className="relative">
+                  <input
+                    id="password"
+                    type={showPasswords ? "text" : "password"}
+                    className="input-field pr-10"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter password"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                    onClick={() => setShowPasswords(!showPasswords)}
+                  >
+                    {showPasswords ? "Hide" : "Show"}
+                  </button>
+                </div>
               </div>
               
               <div className="form-group">
                 <label htmlFor="confirmPassword" className="text-gray-700 font-medium">
                   Confirm Password
                 </label>
-                <input
-                  id="confirmPassword"
-                  type="password"
-                  className="input-field"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm password"
-                />
+                <div className="relative">
+                  <input
+                    id="confirmPassword"
+                    type={showPasswords ? "text" : "password"}
+                    className="input-field pr-10"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Confirm password"
+                  />
+                </div>
               </div>
               
               <div className="form-group">
@@ -259,7 +247,6 @@ const UserManagementPage: React.FC = () => {
                       <th>Role</th>
                       <th>Created</th>
                       <th>Last Active</th>
-                      <th>Status</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
@@ -283,24 +270,7 @@ const UserManagementPage: React.FC = () => {
                         <td>{user.createdAt}</td>
                         <td>{user.lastActive}</td>
                         <td>
-                          <span className={`inline-block px-2 py-1 text-xs rounded-full
-                            ${user.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}
-                          >
-                            {user.status}
-                          </span>
-                        </td>
-                        <td>
                           <div className="flex space-x-1">
-                            <button
-                              onClick={() => handleDeactivate(user.id)}
-                              className={`p-1 text-xs rounded ${
-                                user.status === 'Active' 
-                                  ? 'bg-yellow-500 text-white' 
-                                  : 'bg-green text-white'
-                              }`}
-                            >
-                              {user.status === 'Active' ? 'Deactivate' : 'Activate'}
-                            </button>
                             {user.username !== 'admin' && (
                               <button
                                 onClick={() => handleDelete(user.id)}

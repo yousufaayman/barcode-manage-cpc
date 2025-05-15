@@ -20,14 +20,12 @@ const DashboardPage: React.FC = () => {
     ]
   };
 
-  // Production phase data for Admin
   const productionPhaseData = [
     { phase: 'Cutting', count: 432, color: '#118B50' }, // primary green
     { phase: 'Sewing', count: 378, color: '#5DB996' },  // mint green
     { phase: 'Packaging', count: 435, color: '#E3F0AF' }, // light lime
   ];
 
-  // Role-specific metrics
   const roleMetrics = {
     'Admin': {
       title: 'System Overview',

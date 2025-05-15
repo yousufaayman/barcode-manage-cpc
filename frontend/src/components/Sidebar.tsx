@@ -1,9 +1,12 @@
-
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
-const Sidebar: React.FC = () => {
+interface SidebarProps {
+  onClose?: () => void;
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   const location = useLocation();
   const { user } = useAuth();
 
@@ -14,6 +17,7 @@ const Sidebar: React.FC = () => {
   const NavItem = ({ to, label }: { to: string; label: string }) => (
     <Link
       to={to}
+      onClick={onClose}
       className={`block px-4 py-2 rounded-md transition-colors ${
         isActive(to)
           ? 'bg-green text-white font-medium'
@@ -25,7 +29,17 @@ const Sidebar: React.FC = () => {
   );
 
   return (
-    <div className="bg-white w-64 shadow-md p-6 flex flex-col">
+    <div className="bg-white w-64 h-full shadow-md p-6 flex flex-col">
+      {/* Mobile Close Button */}
+      <button
+        onClick={onClose}
+        className="md:hidden absolute top-4 right-4 p-2 text-gray-500 hover:text-gray-700"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+
       <div className="flex items-center justify-center mb-8">
         <div className="w-12 h-12 bg-green rounded-full flex items-center justify-center">
           <span className="text-white text-lg font-bold">IMS</span>
