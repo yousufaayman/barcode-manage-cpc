@@ -222,31 +222,35 @@ async def submit_bulk_barcodes(
         else:
             # Create the batch
             db_batch = crud.create_batch(db, barcode)
-            
+            db.refresh(db_batch)  # Ensure all auto fields are loaded
             # Get related data for the response
             brand = crud.get_brand(db, db_batch.brand_id)
             model = crud.get_model(db, db_batch.model_id)
             size = crud.get_size(db, db_batch.size_id)
             color = crud.get_color(db, db_batch.color_id)
             phase = crud.get_phase(db, db_batch.current_phase)
-            
             # Create response object with all required fields
             batch_response = schemas.BatchResponse(
                 batch_id=db_batch.batch_id,
                 barcode=db_batch.barcode,
-                brand_name=brand.brand_name,
-                model_name=model.model_name,
-                size_value=size.size_value,
-                color_name=color.color_name,
+                brand_id=db_batch.brand_id,
+                model_id=db_batch.model_id,
+                size_id=db_batch.size_id,
+                color_id=db_batch.color_id,
                 quantity=db_batch.quantity,
                 layers=db_batch.layers,
                 serial=db_batch.serial,
-                phase_name=phase.phase_name,
-                status=db_batch.status
+                current_phase=db_batch.current_phase,
+                status=db_batch.status,
+                brand_name=brand.brand_name if brand else "",
+                model_name=model.model_name if model else "",
+                size_value=size.size_value if size else "",
+                color_name=color.color_name if color else "",
+                phase_name=phase.phase_name if phase else "",
+                last_updated_at=db_batch.last_updated_at,
+                archived_at=None
             )
-            
             created_batches.append(batch_response)
-    
     return schemas.BulkSubmitResponse(
         created_batches=created_batches,
         duplicate_barcodes=duplicate_barcodes,

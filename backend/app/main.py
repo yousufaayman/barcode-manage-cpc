@@ -21,31 +21,14 @@ app = FastAPI(
 )
 
 # Configure CORS
-origins = [
-    "http://localhost:8080",
-    "http://192.168.1.9:8080",
-    "http://localhost:5173",
-    "http://192.168.1.9:5173",
-    "http://localhost:3000",
-    "http://192.168.1.9:3000",
-    "http://192.168.1.9:8000",
-    "http://localhost:4173",# Add backend origin
-    "*"  # Allow all origins during development
-]
-
-logger.info(f"Configuring CORS with origins: {origins}")
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["http://localhost:8081"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
-    max_age=3600,
 )
 
-# Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")

@@ -16,6 +16,7 @@ const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const BarcodeScannerPage = lazy(() => import('./pages/BarcodeScannerPage'));
 const BulkBarcodeCreatePage = lazy(() => import('./pages/BulkBarcodeCreatePage'));
 const BarcodeManagementPage = lazy(() => import('./pages/BarcodeManagementPage'));
+const ArchivedBatchesPage = lazy(() => import('./pages/ArchivedBatchesPage'));
 const UnauthorizedPage = lazy(() => import('./pages/UnauthorizedPage'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
@@ -46,6 +47,7 @@ const App: React.FC = () => {
                   <Route path="/dashboard" element={<DashboardPage />} />
                   <Route path="/scanner" element={<BarcodeScannerPage />} />
                   <Route path="/barcode-management" element={<BarcodeManagementPage />} />
+                  <Route path="/archived-batches" element={<ArchivedBatchesPage />} />
                 </Route>
                 
                 {/* Admin Only Routes */}

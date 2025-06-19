@@ -29,10 +29,14 @@ def read_batches(
     color: str = None,
     phase: str = None,
     status: str = None,
+    archived: bool = False,
 ):
     """Get all batches with optional filtering"""
+    # Choose the base table based on archived parameter
+    base_table = models.ArchivedBatch if archived else models.Batch
+    
     query = db.query(
-        models.Batch,
+        base_table,
         models.Brand.brand_name,
         models.Model.model_name,
         models.Size.size_value,
@@ -40,24 +44,24 @@ def read_batches(
         models.ProductionPhase.phase_name
     ).join(
         models.Brand,
-        models.Batch.brand_id == models.Brand.brand_id
+        base_table.brand_id == models.Brand.brand_id
     ).join(
         models.Model,
-        models.Batch.model_id == models.Model.model_id
+        base_table.model_id == models.Model.model_id
     ).join(
         models.Size,
-        models.Batch.size_id == models.Size.size_id
+        base_table.size_id == models.Size.size_id
     ).join(
         models.Color,
-        models.Batch.color_id == models.Color.color_id
+        base_table.color_id == models.Color.color_id
     ).join(
         models.ProductionPhase,
-        models.Batch.current_phase == models.ProductionPhase.phase_id
+        base_table.current_phase == models.ProductionPhase.phase_id
     )
 
     # Apply filters if provided
     if barcode:
-        query = query.filter(models.Batch.barcode.ilike(f"%{barcode}%"))
+        query = query.filter(base_table.barcode.ilike(f"%{barcode}%"))
     if brand:
         query = query.filter(models.Brand.brand_name.ilike(f"%{brand}%"))
     if model:
@@ -69,7 +73,7 @@ def read_batches(
     if phase:
         query = query.filter(models.ProductionPhase.phase_name == phase)
     if status:
-        query = query.filter(models.Batch.status == status)
+        query = query.filter(base_table.status == status)
 
     # Get total count before pagination
     total_count = query.count()
@@ -77,20 +81,31 @@ def read_batches(
     # Apply pagination
     batches = query.offset(skip).limit(limit).all()
 
+    logger.debug(f"Returning {len(batches)} batches")
+    for batch in batches:
+        logger.debug(f"Batch {batch[0].batch_id} last_updated_at: {batch[0].last_updated_at}")
+
     return {
         "items": [
             schemas.BatchResponse(
-                batch_id=batch.Batch.batch_id,
-                barcode=batch.Batch.barcode,
+                batch_id=batch[0].batch_id,
+                barcode=batch[0].barcode,
+                brand_id=batch[0].brand_id,
+                model_id=batch[0].model_id,
+                size_id=batch[0].size_id,
+                color_id=batch[0].color_id,
+                quantity=batch[0].quantity,
+                layers=batch[0].layers,
+                serial=batch[0].serial,
+                current_phase=batch[0].current_phase,
+                status=batch[0].status,
                 brand_name=batch.brand_name,
                 model_name=batch.model_name,
                 size_value=batch.size_value,
                 color_name=batch.color_name,
-                quantity=batch.Batch.quantity,
-                layers=batch.Batch.layers,
-                serial=batch.Batch.serial,
                 phase_name=batch.phase_name,
-                status=batch.Batch.status
+                last_updated_at=batch[0].last_updated_at,
+                archived_at=getattr(batch[0], 'archived_at', None) if archived else None
             )
             for batch in batches
         ],
@@ -272,4 +287,43 @@ def update_batch_by_barcode(
         updated_batch = crud.update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
         return updated_batch
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{batch_id}/timeline", response_model=List[schemas.TimelineEntryResponse])
+def get_batch_timeline(batch_id: int, db: Session = Depends(get_db)):
+    """Get the complete timeline history for a batch"""
+    timeline = crud.get_timeline_by_batch(db, batch_id)
+    if not timeline:
+        raise HTTPException(status_code=404, detail="No timeline entries found for this batch")
+    return timeline
+
+@router.get("/{batch_id}/timeline/stats", response_model=Dict[str, Dict[str, int]])
+def get_batch_timeline_stats(batch_id: int, db: Session = Depends(get_db)):
+    """Get statistics about time spent in each phase for a batch"""
+    stats = crud.get_timeline_stats_by_batch(db, batch_id)
+    if not stats:
+        raise HTTPException(status_code=404, detail="No timeline statistics found for this batch")
+    # Convert to dictionary format
+    result = {}
+    for phase_id, status, minutes in stats:
+        if phase_id not in result:
+            result[phase_id] = {}
+        result[phase_id][status] = minutes
+    return result
+
+@router.get("/timeline/current", response_model=List[schemas.TimelineEntryResponse])
+def get_current_timeline_entries(db: Session = Depends(get_db), skip: int = 0, limit: int = 100):
+    """Get all current (ongoing) timeline entries"""
+    current_entries = crud.get_current_timeline_entries(db, skip=skip, limit=limit)
+    return current_entries
+
+@router.get("/timeline/stats", response_model=Dict[str, Dict[str, float]])
+def get_all_timeline_stats(db: Session = Depends(get_db)):
+    """Get average time statistics across all batches"""
+    stats = crud.get_all_timeline_stats(db)
+    result = {}
+    for phase_id, status, avg_minutes in stats:
+        if phase_id not in result:
+            result[phase_id] = {}
+        result[phase_id][status] = round(avg_minutes, 2) if avg_minutes else 0
+    return result 

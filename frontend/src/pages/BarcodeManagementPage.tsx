@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../services/api';
@@ -8,6 +9,7 @@ import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/select';
 import VirtualizedTable from '../components/VirtualizedTable';
+import { Link } from 'react-router-dom';
 
 interface Barcode {
   batch_id: number;
@@ -21,6 +23,7 @@ interface Barcode {
   serial: number;
   phase_name: string;
   status: 'Pending' | 'In Progress' | 'Completed';
+  last_updated_at: string;
 }
 
 const BarcodeManagementPage: React.FC = () => {
@@ -30,7 +33,38 @@ const BarcodeManagementPage: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedBarcodes, setSelectedBarcodes] = useState<number[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [filters, setFilters] = useState({
+  
+  // Initialize filters with default phase based on user role
+  const getInitialFilters = () => {
+    if (user) {
+      if (user.role === 'Admin') {
+        return {
+          barcode: '',
+          brand: '',
+          model: '',
+          size: '',
+          color: '',
+          phase: '',
+          status: ''
+        };
+      } else {
+        const roleToPhase: { [key: string]: string } = {
+          'Cutting': 'Cutting',
+          'Sewing': 'Sewing',
+          'Packaging': 'Packaging'
+        };
+        return {
+          barcode: '',
+          brand: '',
+          model: '',
+          size: '',
+          color: '',
+          phase: roleToPhase[user.role] || '',
+          status: ''
+        };
+      }
+    }
+    return {
     barcode: '',
     brand: '',
     model: '',
@@ -38,7 +72,10 @@ const BarcodeManagementPage: React.FC = () => {
     color: '',
     phase: '',
     status: ''
-  });
+    };
+  };
+
+  const [filters, setFilters] = useState(getInitialFilters());
   const [printCount, setPrintCount] = useState<number>(1);
   const [isPrinting, setIsPrinting] = useState(false);
   const [printers, setPrinters] = useState<string[]>([]);
@@ -59,6 +96,15 @@ const BarcodeManagementPage: React.FC = () => {
 
   // Temporary state for mobile responsiveness
   const [showAllColumns, setShowAllColumns] = useState(false);
+
+  // Update filters when user changes
+  useEffect(() => {
+    if (user) {
+      const newFilters = getInitialFilters();
+      setFilters(newFilters);
+      setCurrentPage(1); // Reset to first page when user changes
+    }
+  }, [user]);
 
   // Fetch barcodes from the database with filters and pagination
   useEffect(() => {
@@ -275,7 +321,8 @@ const BarcodeManagementPage: React.FC = () => {
   };
 
   // Memoize the columns configuration
-  const columns = useMemo(() => [
+  const columns = useMemo(() => {
+    const baseColumns = [
     {
       key: 'batch_id',
       header: '',
@@ -401,12 +448,15 @@ const BarcodeManagementPage: React.FC = () => {
           </span>
         )
       )
-    },
-    {
+      },
+    ];
+
+    // Only add actions column for admin users
+    if (user?.role === 'Admin') {
+      baseColumns.push({
       key: 'actions',
       header: 'Actions',
       width: 120,
-      hidden: true,
       render: (item: Barcode) => (
         editingId === item.batch_id ? (
           <div className="flex space-x-1">
@@ -425,8 +475,6 @@ const BarcodeManagementPage: React.FC = () => {
           </div>
         ) : (
           <div className="flex space-x-1">
-            {user?.role === 'Admin' && (
-              <>
                 <button
                   onClick={() => handleEdit(item)}
                   className="p-1 text-xs bg-mint text-white rounded hover:bg-opacity-90"
@@ -439,13 +487,14 @@ const BarcodeManagementPage: React.FC = () => {
                 >
                   Delete
                 </button>
-              </>
-            )}
           </div>
         )
       )
+      });
     }
-  ], [selectedBarcodes, editingId, editValues, user?.role]);
+
+    return baseColumns;
+  }, [selectedBarcodes, editingId, editValues, user?.role]);
 
   return (
     <Layout>
@@ -635,7 +684,7 @@ const BarcodeManagementPage: React.FC = () => {
           </div>
         ) : (
           <>
-            <div className="table-container mb-4">
+            <div className="table-container mb-4 w-full">
               <div className="flex justify-end mb-2">
                 <button
                   onClick={() => setShowAllColumns(!showAllColumns)}
@@ -658,7 +707,7 @@ const BarcodeManagementPage: React.FC = () => {
                   )}
                 </button>
               </div>
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto w-full">
                 {barcodes.length === 0 ? (
                   <div className="text-center py-4">
                     No barcodes found matching your filters.
@@ -671,6 +720,8 @@ const BarcodeManagementPage: React.FC = () => {
                     rowHeight={48}
                     selectedItems={selectedBarcodes}
                     showAllColumns={showAllColumns}
+                    onSelectAll={handleSelectAll}
+                    isAllSelected={selectedBarcodes.length === barcodes.length && barcodes.length > 0}
                   />
                 )}
               </div>
@@ -725,6 +776,19 @@ const BarcodeManagementPage: React.FC = () => {
             )}
           </>
         )}
+      </div>
+
+      {/* Archived Batches Link */}
+      <div className="mt-6 text-center">
+        <Link
+          to="/archived-batches"
+          className="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 ease-in-out"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+          </svg>
+          View Archived Batches
+        </Link>
       </div>
     </Layout>
   );

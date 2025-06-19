@@ -111,9 +111,9 @@ class BatchBase(BaseModel):
     model_id: int
     size_id: int
     color_id: int
-    quantity: int = Field(ge=1, le=999)
-    layers: int = Field(ge=1, le=99)
-    serial: str = Field(min_length=1, max_length=3)
+    quantity: int
+    layers: int
+    serial: int
     current_phase: int
     status: str
 
@@ -121,35 +121,26 @@ class BatchCreate(BatchBase):
     pass
 
 class BatchUpdate(BaseModel):
-    quantity: Optional[int] = Field(None, ge=1, le=999)
-    layers: Optional[int] = Field(None, ge=1, le=99)
-    serial: Optional[str] = Field(None, min_length=1, max_length=3)
+    barcode: Optional[str] = None
+    brand_id: Optional[int] = None
+    model_id: Optional[int] = None
+    size_id: Optional[int] = None
+    color_id: Optional[int] = None
+    quantity: Optional[int] = None
+    layers: Optional[int] = None
+    serial: Optional[int] = None
     current_phase: Optional[int] = None
     status: Optional[str] = None
 
-class Batch(BatchBase):
+class BatchResponse(BatchBase):
     batch_id: int
-    brand: Optional[Brand] = None
-    model: Optional[Model] = None
-    size: Optional[Size] = None
-    color: Optional[Color] = None
-    phase: Optional[ProductionPhase] = None
-
-    class Config:
-        from_attributes = True
-
-class BatchResponse(BaseModel):
-    batch_id: int
-    barcode: str
     brand_name: str
     model_name: str
     size_value: str
     color_name: str
-    quantity: int
-    layers: int
-    serial: str
     phase_name: str
-    status: str
+    last_updated_at: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -200,4 +191,22 @@ class PhaseStatusStats(BaseModel):
 class PhaseStats(BaseModel):
     cutting: PhaseStatusStats
     sewing: PhaseStatusStats
-    packaging: PackagingStats 
+    packaging: PackagingStats
+
+# Timeline schemas
+class TimelineEntryBase(BaseModel):
+    batch_id: int
+    status: str
+    phase_id: int
+
+class TimelineEntryCreate(TimelineEntryBase):
+    pass
+
+class TimelineEntryResponse(TimelineEntryBase):
+    id: int
+    start_time: datetime
+    end_time: Optional[datetime]
+    duration_minutes: Optional[int]
+
+    class Config:
+        from_attributes = True 

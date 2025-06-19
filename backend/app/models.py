@@ -86,9 +86,10 @@ class Batch(Base):
     color_id = Column(Integer, ForeignKey("colors.color_id"))
     quantity = Column(Integer)
     layers = Column(Integer)
-    serial = Column(String(3))
+    serial = Column(Integer)
     current_phase = Column(Integer, ForeignKey("production_phases.phase_id"))
     status = Column(String(50))
+    last_updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     brand = relationship("Brand", back_populates="batches")
     model = relationship("Model", back_populates="batches")
@@ -98,4 +99,36 @@ class Batch(Base):
 
 class TokenPayload(BaseModel):
     sub: Optional[int] = None
-    exp: Optional[datetime] = None 
+    exp: Optional[datetime] = None
+
+# Timeline model for batch status and phase tracking
+class BarcodeStatusTimeline(Base):
+    __tablename__ = "barcode_status_timeline"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    batch_id = Column(Integer, ForeignKey("batches.batch_id"), nullable=False)
+    status = Column(String(50), nullable=False)  # 'in', 'out', 'pending'
+    phase_id = Column(Integer, ForeignKey("production_phases.phase_id"), nullable=False)
+    start_time = Column(DateTime, nullable=False, default=func.now())
+    end_time = Column(DateTime, nullable=True)
+    duration_minutes = Column(Integer, nullable=True)
+
+    batch = relationship("Batch")
+    phase = relationship("ProductionPhase")
+
+class ArchivedBatch(Base):
+    __tablename__ = "archived_batches"
+
+    batch_id = Column(Integer, primary_key=True, index=True)
+    barcode = Column(String(255), unique=True, index=True)
+    brand_id = Column(Integer, ForeignKey("brands.brand_id"))
+    model_id = Column(Integer, ForeignKey("models.model_id"))
+    size_id = Column(Integer, ForeignKey("sizes.size_id"))
+    color_id = Column(Integer, ForeignKey("colors.color_id"))
+    quantity = Column(Integer)
+    layers = Column(Integer)
+    serial = Column(Integer)
+    current_phase = Column(Integer, ForeignKey("production_phases.phase_id"))
+    status = Column(String(50))
+    last_updated_at = Column(DateTime)
+    archived_at = Column(DateTime) 

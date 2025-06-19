@@ -3,7 +3,8 @@ import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
-import { barcodeApi, BatchStats, PhaseStats } from '@/services/api';
+import { barcodeApi, BatchStats, PhaseStats, BarcodeData } from '@/services/api';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 const DashboardPage: React.FC = () => {
   const { user } = useAuth();
@@ -29,8 +30,19 @@ const DashboardPage: React.FC = () => {
     }
   });
 
+  const [phaseBarcodes, setPhaseBarcodes] = useState<{
+    [key: string]: {
+      pending: BarcodeData[];
+      in_progress: BarcodeData[];
+    }
+  }>({
+    cutting: { pending: [], in_progress: [] },
+    sewing: { pending: [], in_progress: [] },
+    packaging: { pending: [], in_progress: [] }
+  });
+
   useEffect(() => {
-    const fetchStats = async () => {
+    const fetchData = async () => {
       try {
         const [batchStats, phaseData] = await Promise.all([
           barcodeApi.getBatchStats(),
@@ -38,13 +50,30 @@ const DashboardPage: React.FC = () => {
         ]);
         setStats(batchStats);
         setPhaseStats(phaseData);
+
+        // Fetch barcodes for each phase if user is not admin
+        if (user && user.role !== 'Admin') {
+          const phase = user.role;
+          const [pendingBarcodes, inProgressBarcodes] = await Promise.all([
+            barcodeApi.getBarcodesByPhase(phase, 'Pending'),
+            barcodeApi.getBarcodesByPhase(phase, 'In Progress')
+          ]);
+
+          setPhaseBarcodes(prev => ({
+            ...prev,
+            [phase.toLowerCase()]: {
+              pending: pendingBarcodes.items,
+              in_progress: inProgressBarcodes.items
+            }
+          }));
+        }
       } catch (error) {
-        console.error('Error fetching stats:', error);
+        console.error('Error fetching data:', error);
       }
     };
 
-    fetchStats();
-  }, []);
+    fetchData();
+  }, [user]);
 
   // Overall production phase data
   const productionPhaseData = [
@@ -122,6 +151,40 @@ const DashboardPage: React.FC = () => {
     );
   };
 
+  const renderBarcodeList = (barcodes: BarcodeData[], title: string) => (
+    <Card className="mb-4">
+      <CardHeader>
+        <CardTitle className="text-lg font-medium">{title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Barcode</TableHead>
+              <TableHead>Brand</TableHead>
+              <TableHead>Model</TableHead>
+              <TableHead>Size</TableHead>
+              <TableHead>Color</TableHead>
+              <TableHead>Quantity</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {barcodes.map((barcode) => (
+              <TableRow key={barcode.barcode}>
+                <TableCell>{barcode.barcode}</TableCell>
+                <TableCell>{barcode.brand_name}</TableCell>
+                <TableCell>{barcode.model_name}</TableCell>
+                <TableCell>{barcode.size_value}</TableCell>
+                <TableCell>{barcode.color_name}</TableCell>
+                <TableCell>{barcode.quantity}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+
   return (
     <Layout>
       <div className="mb-6">
@@ -147,7 +210,42 @@ const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Production Phase Distribution for Admin */}
+      {/* Phase-specific content for non-admin users */}
+      {user && user.role !== 'Admin' && (
+        <div className="mb-6">
+          <h2 className="text-xl font-semibold mb-3 text-gray-700">
+            {user.role} Department Overview
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div className="bg-white p-4 rounded-lg shadow-sm">
+              <div className="text-sm text-gray-500 mb-1">Pending Items</div>
+              <div className="text-2xl font-bold">
+                {phaseStats[user.role.toLowerCase() as keyof PhaseStats].pending}
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-sm">
+              <div className="text-sm text-gray-500 mb-1">In Progress</div>
+              <div className="text-2xl font-bold">
+                {phaseStats[user.role.toLowerCase() as keyof PhaseStats].in_progress}
+              </div>
+            </div>
+          </div>
+
+          {/* Barcode Lists */}
+          <div className="space-y-6">
+            {renderBarcodeList(
+              phaseBarcodes[user.role.toLowerCase()].pending,
+              'Pending Items'
+            )}
+            {renderBarcodeList(
+              phaseBarcodes[user.role.toLowerCase()].in_progress,
+              'In Progress Items'
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Admin Dashboard */}
       {user && user.role === 'Admin' && (
         <div className="mb-6">
           <h2 className="text-xl font-semibold mb-3 text-gray-700">

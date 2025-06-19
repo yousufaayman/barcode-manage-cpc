@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = 'http://192.168.1.9:8000/api/v1';
+const API_URL = 'http://localhost:8000/api/v1';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -59,6 +59,11 @@ export interface BarcodeData {
   phase_name: string;
   current_phase: number;
   status: string;
+}
+
+export interface BarcodeListResponse {
+  items: BarcodeData[];
+  total: number;
 }
 
 export interface BarcodeUpdate {
@@ -153,6 +158,17 @@ export const barcodeApi = {
 
   getPhaseStats: async (): Promise<PhaseStats> => {
     const response = await api.get<PhaseStats>('/batches/phase-stats');
+    return response.data;
+  },
+
+  getBarcodesByPhase: async (phase: string, status: string, limit: number = 10): Promise<BarcodeListResponse> => {
+    const response = await api.get<BarcodeListResponse>(`/batches`, {
+      params: {
+        phase,
+        status,
+        limit
+      }
+    });
     return response.data;
   },
 };

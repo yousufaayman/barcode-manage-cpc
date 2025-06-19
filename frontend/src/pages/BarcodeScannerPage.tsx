@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Layout from '../components/Layout';
 import { barcodeApi, BarcodeData } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Phase {
   id: number;
@@ -18,6 +19,7 @@ const STATUS_OPTIONS = ['Pending', 'In Progress', 'Completed'];
 type ScannerMode = 'update' | 'view';
 
 const BarcodeScannerPage: React.FC = () => {
+  const { user } = useAuth();
   const [barcode, setBarcode] = useState('');
   const [currentPhase, setCurrentPhase] = useState<number>(1);
   const [status, setStatus] = useState('');
@@ -32,6 +34,24 @@ const BarcodeScannerPage: React.FC = () => {
   const [isScanning, setIsScanning] = useState(false);
   const scanBufferRef = useRef<string>('');
   const scanTimeoutRef = useRef<NodeJS.Timeout>();
+
+  // Set initial phase based on user role
+  useEffect(() => {
+    if (user && mode === 'update') {
+      if (user.role === 'Admin') {
+        // Admin can use any phase
+        setSelectedPhase(1);
+      } else {
+        // Map role to phase ID
+        const roleToPhaseId: { [key: string]: number } = {
+          'Cutting': 1,
+          'Sewing': 2,
+          'Packaging': 3
+        };
+        setSelectedPhase(roleToPhaseId[user.role] || 1);
+      }
+    }
+  }, [user, mode]);
 
   // Ensure input is always focused
   useEffect(() => {
@@ -125,6 +145,20 @@ const BarcodeScannerPage: React.FC = () => {
       // Only update if in update mode
       if (mode === 'update') {
         try {
+          // Validate phase selection for non-admin users
+          if (user && user.role !== 'Admin') {
+            const roleToPhaseId: { [key: string]: number } = {
+              'Cutting': 1,
+              'Sewing': 2,
+              'Packaging': 3
+            };
+            const allowedPhaseId = roleToPhaseId[user.role];
+            if (selectedPhase !== allowedPhaseId) {
+              setError(`You can only scan items in the ${user.role} phase`);
+              return;
+            }
+          }
+
           // Update the batch using the correct endpoint
           const updateData: any = {};
           
@@ -249,19 +283,29 @@ const BarcodeScannerPage: React.FC = () => {
             <div className="mb-6">
               <h2 className="text-lg font-semibold mb-3">Select Phase</h2>
               <div className="flex space-x-4">
-                {PHASES.map(phase => (
-                  <label key={phase.id} className="inline-flex items-center">
-                    <input
-                      type="radio"
-                      className="form-radio"
-                      name="phase"
-                      value={phase.id}
-                      checked={selectedPhase === phase.id}
-                      onChange={() => setSelectedPhase(phase.id)}
-                    />
-                    <span className="ml-2">{phase.name}</span>
-                  </label>
-                ))}
+                {PHASES.map(phase => {
+                  // Only show the phase that matches the user's role, or all phases for admin
+                  const isAllowed = user?.role === 'Admin' || 
+                    (user && phase.name === user.role);
+                  
+                  return (
+                    <label 
+                      key={phase.id} 
+                      className={`inline-flex items-center ${!isAllowed ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <input
+                        type="radio"
+                        className="form-radio"
+                        name="phase"
+                        value={phase.id}
+                        checked={selectedPhase === phase.id}
+                        onChange={() => isAllowed && setSelectedPhase(phase.id)}
+                        disabled={!isAllowed}
+                      />
+                      <span className="ml-2">{phase.name}</span>
+                    </label>
+                  );
+                })}
               </div>
             </div>
 
@@ -348,55 +392,42 @@ const BarcodeScannerPage: React.FC = () => {
               </div>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <dl className="grid grid-cols-1 gap-y-3">
-                  <div className="flex justify-between py-2 border-b">
-                    <dt className="text-gray-600">Barcode</dt>
-                    <dd className="font-semibold">{barcodeData.barcode}</dd>
-                  </div>
-                  <div className="flex justify-between py-2 border-b">
-                    <dt className="text-gray-600">Brand</dt>
-                    <dd>{barcodeData.brand_name}</dd>
-                  </div>
-                  <div className="flex justify-between py-2 border-b">
-                    <dt className="text-gray-600">Model</dt>
-                    <dd>{barcodeData.model_name}</dd>
-                  </div>
-                  <div className="flex justify-between py-2 border-b">
-                    <dt className="text-gray-600">Size</dt>
-                    <dd>{barcodeData.size_value}</dd>
-                  </div>
-                  <div className="flex justify-between py-2 border-b">
-                    <dt className="text-gray-600">Color</dt>
-                    <dd>{barcodeData.color_name}</dd>
-                  </div>
-                </dl>
+                <dt className="text-gray-600">Brand</dt>
+                <dd>{barcodeData.brand_name}</dd>
               </div>
-              
               <div>
-                <dl className="grid grid-cols-1 gap-y-3">
-                  <div className="flex justify-between py-2 border-b">
-                    <dt className="text-gray-600">Quantity</dt>
-                    <dd>{barcodeData.quantity}</dd>
-                  </div>
-                  <div className="flex justify-between py-2 border-b">
-                    <dt className="text-gray-600">Layers</dt>
-                    <dd>{barcodeData.layers}</dd>
-                  </div>
-                  <div className="flex justify-between py-2 border-b">
-                    <dt className="text-gray-600">Serial</dt>
-                    <dd>{barcodeData.serial}</dd>
-                  </div>
-                  <div className="flex justify-between py-2 border-b">
-                    <dt className="text-gray-600">Current Phase</dt>
-                    <dd>{barcodeData.phase_name}</dd>
-                  </div>
-                  <div className="flex justify-between py-2 border-b">
-                    <dt className="text-gray-600">Status</dt>
-                    <dd>{barcodeData.status}</dd>
-                  </div>
-                </dl>
+                <dt className="text-gray-600">Model</dt>
+                <dd>{barcodeData.model_name}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-600">Size</dt>
+                <dd>{barcodeData.size_value}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-600">Color</dt>
+                <dd>{barcodeData.color_name}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-600">Quantity</dt>
+                <dd>{barcodeData.quantity}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-600">Layers</dt>
+                <dd>{barcodeData.layers}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-600">Serial</dt>
+                <dd>{barcodeData.serial}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-600">Phase</dt>
+                <dd>{barcodeData.phase_name}</dd>
+              </div>
+              <div>
+                <dt className="text-gray-600">Status</dt>
+                <dd>{barcodeData.status}</dd>
               </div>
             </div>
           </div>
