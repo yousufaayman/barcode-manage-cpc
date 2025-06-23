@@ -1,21 +1,40 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Dict
+from typing import List, Dict, Optional
 from app import crud, models, schemas
-from app.core.deps import get_db
-import logging
+from app.core.deps import get_db, get_current_active_superuser, get_current_user
 from pydantic import BaseModel
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 class BatchListResponse(BaseModel):
     items: List[schemas.BatchResponse]
     total: int
+
+class BulkArchiveRequest(BaseModel):
+    batch_ids: List[int]
+
+# Brand endpoints
+@router.get("/brands/", response_model=List[schemas.Brand])
+def read_brands(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """Get all brands"""
+    brands = crud.get_brands(db, skip=skip, limit=limit)
+    return brands
+
+# Size endpoints
+@router.get("/sizes/", response_model=List[schemas.Size])
+def read_sizes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """Get all sizes"""
+    sizes = crud.get_sizes(db, skip=skip, limit=limit)
+    return sizes
+
+# Color endpoints
+@router.get("/colors/", response_model=List[schemas.Color])
+def read_colors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """Get all colors"""
+    colors = crud.get_colors(db, skip=skip, limit=limit)
+    return colors
 
 @router.get("/", response_model=BatchListResponse)
 def read_batches(
@@ -30,8 +49,17 @@ def read_batches(
     phase: str = None,
     status: str = None,
     archived: bool = False,
+    current_user: Optional[schemas.User] = Depends(get_current_user)
 ):
     """Get all batches with optional filtering"""
+    # Require admin access for archived batches
+    if archived:
+        if not current_user or current_user.role != "Admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied. Admin privileges required to view archived batches."
+            )
+    
     # Choose the base table based on archived parameter
     base_table = models.ArchivedBatch if archived else models.Batch
     
@@ -81,10 +109,6 @@ def read_batches(
     # Apply pagination
     batches = query.offset(skip).limit(limit).all()
 
-    logger.debug(f"Returning {len(batches)} batches")
-    for batch in batches:
-        logger.debug(f"Batch {batch[0].batch_id} last_updated_at: {batch[0].last_updated_at}")
-
     return {
         "items": [
             schemas.BatchResponse(
@@ -96,7 +120,7 @@ def read_batches(
                 color_id=batch[0].color_id,
                 quantity=batch[0].quantity,
                 layers=batch[0].layers,
-                serial=batch[0].serial,
+                serial=str(batch[0].serial),
                 current_phase=batch[0].current_phase,
                 status=batch[0].status,
                 brand_name=batch.brand_name,
@@ -219,28 +243,20 @@ def update_batch(
     batch_in: schemas.BatchUpdate,
     db: Session = Depends(get_db)
 ):
-    logger.info(f"Received update request for batch {batch_id}")
-    logger.info(f"Update data: {batch_in.dict()}")
-    
     db_batch = crud.get_batch(db, batch_id)
     if not db_batch:
-        logger.error(f"Batch {batch_id} not found")
         raise HTTPException(status_code=404, detail="Batch not found")
     
     # Get the SQLAlchemy model instance
     db_batch_model = db.query(models.Batch).filter(models.Batch.batch_id == batch_id).first()
     if not db_batch_model:
-        logger.error(f"Batch model {batch_id} not found")
         raise HTTPException(status_code=404, detail="Batch not found")
     
     try:
         # Update the batch
-        logger.info("Attempting to update batch")
         updated_batch = crud.update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
-        logger.info(f"Successfully updated batch {batch_id}")
         return updated_batch
     except Exception as e:
-        logger.error(f"Error updating batch {batch_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{batch_id}", response_model=schemas.BatchResponse)
@@ -250,11 +266,121 @@ def delete_batch(
     batch_id: int,
 ):
     """Delete a batch"""
-    db_batch = crud.get_batch(db, batch_id=batch_id)
-    if db_batch is None:
+    batch = crud.get_batch(db, batch_id=batch_id)
+    if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
-    batch = crud.delete_batch(db=db, batch_id=batch_id)
+    return crud.delete_batch(db=db, batch_id=batch_id)
+
+@router.delete("/archived/{batch_id}", response_model=schemas.BatchResponse)
+def delete_archived_batch(
+    *,
+    db: Session = Depends(get_db),
+    batch_id: int,
+    current_user: Optional[schemas.User] = Depends(get_current_user)
+):
+    """Delete an archived batch"""
+    # Require admin access for deleting archived batches
+    if not current_user or current_user.role != "Admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to delete archived batches."
+        )
+    
+    batch = crud.delete_archived_batch(db, batch_id=batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Archived batch not found")
     return batch
+
+@router.post("/{batch_id}/archive", response_model=schemas.BatchResponse)
+def archive_batch(
+    *,
+    db: Session = Depends(get_db),
+    batch_id: int,
+    current_user: Optional[schemas.User] = Depends(get_current_user)
+):
+    """Archive a batch by moving it to the archived_batches table"""
+    # Require admin access for archiving
+    if not current_user or current_user.role != "Admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to archive batches."
+        )
+    
+    batch = crud.get_batch(db, batch_id=batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    
+    return crud.archive_batch(db=db, batch_id=batch_id)
+
+@router.post("/archive/bulk", response_model=List[schemas.BatchResponse])
+def archive_batches_bulk(
+    *,
+    db: Session = Depends(get_db),
+    request: BulkArchiveRequest,
+    current_user: Optional[schemas.User] = Depends(get_current_user)
+):
+    """Archive multiple batches by moving them to the archived_batches table"""
+    # Require admin access for archiving
+    if not current_user or current_user.role != "Admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to archive batches."
+        )
+    
+    if not request.batch_ids:
+        raise HTTPException(status_code=400, detail="No batch IDs provided")
+    
+    return crud.archive_batches_bulk(db=db, batch_ids=request.batch_ids)
+
+@router.post("/archived/{batch_id}/recover", response_model=schemas.BatchResponse)
+def recover_archived_batch(
+    *,
+    db: Session = Depends(get_db),
+    batch_id: int,
+    current_user: Optional[schemas.User] = Depends(get_current_user)
+):
+    """Recover an archived batch by moving it back to the active batches table"""
+    # Require admin access for recovery
+    if not current_user or current_user.role != "Admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to recover archived batches."
+        )
+    
+    try:
+        recovered_batch = crud.recover_archived_batch(db, batch_id=batch_id)
+        if not recovered_batch:
+            raise HTTPException(status_code=404, detail="Archived batch not found")
+        return recovered_batch
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error recovering batch: {str(e)}")
+
+@router.post("/archived/recover/bulk", response_model=List[schemas.BatchResponse])
+def recover_archived_batches_bulk(
+    *,
+    db: Session = Depends(get_db),
+    request: BulkArchiveRequest,
+    current_user: Optional[schemas.User] = Depends(get_current_user)
+):
+    """Recover multiple archived batches by moving them back to the active batches table"""
+    # Require admin access for recovery
+    if not current_user or current_user.role != "Admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to recover archived batches."
+        )
+    
+    if not request.batch_ids:
+        raise HTTPException(status_code=400, detail="No batch IDs provided")
+    
+    try:
+        return crud.recover_archived_batches_bulk(db=db, batch_ids=request.batch_ids)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error recovering batches: {str(e)}")
 
 @router.get("/barcode/{barcode}", response_model=schemas.BatchResponse)
 def read_batch_by_barcode(

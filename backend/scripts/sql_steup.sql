@@ -1,5 +1,7 @@
 use barcode_management;
 select * from batches;
+select * from production_phases;
+select * from production_phases;
 
 DELIMITER //
 CREATE TRIGGER handle_phase_transitions
@@ -106,3 +108,14 @@ CREATE TABLE barcode_status_timeline (
 );
 
 Select * from barcode_status_timeline;
+
+DESCRIBE barcode_status_timeline;
+
+SELECT 
+    tc.CONSTRAINT_NAME,
+    tc.CONSTRAINT_TYPE,
+    cc.CHECK_CLAUSE
+FROM information_schema.TABLE_CONSTRAINTS tc
+LEFT JOIN information_schema.CHECK_CONSTRAINTS cc ON tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
+WHERE tc.TABLE_SCHEMA = 'barcode_management' 
+AND tc.TABLE_NAME = 'batches';

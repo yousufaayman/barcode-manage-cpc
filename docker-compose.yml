@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  # Backend API (FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: barcode_backend
+    restart: unless-stopped
+    environment:
+      - MYSQL_HOST=host.docker.internal
+      - MYSQL_PORT=3306
+      - MYSQL_USER=${MYSQL_USER:-barcode_user}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-barcode_password}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-barcode_management}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here-change-in-production}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://192.168.0.249:3000,http://192.168.0.106:3000}
+    ports:
+      - "5000:8000"
+    networks:
+      - barcode_network
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Frontend (React + Nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: barcode_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - barcode_network
+    environment:
+      - REACT_APP_API_URL=/api/v1
+
+networks:
+  barcode_network:
+    driver: bridge
+
+volumes:
+  mysql_data: 

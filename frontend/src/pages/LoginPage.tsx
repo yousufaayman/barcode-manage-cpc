@@ -1,6 +1,7 @@
 import React, { useState, FormEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, LogIn } from 'lucide-react';
 
 const LoginPage: React.FC = () => {
@@ -12,17 +13,18 @@ const LoginPage: React.FC = () => {
   const { login, error, isLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const { t } = useTranslation();
   
   const from = location.state?.from?.pathname || '/dashboard';
 
   const validateForm = () => {
     if (!username.trim()) {
-      setFormError('Username is required');
+      setFormError(t('auth.usernameRequired'));
       return false;
     }
     
     if (!password.trim()) {
-      setFormError('Password is required');
+      setFormError(t('auth.passwordRequired'));
       return false;
     }
     
@@ -54,15 +56,15 @@ const LoginPage: React.FC = () => {
           <div className="flex justify-center mb-4">
             <img src="/lovable-uploads/33fc39df-cd6b-474a-93eb-94892c005f8e.png" alt="Cotton Plus Logo" className="h-24 w-24" />
           </div>
-          <h1 className="text-3xl font-bold text-green">Cotton Plus Clothing</h1>
-          <p className="text-gray-600 mt-2">Inventory Management System</p>
+          <h1 className="text-3xl font-bold text-green">{t('company.name')}</h1>
+          <p className="text-gray-600 mt-2">{t('company.tagline')}</p>
         </div>
         
         <div className="bg-white rounded-lg shadow-lg overflow-hidden">
           <div className="bg-green p-6 text-center">
             <h2 className="text-xl font-semibold text-white flex items-center justify-center gap-2">
               <LogIn size={20} />
-              Sign In to Your Account
+              {t('auth.signInToAccount')}
             </h2>
           </div>
           
@@ -76,7 +78,7 @@ const LoginPage: React.FC = () => {
             <form onSubmit={handleSubmit} className="space-y-6">
               <div className="form-group">
                 <label htmlFor="username" className="text-gray-700 font-medium block mb-2">
-                  Username
+                  {t('auth.username')}
                 </label>
                 <input
                   id="username"
@@ -84,14 +86,14 @@ const LoginPage: React.FC = () => {
                   className="input-field"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Enter your username"
+                  placeholder={t('auth.enterUsername')}
                   disabled={isLoading}
                 />
               </div>
               
               <div className="form-group">
                 <label htmlFor="password" className="text-gray-700 font-medium block mb-2">
-                  Password
+                  {t('auth.password')}
                 </label>
                 <div className="relative">
                   <input
@@ -100,7 +102,7 @@ const LoginPage: React.FC = () => {
                     className="input-field pr-10"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter your password"
+                    placeholder={t('auth.enterPassword')}
                     disabled={isLoading}
                   />
                   <button
@@ -125,12 +127,12 @@ const LoginPage: React.FC = () => {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    Signing in...
+                    {t('auth.signingIn')}
                   </span>
                 ) : (
                   <span className="flex items-center justify-center">
                     <LogIn className="mr-2" size={20} />
-                    Sign In
+                    {t('auth.signIn')}
                   </span>
                 )}
               </button>
@@ -139,7 +141,7 @@ const LoginPage: React.FC = () => {
         </div>
         
         <div className="mt-6 text-center text-gray-500 text-sm">
-          &copy; {new Date().getFullYear()} Cotton Plus Clothing. All rights reserved.
+          &copy; {new Date().getFullYear()} {t('company.name')}. {t('company.copyright')}
         </div>
       </div>
     </div>

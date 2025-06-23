@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
+import { useTranslation } from 'react-i18next';
 import api from '../services/api';
 import VirtualizedTable from '../components/VirtualizedTable';
+import SearchableDropdown from '../components/SearchableDropdown';
 import { Link } from 'react-router-dom';
 
 interface Barcode {
@@ -23,10 +25,18 @@ interface Barcode {
 
 const ArchivedBatchesPage: React.FC = () => {
   const { user } = useAuth();
+  const { t } = useTranslation();
   const [barcodes, setBarcodes] = useState<Barcode[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalBarcodes, setTotalBarcodes] = useState(0);
+  const [selectedBarcodes, setSelectedBarcodes] = useState<number[]>([]);
+  
+  // Dropdown options state
+  const [brandOptions, setBrandOptions] = useState<string[]>([]);
+  const [sizeOptions, setSizeOptions] = useState<string[]>([]);
+  const [colorOptions, setColorOptions] = useState<string[]>([]);
+  
   const [filters, setFilters] = useState({
     barcode: '',
     brand: '',
@@ -39,6 +49,38 @@ const ArchivedBatchesPage: React.FC = () => {
 
   // Items per page
   const itemsPerPage = 50;
+
+  // Fetch dropdown options
+  useEffect(() => {
+    const fetchDropdownOptions = async () => {
+      try {
+        const [brandsResponse, sizesResponse, colorsResponse] = await Promise.all([
+          api.get('/batches/brands/'),
+          api.get('/batches/sizes/'),
+          api.get('/batches/colors/')
+        ]);
+        
+        // Filter out invalid values
+        const filterValidOptions = (items: any[], nameKey: string) => 
+          items
+            .map(item => item[nameKey])
+            .filter(value => 
+              value && 
+              value.toLowerCase() !== 'none' && 
+              value.toLowerCase() !== 'null' && 
+              value.trim() !== ''
+            );
+        
+        setBrandOptions(filterValidOptions(brandsResponse.data, 'brand_name'));
+        setSizeOptions(filterValidOptions(sizesResponse.data, 'size_value'));
+        setColorOptions(filterValidOptions(colorsResponse.data, 'color_name'));
+      } catch (error) {
+        console.error('Error fetching dropdown options:', error);
+      }
+    };
+
+    fetchDropdownOptions();
+  }, []);
 
   // Fetch archived barcodes from the database with filters and pagination
   useEffect(() => {
@@ -58,6 +100,8 @@ const ArchivedBatchesPage: React.FC = () => {
         const response = await api.get(`/batches/?${queryParams.toString()}`);
         setBarcodes(response.data.items);
         setTotalBarcodes(response.data.total);
+        // Clear selections when data changes
+        setSelectedBarcodes([]);
       } catch (error) {
         console.error('Error fetching archived barcodes:', error);
       } finally {
@@ -75,6 +119,128 @@ const ArchivedBatchesPage: React.FC = () => {
     setCurrentPage(1); // Reset to first page when filters change
   };
 
+  // Handle clear filters
+  const handleClearFilters = () => {
+    setFilters({
+      barcode: '',
+      brand: '',
+      model: '',
+      size: '',
+      color: '',
+      phase: '',
+      status: ''
+    });
+    setCurrentPage(1); // Reset to first page when filters are cleared
+  };
+
+  // Handle checkbox selection
+  const handleSelectBarcode = useCallback((id: number) => {
+    setSelectedBarcodes(prev => {
+      if (prev.includes(id)) {
+        return prev.filter(barcodeId => barcodeId !== id);
+      } else {
+        return [...prev, id];
+      }
+    });
+  }, []);
+  
+  // Handle "Select All" checkbox
+  const handleSelectAll = () => {
+    if (selectedBarcodes.length === barcodes.length) {
+      setSelectedBarcodes([]);
+    } else {
+      setSelectedBarcodes(barcodes.map(barcode => barcode.batch_id));
+    }
+  };
+
+  // Handle bulk delete
+  const handleBulkDelete = async () => {
+    if (selectedBarcodes.length === 0) {
+      alert(t('barcodeManagement.selectBarcodesToDelete'));
+      return;
+    }
+    
+    if (window.confirm(t('barcodeManagement.confirmBulkDelete', { count: selectedBarcodes.length }))) {
+      try {
+        const deletePromises = selectedBarcodes.map(async (id) => {
+          try {
+            await api.delete(`/batches/archived/${id}`);
+            return { id, success: true };
+          } catch (error: any) {
+            return { 
+              id, 
+              success: false, 
+              error: error.response?.data?.detail || error.message || 'Unknown error' 
+            };
+          }
+        });
+
+        const results = await Promise.all(deletePromises);
+        const successful = results.filter(r => r.success);
+        const failed = results.filter(r => !r.success);
+
+        // Update the UI with successful deletions
+        if (successful.length > 0) {
+          setBarcodes(prev => prev.filter(barcode => !successful.some(s => s.id === barcode.batch_id)));
+          setTotalBarcodes(prev => prev - successful.length);
+        }
+
+        // Clear selections
+        setSelectedBarcodes([]);
+
+        // Show results to user
+        if (failed.length === 0) {
+          alert(`Successfully deleted ${successful.length} archived barcode(s).`);
+        } else if (successful.length === 0) {
+          alert(`Failed to delete any archived barcodes. Please try again.`);
+        } else {
+          alert(`Successfully deleted ${successful.length} archived barcode(s). Failed to delete ${failed.length} archived barcode(s).`);
+        }
+
+        // Log failed deletions for debugging
+        if (failed.length > 0) {
+          console.error('Failed deletions:', failed);
+        }
+
+      } catch (error) {
+        console.error('Error during bulk delete:', error);
+        alert(t('barcodeManagement.failedToDelete'));
+      }
+    }
+  };
+
+  // Handle bulk recovery
+  const handleBulkRecovery = async () => {
+    if (selectedBarcodes.length === 0) {
+      alert(t('barcodeManagement.selectBarcodesToRecover'));
+      return;
+    }
+    
+    const confirmMessage = t('barcodeManagement.confirmBulkRecover', { count: selectedBarcodes.length })
+      .replace('{count}', String(selectedBarcodes.length));
+    
+    if (window.confirm(confirmMessage)) {
+      try {
+        const response = await api.post('/batches/archived/recover/bulk', { 
+          batch_ids: selectedBarcodes 
+        });
+        
+        // Update the UI by removing recovered barcodes
+        setBarcodes(prev => prev.filter(barcode => !selectedBarcodes.includes(barcode.batch_id)));
+        setTotalBarcodes(prev => prev - selectedBarcodes.length);
+        setSelectedBarcodes([]);
+        
+        const successMessage = t('barcodeManagement.successfullyRecovered', { count: selectedBarcodes.length })
+          .replace('{count}', String(selectedBarcodes.length));
+        alert(successMessage);
+      } catch (error: any) {
+        console.error('Error during bulk recovery:', error);
+        const errorMessage = error.response?.data?.detail || error.message || t('barcodeManagement.failedToRecover');
+        alert(errorMessage);
+      }
+    }
+  };
+
   // Calculate total pages
   const totalPages = Math.ceil(totalBarcodes / itemsPerPage);
 
@@ -84,56 +250,97 @@ const ArchivedBatchesPage: React.FC = () => {
   };
 
   // Memoize the columns configuration
-  const columns = useMemo(() => [
-    { key: 'barcode', header: 'Barcode', width: 150 },
-    { key: 'brand_name', header: 'Brand', width: 120 },
-    { key: 'model_name', header: 'Model', width: 120 },
-    { key: 'size_value', header: 'Size', width: 100 },
-    { key: 'color_name', header: 'Color', width: 100 },
-    { key: 'quantity', header: 'Quantity', width: 100 },
-    { key: 'layers', header: 'Layers', width: 100 },
-    { key: 'serial', header: 'Serial', width: 100 },
-    {
-      key: 'phase_name',
-      header: 'Phase',
-      width: 120,
-      render: (item: Barcode) => (
-        <span className={`inline-block px-2 py-1 text-xs rounded-full ${
-          item.phase_name === 'Cutting' ? 'bg-blue-100 text-blue-800' :
-          item.phase_name === 'Sewing' ? 'bg-purple-100 text-purple-800' :
-          'bg-orange-100 text-orange-800'
-        }`}>
-          {item.phase_name}
-        </span>
-      )
-    },
-    {
-      key: 'status',
-      header: 'Status',
-      width: 120,
-      render: (item: Barcode) => (
-        <span className={`inline-block px-2 py-1 text-xs rounded-full ${
-          item.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
-          item.status === 'In Progress' ? 'bg-blue-100 text-blue-800' :
-          'bg-green-100 text-green-800'
-        }`}>
-          {item.status}
-        </span>
-      )
-    },
-    {
-      key: 'last_updated_at',
-      header: 'Last Updated',
-      width: 150,
-      render: (item: Barcode) => new Date(item.last_updated_at).toLocaleString()
-    },
-    {
-      key: 'archived_at',
-      header: 'Archived At',
-      width: 150,
-      render: (item: Barcode) => new Date(item.archived_at).toLocaleString()
-    }
-  ], []);
+  const columns = useMemo(() => {
+    const baseColumns = [
+      {
+        key: 'select',
+        header: (
+          <input
+            type="checkbox"
+            checked={selectedBarcodes.length === barcodes.length && barcodes.length > 0}
+            onChange={handleSelectAll}
+            className="w-4 h-4 text-green-600 bg-gray-100 border-gray-300 rounded focus:ring-green-500 focus:ring-2"
+          />
+        ),
+        width: 50,
+        render: (item: Barcode) => (
+          <input
+            type="checkbox"
+            checked={selectedBarcodes.includes(item.batch_id)}
+            onChange={() => handleSelectBarcode(item.batch_id)}
+            className="w-4 h-4 text-green-600 bg-gray-100 border-gray-300 rounded focus:ring-green-500 focus:ring-2"
+          />
+        )
+      },
+      { key: 'barcode', header: t('barcode.barcode'), width: 150 },
+      { key: 'brand_name', header: t('bulkBarcode.brand'), width: 120 },
+      { key: 'model_name', header: t('bulkBarcode.model'), width: 120 },
+      { key: 'size_value', header: t('bulkBarcode.size'), width: 100 },
+      { key: 'color_name', header: t('bulkBarcode.color'), width: 100 },
+      {
+        key: 'quantity',
+        header: t('barcode.quantity'),
+        width: 100,
+        render: (item: Barcode) => item.quantity
+      },
+      {
+        key: 'layers',
+        header: t('bulkBarcode.layers'),
+        width: 100,
+        render: (item: Barcode) => item.layers
+      },
+      {
+        key: 'serial',
+        header: t('bulkBarcode.serial'),
+        width: 100,
+        render: (item: Barcode) => item.serial
+      },
+      {
+        key: 'phase_name',
+        header: t('barcode.phase'),
+        width: 120,
+        render: (item: Barcode) => (
+          <span className={`inline-block px-2 py-1 text-xs rounded-full ${
+            item.phase_name === 'Cutting' ? 'bg-blue-100 text-blue-800' :
+            item.phase_name === 'Sewing' ? 'bg-purple-100 text-purple-800' :
+            'bg-orange-100 text-orange-800'
+          }`}>
+            {t(`phases.${item.phase_name.toLowerCase()}`)}
+          </span>
+        )
+      },
+      {
+        key: 'status',
+        header: t('common.status'),
+        width: 120,
+        render: (item: Barcode) => (
+          <span className={`inline-block px-2 py-1 text-xs rounded-full ${
+            item.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
+            item.status === 'In Progress' ? 'bg-blue-100 text-blue-800' :
+            'bg-green-100 text-green-800'
+          }`}>
+            {item.status === 'In Progress' ? t('status.inProgress') : 
+             item.status === 'Pending' ? t('status.pending') : 
+             t('status.completed')}
+          </span>
+        )
+      },
+      {
+        key: 'last_updated_at',
+        header: t('common.updated'),
+        width: 150,
+        render: (item: Barcode) => new Date(item.last_updated_at).toLocaleString()
+      },
+      {
+        key: 'archived_at',
+        header: 'Archived At',
+        width: 150,
+        render: (item: Barcode) => new Date(item.archived_at).toLocaleString()
+      }
+    ];
+
+    return baseColumns;
+  }, [t, selectedBarcodes, barcodes.length, handleSelectBarcode]);
 
   return (
     <Layout>
@@ -147,10 +354,20 @@ const ArchivedBatchesPage: React.FC = () => {
       <div className="bg-white rounded-lg shadow-sm p-6">
         {/* Filter Controls */}
         <div className="mb-6">
-          <h2 className="text-lg font-semibold mb-3">Filters</h2>
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-lg font-semibold">{t('barcodeManagement.filters')}</h2>
+            <div className="flex space-x-2">
+              <button
+                onClick={handleClearFilters}
+                className="px-3 py-1 text-sm text-purple-700 border-2 border-purple-400 bg-purple-50 rounded-md hover:text-purple-800 hover:bg-purple-100 hover:border-purple-500 hover:shadow-lg hover:scale-105 transition-all duration-200 font-medium"
+              >
+                Clear Filters
+              </button>
+            </div>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="form-group">
-              <label htmlFor="barcode" className="text-sm font-medium text-gray-700">Barcode</label>
+              <label htmlFor="barcode" className="text-sm font-medium text-gray-700">{t('barcode.barcode')}</label>
               <input
                 type="text"
                 id="barcode"
@@ -162,19 +379,17 @@ const ArchivedBatchesPage: React.FC = () => {
             </div>
             
             <div className="form-group">
-              <label htmlFor="brand" className="text-sm font-medium text-gray-700">Brand</label>
-              <input
-                type="text"
-                id="brand"
-                name="brand"
+              <SearchableDropdown
+                options={brandOptions}
                 value={filters.brand}
-                onChange={handleFilterChange}
-                className="input-field"
+                onChange={(value) => setFilters(prev => ({ ...prev, brand: value }))}
+                placeholder={t('bulkBarcode.brand')}
+                label={t('bulkBarcode.brand')}
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="model" className="text-sm font-medium text-gray-700">Model</label>
+              <label htmlFor="model" className="text-sm font-medium text-gray-700">{t('bulkBarcode.model')}</label>
               <input
                 type="text"
                 id="model"
@@ -186,31 +401,27 @@ const ArchivedBatchesPage: React.FC = () => {
             </div>
             
             <div className="form-group">
-              <label htmlFor="size" className="text-sm font-medium text-gray-700">Size</label>
-              <input
-                type="text"
-                id="size"
-                name="size"
+              <SearchableDropdown
+                options={sizeOptions}
                 value={filters.size}
-                onChange={handleFilterChange}
-                className="input-field"
+                onChange={(value) => setFilters(prev => ({ ...prev, size: value }))}
+                placeholder={t('bulkBarcode.size')}
+                label={t('bulkBarcode.size')}
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="color" className="text-sm font-medium text-gray-700">Color</label>
-              <input
-                type="text"
-                id="color"
-                name="color"
+              <SearchableDropdown
+                options={colorOptions}
                 value={filters.color}
-                onChange={handleFilterChange}
-                className="input-field"
+                onChange={(value) => setFilters(prev => ({ ...prev, color: value }))}
+                placeholder={t('bulkBarcode.color')}
+                label={t('bulkBarcode.color')}
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="phase" className="text-sm font-medium text-gray-700">Phase</label>
+              <label htmlFor="phase" className="text-sm font-medium text-gray-700">{t('barcode.phase')}</label>
               <select
                 id="phase"
                 name="phase"
@@ -218,15 +429,15 @@ const ArchivedBatchesPage: React.FC = () => {
                 onChange={handleFilterChange}
                 className="input-field"
               >
-                <option value="">All Phases</option>
-                <option value="Cutting">Cutting</option>
-                <option value="Sewing">Sewing</option>
-                <option value="Packaging">Packaging</option>
+                <option value="">{t('barcodeManagement.allPhases')}</option>
+                <option value="Cutting">{t('phases.cutting')}</option>
+                <option value="Sewing">{t('phases.sewing')}</option>
+                <option value="Packaging">{t('phases.packaging')}</option>
               </select>
             </div>
             
             <div className="form-group">
-              <label htmlFor="status" className="text-sm font-medium text-gray-700">Status</label>
+              <label htmlFor="status" className="text-sm font-medium text-gray-700">{t('common.status')}</label>
               <select
                 id="status"
                 name="status"
@@ -234,12 +445,51 @@ const ArchivedBatchesPage: React.FC = () => {
                 onChange={handleFilterChange}
                 className="input-field"
               >
-                <option value="">All Statuses</option>
-                <option value="Pending">Pending</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Completed">Completed</option>
+                <option value="">{t('barcodeManagement.allStatuses')}</option>
+                <option value="Pending">{t('status.pending')}</option>
+                <option value="In Progress">{t('status.inProgress')}</option>
+                <option value="Completed">{t('status.completed')}</option>
               </select>
             </div>
+
+            {user?.role === 'Admin' && (
+              <div className="form-group">
+                <div className="flex space-x-2" style={{ marginTop: '24px' }}>
+                  <button
+                    onClick={handleBulkRecovery}
+                    disabled={selectedBarcodes.length === 0}
+                    style={{
+                      backgroundColor: 'green',
+                      color: 'white',
+                      padding: '8px 16px',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: selectedBarcodes.length === 0 ? 'not-allowed' : 'pointer',
+                      opacity: selectedBarcodes.length === 0 ? 0.5 : 1,
+                      flex: 1
+                    }}
+                  >
+                    Recover Selected ({selectedBarcodes.length})
+                  </button>
+                  <button
+                    onClick={handleBulkDelete}
+                    disabled={selectedBarcodes.length === 0}
+                    style={{
+                      backgroundColor: 'red',
+                      color: 'white',
+                      padding: '8px 16px',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: selectedBarcodes.length === 0 ? 'not-allowed' : 'pointer',
+                      opacity: selectedBarcodes.length === 0 ? 0.5 : 1,
+                      flex: 1
+                    }}
+                  >
+                    Delete Selected ({selectedBarcodes.length})
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -278,7 +528,7 @@ const ArchivedBatchesPage: React.FC = () => {
                     disabled={currentPage === 1}
                     className="px-3 py-1 rounded border disabled:opacity-50"
                   >
-                    Previous
+                    {t('common.previous')}
                   </button>
                   
                   {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
@@ -311,7 +561,7 @@ const ArchivedBatchesPage: React.FC = () => {
                     disabled={currentPage === totalPages}
                     className="px-3 py-1 rounded border disabled:opacity-50"
                   >
-                    Next
+                    {t('common.next')}
                   </button>
                 </nav>
               </div>

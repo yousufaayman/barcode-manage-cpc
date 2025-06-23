@@ -4,13 +4,6 @@ import { authApi, User } from '../services/api';
 // Define user roles
 export type UserRole = 'Admin' | 'Cutting' | 'Sewing' | 'Packaging';
 
-// Define user type
-export type User = {
-  id: number;
-  username: string;
-  role: UserRole;
-};
-
 // Define context type
 type AuthContextType = {
   user: User | null;

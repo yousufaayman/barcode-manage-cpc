@@ -83,6 +83,24 @@
   body {
     @apply bg-cream text-foreground;
   }
+
+  /* Force LTR layout for all languages */
+  html {
+    direction: ltr !important;
+  }
+
+  body {
+    direction: ltr !important;
+  }
+
+  /* Override any RTL styles */
+  [dir="rtl"] {
+    direction: ltr !important;
+  }
+
+  [dir="rtl"] * {
+    direction: ltr !important;
+  }
 }
 
 @layer components {
@@ -158,4 +176,21 @@
 
 .chart-container {
   will-change: transform;
+}
+
+/* Arabic font support */
+[lang="ar"] {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+[lang="ar"] .font-bold {
+  font-weight: 600;
+}
+
+[lang="ar"] .font-semibold {
+  font-weight: 500;
+}
+
+[lang="ar"] .font-medium {
+  font-weight: 400;
 }

@@ -1,6 +1,7 @@
 import React, { useState, useRef, ChangeEvent, useEffect } from 'react';
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { useTranslation } from 'react-i18next';
 import {
   Dialog,
   DialogContent,
@@ -66,6 +67,8 @@ interface ErrorDisplayProps {
 }
 
 const ErrorDisplay: React.FC<ErrorDisplayProps> = ({ errors, className, showAllColumns }) => {
+  const { t } = useTranslation();
+  
   if (!errors.length) return null;
 
   return (
@@ -79,15 +82,15 @@ const ErrorDisplay: React.FC<ErrorDisplayProps> = ({ errors, className, showAllC
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-red-50">
-                      <TableHead className="md:px-4 md:py-2 px-2 py-1">Row #</TableHead>
-                      <TableHead className="md:px-4 md:py-2 px-2 py-1">Error</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Brand</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Model</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Size</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Color</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Quantity</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Layers</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Serial</TableHead>
+                      <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('bulkBarcode.rowNumber')}</TableHead>
+                      <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('common.error')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.brand')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.model')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.size')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.color')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('barcode.quantity')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.layers')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.serial')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -117,6 +120,7 @@ const ErrorDisplay: React.FC<ErrorDisplayProps> = ({ errors, className, showAllC
 
 const BulkBarcodeCreatePage: React.FC = () => {
   const navigate = useNavigate();
+  const { t, i18n } = useTranslation();
   const [file, setFile] = useState<File | null>(null);
   const [errors, setErrors] = useState<Array<{
     message: string;
@@ -191,7 +195,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
             disabled={currentPage === 1}
             className="px-3 py-1 rounded border disabled:opacity-50"
           >
-            Previous
+            {t('common.previous')}
           </button>
           
           {pageNumbers.map(number => (
@@ -199,7 +203,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
               key={number}
               onClick={() => onPageChange(number)}
               className={`px-3 py-1 rounded border ${
-                currentPage === number ? 'bg-green text-white' : ''
+                currentPage === number ? 'bg-green text-white' : 'hover:bg-gray-100'
               }`}
             >
               {number}
@@ -211,7 +215,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
             disabled={currentPage === totalPages}
             className="px-3 py-1 rounded border disabled:opacity-50"
           >
-            Next
+            {t('common.next')}
           </button>
         </nav>
       </div>
@@ -219,180 +223,169 @@ const BulkBarcodeCreatePage: React.FC = () => {
   };
 
   useEffect(() => {
-    const fetchPrinters = async () => {
-      try {
-        const response = await api.get('/barcodes/printers');
-        setPrinters(response.data.printers);
-        if (response.data.printers.length > 0) {
-          setSelectedPrinter(response.data.printers[0]);
-        }
-      } catch (err) {
-        console.error('Error fetching printers:', err);
-        setErrors([{ message: 'Failed to fetch available printers' }]);
-      }
-    };
-
     fetchPrinters();
   }, []);
 
+  const fetchPrinters = async () => {
+    try {
+      const response = await api.get('/barcodes/printers');
+      setPrinters(response.data.printers);
+      if (response.data.printers.length > 0) {
+        setSelectedPrinter(response.data.printers[0]);
+      }
+    } catch (error) {
+      console.error('Error fetching printers:', error);
+    }
+  };
+
   const downloadTemplate = async () => {
     try {
-      setIsLoading(true);
-      setErrors([]);
-      
       const response = await api.get('/barcodes/template', {
-        responseType: 'blob',
-        headers: {
-          'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        }
+        responseType: 'blob'
       });
       
-      // Check if the response is actually a blob
-      if (!(response.data instanceof Blob)) {
-        throw new Error('Invalid response format');
-      }
-      
-      // Create blob with the correct MIME type
-      const blob = new Blob([response.data], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      });
-      
-      // Create URL and trigger download
-      const url = window.URL.createObjectURL(blob);
+      const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', 'bulk_barcode_template.xlsx');
+      link.setAttribute('download', 'barcode_template.xlsx');
       document.body.appendChild(link);
       link.click();
-      
-      // Cleanup
-      document.body.removeChild(link);
+      link.remove();
       window.URL.revokeObjectURL(url);
-    } catch (error: any) {
-      console.error('Download error:', error);
-      setErrors([{ message: error.response?.data?.detail || 'Failed to download template. Please try again.' }]);
-    } finally {
-      setIsLoading(false);
+    } catch (error) {
+      console.error('Error downloading template:', error);
     }
   };
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (!selectedFile) return;
+
+    setFile(selectedFile);
+    setIsLoading(true);
     setErrors([]);
     setPreview([]);
     setErrorRows([]);
-    setIsSubmitted(false);
     setSubmitMessage('');
-    
-    const selectedFile = e.target.files?.[0];
-    if (!selectedFile) return;
-    
-    if (selectedFile.type !== 'text/csv' && 
-        !selectedFile.name.endsWith('.xlsx') && 
-        !selectedFile.name.endsWith('.xls')) {
-      setErrors([{ message: 'Please upload a valid Excel or CSV file' }]);
-      setFile(null);
-      e.target.value = '';
-      return;
-    }
-    
-    setFile(selectedFile);
-    setIsLoading(true);
-    
+    setIsSubmitted(false);
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
     try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-      
-      const response = await api.post('/barcodes/bulk/process', formData, {
+      const response = await api.post('/barcodes/bulk/validate', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
-      
-      const transformedData = response.data.processed_data.map((item: any) => ({
-        barcode: item.barcode || '',
-        brand: item.brand || '',
-        model: item.model || '',
-        size: item.size || '',
-        color: item.color || '',
-        quantity: item.quantity || 0,
-        layers: item.layers || 0,
-        serial: item.serial || 0,
-        brand_id: item.brand_id,
-        model_id: item.model_id,
-        size_id: item.size_id,
-        color_id: item.color_id
-      }));
 
-      if (response.data.error_rows && response.data.error_rows.length > 0) {
-        setErrorRows(response.data.error_rows);
+      const { valid_rows, error_rows } = response.data;
+      
+      setPreview(valid_rows.map((row: any) => ({
+        ...row,
+        status: 'success' as const
+      })));
+      
+      setErrorRows(error_rows);
+      
+      if (error_rows.length > 0) {
+        const errorMessage = t('bulkBarcode.foundErrors', { count: error_rows.length });
+        console.log('Translation debug:', {
+          key: 'bulkBarcode.foundErrors',
+          count: error_rows.length,
+          result: errorMessage,
+          currentLanguage: i18n.language
+        });
+        
+        // Fallback if interpolation doesn't work
+        const finalMessage = errorMessage.includes('{count}') 
+          ? errorMessage.replace('{count}', error_rows.length.toString())
+          : errorMessage;
+        
         setErrors([{
-          message: `Found ${response.data.error_rows.length} rows with errors. Please fix them before submitting.`,
-          details: response.data.error_rows
+          message: finalMessage,
+          details: error_rows
         }]);
       }
 
-      const validRows = transformedData.filter((row: any) => 
-        !response.data.error_rows?.some((errorRow: any) => errorRow.data.barcode === row.barcode)
-      );
-      setPreview(validRows);
-    } catch (error: any) {
-      setErrors([{ message: error.response?.data?.detail ?? 'Failed to process file. Please try again.' }]);
-      setPreview([]);
-      setErrorRows([]);
+      const updatedPreview = updatePreviewWithStatus(preview, valid_rows, response);
+      setPreview(updatedPreview);
+      
+      const duplicates = response.data.duplicate_barcodes.length;
+      const validCount = valid_rows.length;
+      const errorCount = preview.length - validCount;
+
+      const successMessage = t('bulkBarcode.successfullySubmitted', {
+        count: validCount,
+        duplicates: duplicates,
+        errors: errorCount
+      })
+      .replace('{count}', String(validCount))
+      .replace('{duplicates}', String(duplicates))
+      .replace('{errors}', String(errorCount));
+
+      setSubmitMessage(successMessage);
+      setIsSubmitted(true);
+    } catch (err: any) {
+      if (err.response && err.response.data) {
+        const { status, data } = err.response;
+        let errorMessage = data.detail || t('bulkBarcode.failedToSubmit');
+
+        if (status === 400) {
+          errorMessage = data.detail || t('bulkBarcode.badRequest');
+        } else if (status === 422) {
+          const validationErrors = data.detail;
+          errorMessage = Array.isArray(validationErrors)
+            ? validationErrors.map((error: any) => `${error.loc[error.loc.length - 1]}: ${error.msg}`).join('\n')
+            : t('bulkBarcode.validationError');
+        }
+        
+        setErrors([{ message: errorMessage }]);
+      } else {
+        setErrors([{ message: err.message || t('bulkBarcode.networkError') }]);
+      }
     } finally {
       setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
   const validateRows = (rows: BarcodeEntry[]) => {
-    if (!rows.length) {
-      return { isValid: false, error: 'No data to submit' };
-    }
-    // Do not block submission if there are error rows
-    const validRows = rows.filter(item => 
-      item.brand_id && 
-      item.model_id && 
-      item.size_id && 
-      item.color_id && 
-      item.quantity && 
-      item.layers && 
-      item.serial && 
-      item.barcode
-    );
+    const validRows = rows.filter(row => row.status === 'success');
     if (validRows.length === 0) {
-      return { isValid: false, error: 'No valid rows to submit. Please fix the data and try again.' };
+      return { isValid: false, error: 'No valid rows to submit' };
     }
     return { isValid: true, validRows };
   };
 
   const transformRowsForSubmission = (rows: BarcodeEntry[]) => {
-    return rows.map(item => ({
-      barcode: item.barcode,
-      brand_id: item.brand_id,
-      model_id: item.model_id,
-      size_id: item.size_id,
-      color_id: item.color_id,
-      quantity: Number(item.quantity),
-      layers: Number(item.layers),
-      serial: String(item.serial).padStart(3, '0'),
-      current_phase: 1,
-      status: "pending"
+    return rows.map(row => ({
+      barcode: row.barcode,
+      brand_id: row.brand_id,
+      model_id: row.model_id,
+      size_id: row.size_id,
+      color_id: row.color_id,
+      quantity: row.quantity,
+      layers: row.layers,
+      serial: row.serial,
+      current_phase: 1, // Default to first phase (Cutting)
+      status: 'Pending' // Default status for new batches
     }));
   };
 
   const updatePreviewWithStatus = (preview: BarcodeEntry[], validRows: BarcodeEntry[], response: any) => {
-    return preview.map(item => {
-      const wasSubmitted = validRows.some(valid => valid.barcode === item.barcode);
-      if (!wasSubmitted) {
-        return { ...item, status: 'error' as const };
+    const validBarcodes = validRows.map(row => row.barcode);
+    const duplicateBarcodes = response.data.duplicate_barcodes.map((item: any) => item.barcode);
+    
+    return preview.map(row => {
+      if (validBarcodes.includes(row.barcode)) {
+        if (duplicateBarcodes.includes(row.barcode)) {
+          return { ...row, status: 'duplicate' as const };
+        } else {
+          return { ...row, status: 'success' as const };
+        }
       }
-      const isDuplicate = response.data.duplicate_barcodes.some(
-        (dup: any) => dup.barcode === item.barcode
-      );
-      return {
-        ...item,
-        status: isDuplicate ? 'duplicate' as const : 'success' as const
-      };
+      return row;
     });
   };
 
@@ -413,21 +406,38 @@ const BulkBarcodeCreatePage: React.FC = () => {
       const updatedPreview = updatePreviewWithStatus(preview, validation.validRows, response);
       setPreview(updatedPreview);
       
-      setSubmitMessage(
-        `Successfully submitted ${validation.validRows.length} rows. ` +
-        `${response.data.duplicate_barcodes.length} duplicates found. ` +
-        `${preview.length - validation.validRows.length} rows were skipped due to errors.`
-      );
+      const duplicates = response.data.duplicate_barcodes.length;
+      const validCount = validation.validRows.length;
+      const errorCount = preview.length - validCount;
+
+      const successMessage = t('bulkBarcode.successfullySubmitted', {
+        count: validCount,
+        duplicates: duplicates,
+        errors: errorCount
+      })
+      .replace('{count}', String(validCount))
+      .replace('{duplicates}', String(duplicates))
+      .replace('{errors}', String(errorCount));
+
+      setSubmitMessage(successMessage);
       setIsSubmitted(true);
     } catch (err: any) {
-      if (err.response?.status === 422) {
-        const validationErrors = err.response.data.detail;
-        const errorMessages = Array.isArray(validationErrors)
-          ? validationErrors.map((error: any) => `${error.loc[error.loc.length - 1]}: ${error.msg}`).join('\n')
-          : 'Validation error: ' + JSON.stringify(validationErrors);
-        setErrors([{ message: errorMessages }]);
+      if (err.response && err.response.data) {
+        const { status, data } = err.response;
+        let errorMessage = data.detail || t('bulkBarcode.failedToSubmit');
+
+        if (status === 400) {
+          errorMessage = data.detail || t('bulkBarcode.badRequest');
+        } else if (status === 422) {
+          const validationErrors = data.detail;
+          errorMessage = Array.isArray(validationErrors)
+            ? validationErrors.map((error: any) => `${error.loc[error.loc.length - 1]}: ${error.msg}`).join('\n')
+            : t('bulkBarcode.validationError');
+        }
+        
+        setErrors([{ message: errorMessage }]);
       } else {
-        setErrors([{ message: err.response?.data?.detail ?? 'Failed to submit barcodes' }]);
+        setErrors([{ message: err.message || t('bulkBarcode.networkError') }]);
       }
     } finally {
       setIsSubmitting(false);
@@ -440,6 +450,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
     setPreview([]);
     setErrorRows([]);
     setIsSubmitted(false);
+    setSubmitMessage('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -466,7 +477,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
         }));
 
       if (barcodesToPrint.length === 0) {
-        setErrors([{ message: 'No barcodes available for printing' }]);
+        setErrors([{ message: t('bulkBarcode.noBarcodesForPrinting') }]);
         return;
       }
 
@@ -479,10 +490,14 @@ const BulkBarcodeCreatePage: React.FC = () => {
       
       // Show success message
       setSubmitMessage(prev => 
-        prev + `\nPrinted ${barcodesToPrint.length} barcodes ${printCount} times each on ${selectedPrinter}.`
+        prev + '\n' + t('bulkBarcode.printedBarcodes', {
+          count: barcodesToPrint.length,
+          times: printCount,
+          printer: selectedPrinter
+        })
       );
     } catch (err: any) {
-      setErrors([{ message: err.response?.data?.detail || 'Failed to print barcodes' }]);
+      setErrors([{ message: err.response?.data?.detail || t('bulkBarcode.failedToPrint') }]);
     } finally {
       setIsPrinting(false);
     }
@@ -491,13 +506,13 @@ const BulkBarcodeCreatePage: React.FC = () => {
   return (
     <Layout>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2 text-gray-800">Bulk Barcode Creation</h1>
-        <p className="text-gray-600">Upload an Excel file to create multiple barcodes at once</p>
+        <h1 className="text-2xl font-bold mb-2 text-gray-800">{t('bulkBarcode.title')}</h1>
+        <p className="text-gray-600">{t('bulkBarcode.subtitle')}</p>
       </div>
 
       <div className="bg-white rounded-lg shadow-sm p-6">
         <div className="mb-6">
-          <h2 className="text-lg font-semibold mb-3">Upload File</h2>
+          <h2 className="text-lg font-semibold mb-3">{t('bulkBarcode.uploadFile')}</h2>
           
           <div className="mb-4">
             <button
@@ -505,7 +520,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
               className="btn-primary mb-4"
               onClick={downloadTemplate}
             >
-              Download Template
+              {t('bulkBarcode.downloadTemplate')}
             </button>
 
             <div className={`border-2 border-dashed rounded-lg p-6 text-center ${errors.length > 0 ? 'border-red-300 bg-red-50' : 'border-gray-300 bg-gray-50'}`}>
@@ -516,10 +531,10 @@ const BulkBarcodeCreatePage: React.FC = () => {
               </div>
               
               <p className="text-sm text-gray-600 mb-2">
-                Click to browse or drag and drop your file here
+                {t('bulkBarcode.dragDropText')}
               </p>
               <p className="text-xs text-gray-500 mb-2">
-                Supported formats: Excel (.xlsx, .xls), CSV
+                {t('bulkBarcode.supportedFormats')}
               </p>
               
               <button 
@@ -528,7 +543,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isLoading || isSubmitting}
               >
-                Browse Files
+                {t('bulkBarcode.browseFiles')}
               </button>
               
               <input
@@ -542,7 +557,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
             </div>            
             {file && !errors.length && (
               <div className="mt-3 flex items-center">
-                <span className="text-sm font-medium">Selected file:</span>
+                <span className="text-sm font-medium">{t('bulkBarcode.selectedFile')}</span>
                 <span className="ml-2 text-sm text-gray-600">{file.name}</span>
                 <button
                   type="button"
@@ -550,7 +565,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                   className="ml-2 text-sm text-red-600 hover:text-red-800"
                   disabled={isLoading || isSubmitting}
                 >
-                  Remove
+                  {t('bulkBarcode.remove')}
                 </button>
               </div>
             )}
@@ -560,13 +575,13 @@ const BulkBarcodeCreatePage: React.FC = () => {
         {isLoading && (
           <div className="text-center py-10">
             <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-            <p className="text-gray-600">Processing file...</p>
+            <p className="text-gray-600">{t('bulkBarcode.processingFile')}</p>
           </div>
         )}
 
         {!isLoading && preview.length > 0 && (
           <div className="mb-6">
-            <h2 className="text-lg font-semibold mb-3">Preview Data</h2>
+            <h2 className="text-lg font-semibold mb-3">{t('bulkBarcode.previewData')}</h2>
             {submitMessage && (
               <p className="text-sm text-gray-600 mb-4">{submitMessage}</p>
             )}
@@ -575,11 +590,24 @@ const BulkBarcodeCreatePage: React.FC = () => {
             {errorRows.length > 0 && (
               <div className="mb-6">
                 <h3 className="text-md font-semibold mb-2 text-red-600">
-                  Problem Rows ({errorRows.length})
+                  {t('bulkBarcode.problemRows')} ({errorRows.length})
                 </h3>
                 <ErrorDisplay 
                   errors={[{
-                    message: `Found ${errorRows.length} rows with errors. Please fix them before submitting.`,
+                    message: (() => {
+                      const errorMessage = t('bulkBarcode.foundErrors', { count: errorRows.length });
+                      console.log('Translation debug (ErrorDisplay):', {
+                        key: 'bulkBarcode.foundErrors',
+                        count: errorRows.length,
+                        result: errorMessage,
+                        currentLanguage: i18n.language
+                      });
+                      
+                      // Fallback if interpolation doesn't work
+                      return errorMessage.includes('{count}') 
+                        ? errorMessage.replace('{count}', errorRows.length.toString())
+                        : errorMessage;
+                    })(),
                     details: errorRows
                   }]} 
                   showAllColumns={showAllColumns}
@@ -599,14 +627,14 @@ const BulkBarcodeCreatePage: React.FC = () => {
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                       </svg>
-                      Hide Additional Columns
+                      {t('bulkBarcode.hideAdditionalColumns')}
                     </>
                   ) : (
                     <>
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
-                      Show Additional Columns
+                      {t('bulkBarcode.showAdditionalColumns')}
                     </>
                   )}
                 </button>
@@ -615,15 +643,15 @@ const BulkBarcodeCreatePage: React.FC = () => {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="md:px-4 md:py-2 px-2 py-1">Status</TableHead>
-                      <TableHead className="md:px-4 md:py-2 px-2 py-1">Barcode</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Brand</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Model</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Size</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Color</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Quantity</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Layers</TableHead>
-                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>Serial</TableHead>
+                      <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('common.status')}</TableHead>
+                      <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('barcode.barcode')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.brand')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.model')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.size')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.color')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('barcode.quantity')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.layers')}</TableHead>
+                      <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.serial')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -660,7 +688,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
             {isSubmitted && (
               <div className="flex flex-wrap gap-2 items-center justify-end mt-4">
                 <div className="flex items-center space-x-2">
-                  <Label htmlFor="printCount">Print Count:</Label>
+                  <Label htmlFor="printCount">{t('bulkBarcode.printCount')}</Label>
                   <Input
                     id="printCount"
                     type="number"
@@ -673,14 +701,14 @@ const BulkBarcodeCreatePage: React.FC = () => {
                   />
                 </div>
                 <div className="flex items-center space-x-2">
-                  <Label htmlFor="printer">Printer:</Label>
+                  <Label htmlFor="printer">{t('bulkBarcode.printer')}</Label>
                   <Select
                     value={selectedPrinter}
                     onValueChange={setSelectedPrinter}
                     disabled={isPrinting}
                   >
                     <SelectTrigger className="w-[200px]">
-                      <SelectValue placeholder="Select printer" />
+                      <SelectValue placeholder={t('bulkBarcode.selectPrinter')} />
                     </SelectTrigger>
                     <SelectContent>
                       {printers.map((printer) => (
@@ -705,10 +733,10 @@ const BulkBarcodeCreatePage: React.FC = () => {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                       </svg>
-                      Printing...
+                      {t('bulkBarcode.printing')}
                     </span>
                   ) : (
-                    'Print Barcodes'
+                    t('bulkBarcode.printBarcodes')
                   )}
                 </Button>
               </div>
@@ -722,7 +750,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                   onClick={handleReset}
                   disabled={isSubmitting}
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
                 <button
                   type="button"
@@ -736,10 +764,10 @@ const BulkBarcodeCreatePage: React.FC = () => {
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                       </svg>
-                      Submitting...
+                      {t('bulkBarcode.submitting')}
                     </span>
                   ) : (
-                    'Submit Barcodes'
+                    t('bulkBarcode.submitBarcodes')
                   )}
                 </button>
               </div>
@@ -749,13 +777,13 @@ const BulkBarcodeCreatePage: React.FC = () => {
         
         {!isLoading && !file && (
           <div className="py-6">
-            <h3 className="font-semibold mb-2">File Format Requirements:</h3>
+            <h3 className="font-semibold mb-2">{t('bulkBarcode.fileFormatRequirements')}</h3>
             <ul className="list-disc pl-5 text-sm text-gray-600 space-y-1">
-              <li>Excel files (.xlsx, .xls) or CSV format</li>
-              <li>Required columns: brand, model, size, color, quantity, layers, serial</li>
-              <li>First row must be header row</li>
-              <li>Each barcode must be unique</li>
-              <li>Maximum 1000 records per upload</li>
+              <li>{t('bulkBarcode.excelCsvFormat')}</li>
+              <li>{t('bulkBarcode.requiredColumns')}</li>
+              <li>{t('bulkBarcode.headerRowRequired')}</li>
+              <li>{t('bulkBarcode.uniqueBarcodes')}</li>
+              <li>{t('bulkBarcode.maxRecords')}</li>
             </ul>
           </div>
         )}
@@ -772,7 +800,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
       }}>
         <DialogContent className="max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Duplicate Barcodes Found</DialogTitle>
+            <DialogTitle>{t('bulkBarcode.duplicateBarcodesFound')}</DialogTitle>
           </DialogHeader>
           <div className="py-4">
             <p className="text-sm text-gray-600 mb-4">{submitMessage}</p>
@@ -780,14 +808,14 @@ const BulkBarcodeCreatePage: React.FC = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Barcode</TableHead>
-                    <TableHead>Brand</TableHead>
-                    <TableHead>Model</TableHead>
-                    <TableHead>Size</TableHead>
-                    <TableHead>Color</TableHead>
-                    <TableHead>Quantity</TableHead>
-                    <TableHead>Layers</TableHead>
-                    <TableHead>Serial</TableHead>
+                    <TableHead>{t('barcode.barcode')}</TableHead>
+                    <TableHead>{t('bulkBarcode.brand')}</TableHead>
+                    <TableHead>{t('bulkBarcode.model')}</TableHead>
+                    <TableHead>{t('bulkBarcode.size')}</TableHead>
+                    <TableHead>{t('bulkBarcode.color')}</TableHead>
+                    <TableHead>{t('barcode.quantity')}</TableHead>
+                    <TableHead>{t('bulkBarcode.layers')}</TableHead>
+                    <TableHead>{t('bulkBarcode.serial')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -817,7 +845,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                 setFile(null);
               }}
             >
-              Close
+              {t('common.close')}
             </Button>
           </DialogFooter>
         </DialogContent>

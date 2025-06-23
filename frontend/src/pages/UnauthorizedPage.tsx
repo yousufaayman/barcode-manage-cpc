@@ -1,10 +1,11 @@
-
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useTranslation } from 'react-i18next';
 
 const UnauthorizedPage: React.FC = () => {
   const { user } = useAuth();
+  const { t } = useTranslation();
 
   return (
     <div className="min-h-screen bg-cream flex items-center justify-center p-4">
@@ -17,22 +18,22 @@ const UnauthorizedPage: React.FC = () => {
           </div>
         </div>
         
-        <h1 className="text-2xl font-bold text-gray-800 mb-2">Access Denied</h1>
+        <h1 className="text-2xl font-bold text-gray-800 mb-2">{t('auth.accessDenied')}</h1>
         <p className="text-gray-600 mb-6">
           {user ? (
             <>
-              Your current role <span className="font-semibold">{user.role}</span> does not have permission to access this page.
+              {t('auth.currentRole')} <span className="font-semibold">{user.role}</span> {t('auth.doesNotHavePermission')}
             </>
           ) : (
             <>
-              You don't have permission to access this page.
+              {t('auth.noPermission')}
             </>
           )}
         </p>
         
         <div className="flex flex-col items-center gap-3">
           <Link to="/dashboard" className="btn-primary w-full max-w-xs">
-            Go to Dashboard
+            {t('navigation.goToDashboard')}
           </Link>
         </div>
       </div>

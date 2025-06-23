@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
+import { useTranslation } from 'react-i18next';
 import api from '../services/api';
 import { cn } from '../lib/utils';
 import { Label } from '../components/ui/label';
@@ -9,6 +10,7 @@ import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/select';
 import VirtualizedTable from '../components/VirtualizedTable';
+import SearchableDropdown from '../components/SearchableDropdown';
 import { Link } from 'react-router-dom';
 
 interface Barcode {
@@ -28,11 +30,17 @@ interface Barcode {
 
 const BarcodeManagementPage: React.FC = () => {
   const { user } = useAuth();
+  const { t } = useTranslation();
   const [barcodes, setBarcodes] = useState<Barcode[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedBarcodes, setSelectedBarcodes] = useState<number[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
+  
+  // Dropdown options state
+  const [brandOptions, setBrandOptions] = useState<string[]>([]);
+  const [sizeOptions, setSizeOptions] = useState<string[]>([]);
+  const [colorOptions, setColorOptions] = useState<string[]>([]);
   
   // Initialize filters with default phase based on user role
   const getInitialFilters = () => {
@@ -85,10 +93,7 @@ const BarcodeManagementPage: React.FC = () => {
   // Temporary state for edited values
   const [editValues, setEditValues] = useState({
     phase_name: '',
-    status: '' as 'Pending' | 'In Progress' | 'Completed',
-    quantity: 0,
-    layers: 0,
-    serial: 0
+    status: '' as 'Pending' | 'In Progress' | 'Completed'
   });
   
   // Items per page
@@ -96,6 +101,51 @@ const BarcodeManagementPage: React.FC = () => {
 
   // Temporary state for mobile responsiveness
   const [showAllColumns, setShowAllColumns] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Check if we're on mobile
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768); // md breakpoint is 768px
+    };
+    
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Fetch dropdown options
+  useEffect(() => {
+    const fetchDropdownOptions = async () => {
+      try {
+        const [brandsResponse, sizesResponse, colorsResponse] = await Promise.all([
+          api.get('/batches/brands/'),
+          api.get('/batches/sizes/'),
+          api.get('/batches/colors/')
+        ]);
+        
+        // Filter out invalid values
+        const filterValidOptions = (items: any[], nameKey: string) => 
+          items
+            .map(item => item[nameKey])
+            .filter(value => 
+              value && 
+              value.toLowerCase() !== 'none' && 
+              value.toLowerCase() !== 'null' && 
+              value.trim() !== ''
+            );
+        
+        setBrandOptions(filterValidOptions(brandsResponse.data, 'brand_name'));
+        setSizeOptions(filterValidOptions(sizesResponse.data, 'size_value'));
+        setColorOptions(filterValidOptions(colorsResponse.data, 'color_name'));
+      } catch (error) {
+        console.error('Error fetching dropdown options:', error);
+      }
+    };
+
+    fetchDropdownOptions();
+  }, []);
 
   // Update filters when user changes
   useEffect(() => {
@@ -157,12 +207,19 @@ const BarcodeManagementPage: React.FC = () => {
     setCurrentPage(1); // Reset to first page when filters change
   };
   
+  // Handle clear filters
+  const handleClearFilters = () => {
+    setFilters(getInitialFilters());
+    setCurrentPage(1); // Reset to first page when filters are cleared
+  };
+  
   // Calculate total pages
   const totalPages = Math.ceil(totalBarcodes / itemsPerPage);
   
   // Handle page change
   const handlePageChange = (pageNumber: number) => {
     setCurrentPage(pageNumber);
+    setSelectedBarcodes([]); // Clear selections when changing pages
   };
   
   // Handle checkbox selection
@@ -190,10 +247,7 @@ const BarcodeManagementPage: React.FC = () => {
     setEditingId(barcode.batch_id);
     setEditValues({
       phase_name: barcode.phase_name,
-      status: barcode.status,
-      quantity: barcode.quantity,
-      layers: barcode.layers,
-      serial: barcode.serial
+      status: barcode.status
     });
   }, []);
   
@@ -202,7 +256,7 @@ const BarcodeManagementPage: React.FC = () => {
     const { name, value } = e.target;
     setEditValues(prev => ({ 
       ...prev, 
-      [name]: name === 'quantity' || name === 'layers' || name === 'serial' ? parseInt(value) || 0 : value
+      [name]: value
     }));
   }, []);
   
@@ -217,9 +271,6 @@ const BarcodeManagementPage: React.FC = () => {
       };
 
       const updateData = {
-        quantity: editValues.quantity,
-        layers: editValues.layers,
-        serial: editValues.serial,
         current_phase: phaseMap[editValues.phase_name],
         status: editValues.status
       };
@@ -247,7 +298,7 @@ const BarcodeManagementPage: React.FC = () => {
   
   // Handle delete
   const handleDelete = async (id: number) => {
-    if (window.confirm('Are you sure you want to delete this barcode?')) {
+    if (window.confirm(t('barcodeManagement.confirmDelete'))) {
       try {
         await api.delete(`/batches/${id}`);
         setBarcodes(prev => prev.filter(barcode => barcode.batch_id !== id));
@@ -262,11 +313,11 @@ const BarcodeManagementPage: React.FC = () => {
   // Handle bulk delete
   const handleBulkDelete = async () => {
     if (selectedBarcodes.length === 0) {
-      alert('Please select at least one barcode to delete.');
+      alert(t('barcodeManagement.selectBarcodesToDelete'));
       return;
     }
     
-    if (window.confirm(`Are you sure you want to delete ${selectedBarcodes.length} selected barcodes?`)) {
+    if (window.confirm(t('barcodeManagement.confirmBulkDelete', { count: selectedBarcodes.length }))) {
       try {
         await Promise.all(selectedBarcodes.map(id => api.delete(`/batches/${id}`)));
         setBarcodes(prev => prev.filter(barcode => !selectedBarcodes.includes(barcode.batch_id)));
@@ -278,15 +329,41 @@ const BarcodeManagementPage: React.FC = () => {
     }
   };
   
+  // Handle archive selected
+  const handleArchiveSelected = async () => {
+    if (selectedBarcodes.length === 0) {
+      alert(t('barcodeManagement.selectBarcodesToArchive'));
+      return;
+    }
+    
+    const confirmMessage = t('barcodeManagement.confirmBulkArchive', { count: selectedBarcodes.length })
+      .replace('{count}', String(selectedBarcodes.length));
+    
+    if (window.confirm(confirmMessage)) {
+      try {
+        await api.post('/batches/archive/bulk', { batch_ids: selectedBarcodes });
+        setBarcodes(prev => prev.filter(barcode => !selectedBarcodes.includes(barcode.batch_id)));
+        setSelectedBarcodes([]);
+        
+        const successMessage = t('barcodeManagement.successfullyArchived', { count: selectedBarcodes.length })
+          .replace('{count}', String(selectedBarcodes.length));
+        alert(successMessage);
+      } catch (error) {
+        console.error('Error archiving barcodes:', error);
+        alert(t('barcodeManagement.failedToArchive'));
+      }
+    }
+  };
+  
   // Handle print selected
   const handlePrintSelected = async () => {
     if (selectedBarcodes.length === 0) {
-      alert('Please select at least one barcode to print.');
+      alert(t('barcodeManagement.selectBarcodesToPrint'));
       return;
     }
     
     if (!selectedPrinter) {
-      alert('Please select a printer.');
+      alert(t('barcodeManagement.selectPrinterMessage'));
       return;
     }
     
@@ -311,10 +388,23 @@ const BarcodeManagementPage: React.FC = () => {
         printer_name: selectedPrinter
       });
 
-      alert(`Successfully printed ${selectedBarcodes.length} barcodes ${printCount} times each on ${selectedPrinter}`);
+      const successMessage = t('barcodeManagement.successfullyPrinted', {
+        count: selectedBarcodes.length,
+        times: printCount,
+        printer: selectedPrinter
+      })
+      .replace('{count}', String(selectedBarcodes.length))
+      .replace('{times}', String(printCount))
+      .replace('{printer}', selectedPrinter);
+
+      alert(successMessage);
+
+      // Reset selections and print count
+      setSelectedBarcodes([]);
+      setPrintCount(1);
     } catch (error) {
       console.error('Error printing barcodes:', error);
-      alert('Failed to print barcodes. Please try again.');
+      alert(t('barcodeManagement.failedToPrint'));
     } finally {
       setIsPrinting(false);
     }
@@ -336,68 +426,35 @@ const BarcodeManagementPage: React.FC = () => {
         />
       )
     },
-    { key: 'barcode', header: 'Barcode', width: 150 },
-    { key: 'brand_name', header: 'Brand', width: 120, hidden: true },
-    { key: 'model_name', header: 'Model', width: 120, hidden: true },
-    { key: 'size_value', header: 'Size', width: 100, hidden: true },
-    { key: 'color_name', header: 'Color', width: 100, hidden: true },
+    { key: 'barcode', header: t('barcode.barcode'), width: 150 },
+    { key: 'brand_name', header: t('bulkBarcode.brand'), width: 120, hidden: true },
+    { key: 'model_name', header: t('bulkBarcode.model'), width: 120, hidden: true },
+    { key: 'size_value', header: t('bulkBarcode.size'), width: 100, hidden: true },
+    { key: 'color_name', header: t('bulkBarcode.color'), width: 100, hidden: true },
     {
       key: 'quantity',
-      header: 'Quantity',
+      header: t('barcode.quantity'),
       width: 100,
       hidden: true,
-      render: (item: Barcode) => (
-        editingId === item.batch_id ? (
-          <input
-            type="number"
-            name="quantity"
-            value={editValues.quantity}
-            onChange={handleEditChange}
-            className="w-16 p-1 border rounded text-sm"
-            min="0"
-          />
-        ) : item.quantity
-      )
+      render: (item: Barcode) => item.quantity
     },
     {
       key: 'layers',
-      header: 'Layers',
+      header: t('bulkBarcode.layers'),
       width: 100,
       hidden: true,
-      render: (item: Barcode) => (
-        editingId === item.batch_id ? (
-          <input
-            type="number"
-            name="layers"
-            value={editValues.layers}
-            onChange={handleEditChange}
-            className="w-16 p-1 border rounded text-sm"
-            min="0"
-          />
-        ) : item.layers
-      )
+      render: (item: Barcode) => item.layers
     },
     {
       key: 'serial',
-      header: 'Serial',
+      header: t('bulkBarcode.serial'),
       width: 100,
       hidden: true,
-      render: (item: Barcode) => (
-        editingId === item.batch_id ? (
-          <input
-            type="number"
-            name="serial"
-            value={editValues.serial}
-            onChange={handleEditChange}
-            className="w-16 p-1 border rounded text-sm"
-            min="0"
-          />
-        ) : item.serial
-      )
+      render: (item: Barcode) => item.serial
     },
     {
       key: 'phase_name',
-      header: 'Phase',
+      header: t('barcode.phase'),
       width: 120,
       render: (item: Barcode) => (
         editingId === item.batch_id ? (
@@ -407,9 +464,9 @@ const BarcodeManagementPage: React.FC = () => {
             onChange={handleEditChange}
             className="w-24 p-1 border rounded text-sm"
           >
-            <option value="Cutting">Cutting</option>
-            <option value="Sewing">Sewing</option>
-            <option value="Packaging">Packaging</option>
+            <option value="Cutting">{t('phases.cutting')}</option>
+            <option value="Sewing">{t('phases.sewing')}</option>
+            <option value="Packaging">{t('phases.packaging')}</option>
           </select>
         ) : (
           <span className={`inline-block px-2 py-1 text-xs rounded-full ${
@@ -417,14 +474,14 @@ const BarcodeManagementPage: React.FC = () => {
             item.phase_name === 'Sewing' ? 'bg-purple-100 text-purple-800' :
             'bg-orange-100 text-orange-800'
           }`}>
-            {item.phase_name}
+            {t(`phases.${item.phase_name.toLowerCase()}`)}
           </span>
         )
       )
     },
     {
       key: 'status',
-      header: 'Status',
+      header: t('common.status'),
       width: 120,
       render: (item: Barcode) => (
         editingId === item.batch_id ? (
@@ -434,9 +491,9 @@ const BarcodeManagementPage: React.FC = () => {
             onChange={handleEditChange}
             className="w-24 p-1 border rounded text-sm"
           >
-            <option value="Pending">Pending</option>
-            <option value="In Progress">In Progress</option>
-            <option value="Completed">Completed</option>
+            <option value="Pending">{t('status.pending')}</option>
+            <option value="In Progress">{t('status.inProgress')}</option>
+            <option value="Completed">{t('status.completed')}</option>
           </select>
         ) : (
           <span className={`inline-block px-2 py-1 text-xs rounded-full ${
@@ -444,7 +501,9 @@ const BarcodeManagementPage: React.FC = () => {
             item.status === 'In Progress' ? 'bg-blue-100 text-blue-800' :
             'bg-green-100 text-green-800'
           }`}>
-            {item.status}
+            {item.status === 'In Progress' ? t('status.inProgress') : 
+             item.status === 'Pending' ? t('status.pending') : 
+             t('status.completed')}
           </span>
         )
       )
@@ -455,37 +514,40 @@ const BarcodeManagementPage: React.FC = () => {
     if (user?.role === 'Admin') {
       baseColumns.push({
       key: 'actions',
-      header: 'Actions',
+      header: t('common.edit'),
       width: 120,
       render: (item: Barcode) => (
         editingId === item.batch_id ? (
           <div className="flex space-x-1">
             <button
               onClick={() => handleSaveEdit(item.batch_id)}
-              className="p-1 text-xs bg-green text-white rounded hover:bg-opacity-90"
+              className="p-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+              title={t('common.save')}
             >
-              Save
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
             </button>
             <button
               onClick={handleCancelEdit}
-              className="p-1 text-xs bg-gray-500 text-white rounded hover:bg-opacity-90"
+              className="p-1.5 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+              title={t('common.cancel')}
             >
-              Cancel
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
           </div>
         ) : (
           <div className="flex space-x-1">
                 <button
                   onClick={() => handleEdit(item)}
-                  className="p-1 text-xs bg-mint text-white rounded hover:bg-opacity-90"
+                  className="p-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                  title={t('common.edit')}
                 >
-                  Edit
-                </button>
-                <button
-                  onClick={() => handleDelete(item.batch_id)}
-                  className="p-1 text-xs bg-red-600 text-white rounded hover:bg-opacity-90"
-                >
-                  Delete
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
                 </button>
           </div>
         )
@@ -494,24 +556,42 @@ const BarcodeManagementPage: React.FC = () => {
     }
 
     return baseColumns;
-  }, [selectedBarcodes, editingId, editValues, user?.role]);
+  }, [selectedBarcodes, editingId, editValues, user?.role, t]);
+
+  // Check if there are any hidden columns
+  const hasHiddenColumns = useMemo(() => {
+    return columns.some(column => column.hidden);
+  }, [columns]);
 
   return (
     <Layout>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2 text-gray-800">Barcode Management</h1>
+        <h1 className="text-2xl font-bold mb-2 text-gray-800">{t('barcodeManagement.title')}</h1>
         <p className="text-gray-600">
-          View, filter, and manage barcodes {user && user.role !== 'Admin' ? `for ${user.role} department` : ''}
+          {user && user.role !== 'Admin' 
+            ? t('barcodeManagement.subtitleForRole', { role: user.role })
+            : t('barcodeManagement.subtitle')
+          }
         </p>
       </div>
 
       <div className="bg-white rounded-lg shadow-sm p-6">
         {/* Filter Controls */}
         <div className="mb-6">
-          <h2 className="text-lg font-semibold mb-3">Filters</h2>
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-lg font-semibold">{t('barcodeManagement.filters')}</h2>
+            <Button
+              onClick={handleClearFilters}
+              variant="outline"
+              size="sm"
+              className="text-amber-700 border-amber-400 bg-amber-50 hover:text-amber-800 hover:bg-amber-100 hover:border-amber-500 hover:shadow-md transition-all duration-200 font-medium"
+            >
+              {t('barcodeManagement.clearFilters')}
+            </Button>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="form-group">
-              <label htmlFor="barcode" className="text-sm font-medium text-gray-700">Barcode</label>
+              <label htmlFor="barcode" className="text-sm font-medium text-gray-700">{t('barcode.barcode')}</label>
               <input
                 type="text"
                 id="barcode"
@@ -523,19 +603,17 @@ const BarcodeManagementPage: React.FC = () => {
             </div>
             
             <div className="form-group">
-              <label htmlFor="brand" className="text-sm font-medium text-gray-700">Brand</label>
-              <input
-                type="text"
-                id="brand"
-                name="brand"
+              <SearchableDropdown
+                options={brandOptions}
                 value={filters.brand}
-                onChange={handleFilterChange}
-                className="input-field"
+                onChange={(value) => setFilters(prev => ({ ...prev, brand: value }))}
+                placeholder={t('bulkBarcode.brand')}
+                label={t('bulkBarcode.brand')}
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="model" className="text-sm font-medium text-gray-700">Model</label>
+              <label htmlFor="model" className="text-sm font-medium text-gray-700">{t('bulkBarcode.model')}</label>
               <input
                 type="text"
                 id="model"
@@ -547,31 +625,27 @@ const BarcodeManagementPage: React.FC = () => {
             </div>
             
             <div className="form-group">
-              <label htmlFor="size" className="text-sm font-medium text-gray-700">Size</label>
-              <input
-                type="text"
-                id="size"
-                name="size"
+              <SearchableDropdown
+                options={sizeOptions}
                 value={filters.size}
-                onChange={handleFilterChange}
-                className="input-field"
+                onChange={(value) => setFilters(prev => ({ ...prev, size: value }))}
+                placeholder={t('bulkBarcode.size')}
+                label={t('bulkBarcode.size')}
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="color" className="text-sm font-medium text-gray-700">Color</label>
-              <input
-                type="text"
-                id="color"
-                name="color"
+              <SearchableDropdown
+                options={colorOptions}
                 value={filters.color}
-                onChange={handleFilterChange}
-                className="input-field"
+                onChange={(value) => setFilters(prev => ({ ...prev, color: value }))}
+                placeholder={t('bulkBarcode.color')}
+                label={t('bulkBarcode.color')}
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="phase" className="text-sm font-medium text-gray-700">Phase</label>
+              <label htmlFor="phase" className="text-sm font-medium text-gray-700">{t('barcode.phase')}</label>
               <select
                 id="phase"
                 name="phase"
@@ -579,15 +653,15 @@ const BarcodeManagementPage: React.FC = () => {
                 onChange={handleFilterChange}
                 className="input-field"
               >
-                <option value="">All Phases</option>
-                <option value="Cutting">Cutting</option>
-                <option value="Sewing">Sewing</option>
-                <option value="Packaging">Packaging</option>
+                <option value="">{t('barcodeManagement.allPhases')}</option>
+                <option value="Cutting">{t('phases.cutting')}</option>
+                <option value="Sewing">{t('phases.sewing')}</option>
+                <option value="Packaging">{t('phases.packaging')}</option>
               </select>
             </div>
             
             <div className="form-group">
-              <label htmlFor="status" className="text-sm font-medium text-gray-700">Status</label>
+              <label htmlFor="status" className="text-sm font-medium text-gray-700">{t('common.status')}</label>
               <select
                 id="status"
                 name="status"
@@ -595,84 +669,103 @@ const BarcodeManagementPage: React.FC = () => {
                 onChange={handleFilterChange}
                 className="input-field"
               >
-                <option value="">All Statuses</option>
-                <option value="Pending">Pending</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Completed">Completed</option>
+                <option value="">{t('barcodeManagement.allStatuses')}</option>
+                <option value="Pending">{t('status.pending')}</option>
+                <option value="In Progress">{t('status.inProgress')}</option>
+                <option value="Completed">{t('status.completed')}</option>
               </select>
             </div>
+            
+            {/* Delete and Archive Buttons - moved here to be in same row as status filter */}
+            {user?.role === 'Admin' && (
+              <div className="form-group">
+                <label className="text-sm font-medium text-gray-700">{t('common.actions')}</label>
+                <div className="flex gap-2">
+                  <button 
+                    className="btn-outline text-sm text-red-600 border-red-600 hover:bg-red-600 hover:text-white flex-1" 
+                    onClick={handleBulkDelete}
+                    disabled={selectedBarcodes.length === 0}
+                  >
+                    {t('barcodeManagement.deleteSelected')}
+                  </button>
+                  
+                  <button 
+                    className="btn-outline text-sm text-orange-600 border-orange-600 hover:bg-orange-600 hover:text-white flex-1" 
+                    onClick={handleArchiveSelected}
+                    disabled={selectedBarcodes.length === 0}
+                  >
+                    {t('barcodeManagement.archiveSelected')}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
         
         {/* Action Buttons */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
-          <div className="text-sm text-gray-600 mb-2 md:mb-0">
-            Showing {barcodes.length} of {totalBarcodes} barcodes
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-4 gap-4">
+          <div className="text-sm text-gray-600">
+            {t('barcodeManagement.showingBarcodes', { count: barcodes.length, total: totalBarcodes })
+              .replace('{count}', String(barcodes.length))
+              .replace('{total}', String(totalBarcodes))}
           </div>
           
-          <div className="flex flex-wrap gap-2 items-center">
-            <div className="flex items-center space-x-2">
-              <Label htmlFor="printCount">Print Count:</Label>
-              <Input
-                id="printCount"
-                type="number"
-                min={1}
-                max={100}
-                value={printCount}
-                onChange={(e) => setPrintCount(Math.max(1, Math.min(100, parseInt(e.target.value) || 1)))}
-                className="w-20"
-                disabled={isPrinting}
-              />
-            </div>
-            <div className="flex items-center space-x-2">
-              <Label htmlFor="printer">Printer:</Label>
-              <Select
-                value={selectedPrinter}
-                onValueChange={setSelectedPrinter}
-                disabled={isPrinting}
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+            {/* Print Controls */}
+            <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+              <div className="flex items-center space-x-2">
+                <Label htmlFor="printCount">{t('barcodeManagement.printCount')}</Label>
+                <Input
+                  id="printCount"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={printCount}
+                  onChange={(e) => setPrintCount(Math.max(1, Math.min(100, parseInt(e.target.value) || 1)))}
+                  className="w-20"
+                  disabled={isPrinting}
+                />
+              </div>
+              <div className="flex items-center space-x-2">
+                <Label htmlFor="printer">{t('barcodeManagement.printer')}</Label>
+                <Select
+                  value={selectedPrinter}
+                  onValueChange={setSelectedPrinter}
+                  disabled={isPrinting}
+                >
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue placeholder={t('barcodeManagement.selectPrinter')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {printers.map((printer) => (
+                      <SelectItem key={printer} value={printer}>
+                        {printer}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                onClick={handlePrintSelected}
+                disabled={isPrinting || selectedBarcodes.length === 0 || !selectedPrinter}
+                className={cn(
+                  "bg-blue-600 hover:bg-blue-700 text-white",
+                  isPrinting && "opacity-50 cursor-not-allowed"
+                )}
               >
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder="Select printer" />
-                </SelectTrigger>
-                <SelectContent>
-                  {printers.map((printer) => (
-                    <SelectItem key={printer} value={printer}>
-                      {printer}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                {isPrinting ? (
+                  <span className="flex items-center">
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    {t('barcodeManagement.printing')}
+                  </span>
+                ) : (
+                  t('barcodeManagement.print')
+                )}
+              </Button>
             </div>
-            <Button
-              onClick={handlePrintSelected}
-              disabled={isPrinting || selectedBarcodes.length === 0 || !selectedPrinter}
-              className={cn(
-                "bg-blue-600 hover:bg-blue-700 text-white",
-                isPrinting && "opacity-50 cursor-not-allowed"
-              )}
-            >
-              {isPrinting ? (
-                <span className="flex items-center">
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Printing...
-                </span>
-              ) : (
-                'Print Selected'
-              )}
-            </Button>
-            
-            {user?.role === 'Admin' && (
-              <button 
-                className="btn-outline text-sm text-red-600 border-red-600 hover:bg-red-600 hover:text-white" 
-                onClick={handleBulkDelete}
-                disabled={selectedBarcodes.length === 0}
-              >
-                Delete Selected
-              </button>
-            )}
           </div>
         </div>
         
@@ -680,37 +773,39 @@ const BarcodeManagementPage: React.FC = () => {
         {loading ? (
           <div className="text-center py-10">
             <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-            <p className="text-gray-600">Loading barcodes...</p>
+            <p className="text-gray-600">{t('barcodeManagement.loadingBarcodes')}</p>
           </div>
         ) : (
           <>
             <div className="table-container mb-4 w-full">
-              <div className="flex justify-end mb-2">
-                <button
-                  onClick={() => setShowAllColumns(!showAllColumns)}
-                  className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 ease-in-out"
-                >
-                  {showAllColumns ? (
-                    <>
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-gray-500 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                      </svg>
-                      <span>Hide Additional Columns</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-gray-500 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                      </svg>
-                      <span>Show Additional Columns</span>
-                    </>
-                  )}
-                </button>
-              </div>
+              {hasHiddenColumns && isMobile && (
+                <div className="flex justify-end mb-2">
+                  <button
+                    onClick={() => setShowAllColumns(!showAllColumns)}
+                    className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 ease-in-out"
+                  >
+                    {showAllColumns ? (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-gray-500 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                        <span>{t('barcodeManagement.hideAdditionalColumns')}</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-gray-500 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                        <span>{t('barcodeManagement.showAdditionalColumns')}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
               <div className="overflow-x-auto w-full">
                 {barcodes.length === 0 ? (
                   <div className="text-center py-4">
-                    No barcodes found matching your filters.
+                    {t('barcodeManagement.noBarcodesFound')}
                   </div>
                 ) : (
                   <VirtualizedTable
@@ -736,7 +831,7 @@ const BarcodeManagementPage: React.FC = () => {
                     disabled={currentPage === 1}
                     className="px-3 py-1 rounded border disabled:opacity-50"
                   >
-                    Previous
+                    {t('common.previous')}
                   </button>
                   
                   {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
@@ -769,7 +864,7 @@ const BarcodeManagementPage: React.FC = () => {
                     disabled={currentPage === totalPages}
                     className="px-3 py-1 rounded border disabled:opacity-50"
                   >
-                    Next
+                    {t('common.next')}
                   </button>
                 </nav>
               </div>
@@ -787,7 +882,7 @@ const BarcodeManagementPage: React.FC = () => {
           <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
           </svg>
-          View Archived Batches
+          {t('barcodeManagement.viewArchivedBatches')}
         </Link>
       </div>
     </Layout>

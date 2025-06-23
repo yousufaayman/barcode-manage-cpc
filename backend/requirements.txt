@@ -1,17 +1,33 @@
+# Core FastAPI Framework
 fastapi==0.109.2
 uvicorn==0.27.1
+
+# Database and ORM
 sqlalchemy==2.0.27
+pymysql==1.1.0
+
+# Data Validation and Settings
 pydantic==2.6.1
 pydantic-settings==2.1.0
+email-validator==2.0.0
+
+# Authentication and Security
 python-jose==3.3.0
 passlib==1.7.4
-python-multipart==0.0.9
-pymysql==1.1.0
-cryptography==42.0.2
 bcrypt==4.1.2
-python-dotenv==1.0.0
-pytest==7.4.0
+cryptography==42.0.2
+
+# HTTP and API
+python-multipart==0.0.9
 httpx==0.24.1
-email-validator==2.0.0
+
+# Data Processing and Excel
 pandas==2.2.0
-openpyxl==3.1.2 
+openpyxl==3.1.2
+
+# Utilities
+python-dotenv==1.0.0
+base36==0.1.1
+
+# Testing
+pytest==7.4.0 

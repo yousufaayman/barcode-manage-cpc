@@ -23,8 +23,10 @@ class User(Base):
     username = Column(String(255), unique=True, nullable=False)
     password = Column(String(255), nullable=False)
     role = Column(Enum(UserRole, values_callable=lambda x: [e.value for e in UserRole]), nullable=False, default=UserRole.CUTTING)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    @property
+    def id(self):
+        return self.user_id
 
     def __repr__(self):
         return f"<User {self.username}>"
@@ -86,7 +88,7 @@ class Batch(Base):
     color_id = Column(Integer, ForeignKey("colors.color_id"))
     quantity = Column(Integer)
     layers = Column(Integer)
-    serial = Column(Integer)
+    serial = Column(String(3), nullable=False)
     current_phase = Column(Integer, ForeignKey("production_phases.phase_id"))
     status = Column(String(50))
     last_updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -127,7 +129,7 @@ class ArchivedBatch(Base):
     color_id = Column(Integer, ForeignKey("colors.color_id"))
     quantity = Column(Integer)
     layers = Column(Integer)
-    serial = Column(Integer)
+    serial = Column(String(3))
     current_phase = Column(Integer, ForeignKey("production_phases.phase_id"))
     status = Column(String(50))
     last_updated_at = Column(DateTime)

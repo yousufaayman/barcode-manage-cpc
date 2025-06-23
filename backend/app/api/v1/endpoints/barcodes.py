@@ -189,6 +189,8 @@ async def process_bulk_barcodes(
             status_code=400,
             detail=f"Error parsing file: {str(e)}"
         )
+    except HTTPException as e:
+        raise e
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}", exc_info=True)
         raise HTTPException(
@@ -239,7 +241,7 @@ async def submit_bulk_barcodes(
                 color_id=db_batch.color_id,
                 quantity=db_batch.quantity,
                 layers=db_batch.layers,
-                serial=db_batch.serial,
+                serial=str(db_batch.serial),
                 current_phase=db_batch.current_phase,
                 status=db_batch.status,
                 brand_name=brand.brand_name if brand else "",
@@ -309,4 +311,86 @@ async def print_barcodes(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to print barcodes: {str(e)}"
+        )
+
+@router.post("/bulk/validate", response_model=schemas.BulkValidationResponse)
+async def validate_bulk_barcodes(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """Validate bulk barcode data from uploaded file without processing"""
+    # Validate file format
+    if not file.filename.endswith(('.xlsx', '.xls', '.csv')):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid file format. Please upload an Excel (.xlsx, .xls) or CSV file."
+        )
+    
+    try:
+        # Read file content
+        contents = await file.read()
+        
+        # Create BytesIO object
+        file_obj = BytesIO(contents)
+        
+        # Read file based on format
+        if file.filename.endswith('.csv'):
+            df = pd.read_csv(file_obj)
+        else:
+            df = pd.read_excel(file_obj)
+        
+        # Check if file is empty
+        if df.empty:
+            raise HTTPException(
+                status_code=400,
+                detail="The uploaded file is empty."
+            )
+        
+        # Use the existing process function which already does validation
+        try:
+            valid_rows, error_rows = crud.process_bulk_barcodes(db, df)
+            
+            # Convert error rows to match schema
+            formatted_error_rows = [
+                schemas.ErrorRow(
+                    rowNumber=row["rowNumber"],
+                    data=row["data"],
+                    error=row["error"]
+                )
+                for row in error_rows
+            ]
+            
+            return schemas.BulkValidationResponse(
+                valid_rows=valid_rows,
+                error_rows=formatted_error_rows
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=str(e)
+            )
+        except Exception as e:
+            logger.error(f"Error validating data: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error validating data: {str(e)}"
+            )
+            
+    except pd.errors.EmptyDataError:
+        raise HTTPException(
+            status_code=400,
+            detail="The file is empty or contains no data."
+        )
+    except pd.errors.ParserError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Error parsing file: {str(e)}"
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred: {str(e)}"
         ) 

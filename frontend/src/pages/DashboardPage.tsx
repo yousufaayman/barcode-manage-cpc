@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
+import { useTranslation } from 'react-i18next';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from 'recharts';
 import { barcodeApi, BatchStats, PhaseStats, BarcodeData } from '@/services/api';
@@ -8,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 
 const DashboardPage: React.FC = () => {
   const { user } = useAuth();
+  const { t } = useTranslation();
   const [stats, setStats] = useState<BatchStats>({
     total_batches: 0,
     in_production: 0,
@@ -77,53 +79,26 @@ const DashboardPage: React.FC = () => {
 
   // Overall production phase data
   const productionPhaseData = [
-    { phase: 'Cutting', count: phaseStats.cutting.pending + phaseStats.cutting.in_progress, color: 'rgb(30 64 175)' }, // Cutting blue
-    { phase: 'Sewing', count: phaseStats.sewing.pending + phaseStats.sewing.in_progress, color: 'rgb(107 33 168)' },  // Sewing purple
-    { phase: 'Packaging', count: phaseStats.packaging.pending + phaseStats.packaging.in_progress, color: 'rgb(154 52 18)' }, // Packaging brown
-    { phase: 'Completed', count: phaseStats.packaging.completed, color: '#90EE90' }, // light green
+    { phase: t('phases.cutting'), count: phaseStats.cutting.pending + phaseStats.cutting.in_progress, color: 'rgb(30 64 175)' }, // Cutting blue
+    { phase: t('phases.sewing'), count: phaseStats.sewing.pending + phaseStats.sewing.in_progress, color: 'rgb(107 33 168)' },  // Sewing purple
+    { phase: t('phases.packaging'), count: phaseStats.packaging.pending + phaseStats.packaging.in_progress, color: 'rgb(154 52 18)' }, // Packaging brown
+    { phase: t('phases.completed'), count: phaseStats.packaging.completed, color: '#90EE90' }, // light green
   ];
 
   const cuttingPhaseData = [
-    { status: 'Pending', count: phaseStats.cutting.pending, color: 'rgb(30 64 175)' }, // Cutting blue
-    { status: 'In Progress', count: phaseStats.cutting.in_progress, color: 'rgb(30 64 175)' }, // Cutting blue
+    { status: t('status.pending'), count: phaseStats.cutting.pending, color: 'rgb(30 64 175)' }, // Cutting blue
+    { status: t('status.inProgress'), count: phaseStats.cutting.in_progress, color: 'rgb(30 64 175)' }, // Cutting blue
   ];
 
   const sewingPhaseData = [
-    { status: 'Pending', count: phaseStats.sewing.pending, color: 'rgb(107 33 168)' }, // Sewing purple
-    { status: 'In Progress', count: phaseStats.sewing.in_progress, color: 'rgb(107 33 168)' }, // Sewing purple
+    { status: t('status.pending'), count: phaseStats.sewing.pending, color: 'rgb(107 33 168)' }, // Sewing purple
+    { status: t('status.inProgress'), count: phaseStats.sewing.in_progress, color: 'rgb(107 33 168)' }, // Sewing purple
   ];
 
   const packagingPhaseData = [
-    { status: 'Pending', count: phaseStats.packaging.pending, color: 'rgb(154 52 18)' }, // Packaging brown
-    { status: 'In Progress', count: phaseStats.packaging.in_progress, color: 'rgb(154 52 18)' }, // Packaging brown
+    { status: t('status.pending'), count: phaseStats.packaging.pending, color: 'rgb(154 52 18)' }, // Packaging brown
+    { status: t('status.inProgress'), count: phaseStats.packaging.in_progress, color: 'rgb(154 52 18)' }, // Packaging brown
   ];
-
-  const roleMetrics = {
-    'Cutting': {
-      title: 'Cutting Department',
-      metrics: [
-        { name: 'Cut Today', value: 78, change: '+12', icon: '✂️' },
-        { name: 'Pending Cuts', value: 23, change: '-5', icon: '⏳' },
-        { name: 'Material Usage', value: '92%', change: '+2%', icon: '📊' },
-      ]
-    },
-    'Sewing': {
-      title: 'Sewing Department',
-      metrics: [
-        { name: 'Sewn Today', value: 64, change: '+8', icon: '🧵' },
-        { name: 'Pending Sewing', value: 18, change: '-3', icon: '⏳' },
-        { name: 'Quality Rate', value: '95%', change: '+1%', icon: '⭐' },
-      ]
-    },
-    'Packaging': {
-      title: 'Packaging Department',
-      metrics: [
-        { name: 'Packed Today', value: 86, change: '+14', icon: '📦' },
-        { name: 'Ready to Ship', value: 32, change: '+7', icon: '🚚' },
-        { name: 'Pending Packaging', value: 12, change: '-8', icon: '⏳' },
-      ]
-    }
-  };
 
   const renderCustomLabel = (props: any) => {
     const { x, y, width, height, value } = props;
@@ -160,12 +135,12 @@ const DashboardPage: React.FC = () => {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Barcode</TableHead>
+              <TableHead>{t('barcode.barcode')}</TableHead>
               <TableHead>Brand</TableHead>
               <TableHead>Model</TableHead>
               <TableHead>Size</TableHead>
               <TableHead>Color</TableHead>
-              <TableHead>Quantity</TableHead>
+              <TableHead>{t('barcode.quantity')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -188,7 +163,7 @@ const DashboardPage: React.FC = () => {
   return (
     <Layout>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2 text-gray-800">Dashboard</h1>
+        <h1 className="text-2xl font-bold mb-2 text-gray-800">{t('dashboard.title')}</h1>
         <p className="text-gray-600">
           Welcome back, <span className="font-semibold">{user?.username}</span>. Here's your overview.
         </p>
@@ -198,15 +173,15 @@ const DashboardPage: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-white p-4 rounded-lg shadow-sm border-l-4 border-green">
           <div className="text-sm text-gray-500 mb-1">Total Batches</div>
-          <div className="text-2xl font-bold">{stats.total_batches}</div>
+          <div className="text-2xl font-bold text-gray-800">{stats.total_batches}</div>
         </div>
-        <div className="bg-white p-4 rounded-lg shadow-sm border-l-4 border-mint">
+        <div className="bg-white p-4 rounded-lg shadow-sm border-l-4 border-blue-500">
           <div className="text-sm text-gray-500 mb-1">In Production</div>
-          <div className="text-2xl font-bold">{stats.in_production}</div>
+          <div className="text-2xl font-bold text-gray-800">{stats.in_production}</div>
         </div>
-        <div className="bg-white p-4 rounded-lg shadow-sm border-l-4 border-yellow-500">
+        <div className="bg-white p-4 rounded-lg shadow-sm border-l-4 border-green-500">
           <div className="text-sm text-gray-500 mb-1">Completed</div>
-          <div className="text-2xl font-bold">{stats.completed}</div>
+          <div className="text-2xl font-bold text-gray-800">{stats.completed}</div>
         </div>
       </div>
 
@@ -255,7 +230,7 @@ const DashboardPage: React.FC = () => {
             {/* Overall Production Phase Graph */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg font-medium">Overall Production Status</CardTitle>
+                <CardTitle className="text-lg font-medium">{t('dashboard.overallProductionStatus')}</CardTitle>
               </CardHeader>
               <CardContent className="pt-2">
                 <div className="h-80 w-full">
@@ -270,7 +245,7 @@ const DashboardPage: React.FC = () => {
                           return (
                             <div className="bg-white p-3 border border-gray-200 shadow-md rounded-md">
                               <p className="font-medium text-gray-800">{data.phase}</p>
-                              <p className="text-sm mt-1">Count: <span className="font-medium">{data.count}</span></p>
+                              <p className="text-sm mt-1">{t('common.count')}: <span className="font-medium">{data.count}</span></p>
                             </div>
                           );
                         }}
@@ -290,7 +265,7 @@ const DashboardPage: React.FC = () => {
             {/* Cutting Phase Detailed Graph */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg font-medium">Cutting Phase Status</CardTitle>
+                <CardTitle className="text-lg font-medium">{t('dashboard.cuttingPhaseStatus')}</CardTitle>
               </CardHeader>
               <CardContent className="pt-2">
                 <div className="h-80 w-full">
@@ -305,7 +280,7 @@ const DashboardPage: React.FC = () => {
                           return (
                             <div className="bg-white p-3 border border-gray-200 shadow-md rounded-md">
                               <p className="font-medium text-gray-800">{data.status}</p>
-                              <p className="text-sm mt-1">Count: <span className="font-medium">{data.count}</span></p>
+                              <p className="text-sm mt-1">{t('common.count')}: <span className="font-medium">{data.count}</span></p>
                             </div>
                           );
                         }}
@@ -325,7 +300,7 @@ const DashboardPage: React.FC = () => {
             {/* Sewing Phase Detailed Graph */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg font-medium">Sewing Phase Status</CardTitle>
+                <CardTitle className="text-lg font-medium">{t('dashboard.sewingPhaseStatus')}</CardTitle>
               </CardHeader>
               <CardContent className="pt-2">
                 <div className="h-80 w-full">
@@ -340,7 +315,7 @@ const DashboardPage: React.FC = () => {
                           return (
                             <div className="bg-white p-3 border border-gray-200 shadow-md rounded-md">
                               <p className="font-medium text-gray-800">{data.status}</p>
-                              <p className="text-sm mt-1">Count: <span className="font-medium">{data.count}</span></p>
+                              <p className="text-sm mt-1">{t('common.count')}: <span className="font-medium">{data.count}</span></p>
                             </div>
                           );
                         }}
@@ -360,7 +335,7 @@ const DashboardPage: React.FC = () => {
             {/* Packaging Phase Detailed Graph */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg font-medium">Packaging Phase Status</CardTitle>
+                <CardTitle className="text-lg font-medium">{t('dashboard.packagingPhaseStatus')}</CardTitle>
               </CardHeader>
               <CardContent className="pt-2">
                 <div className="h-80 w-full">
@@ -375,7 +350,7 @@ const DashboardPage: React.FC = () => {
                           return (
                             <div className="bg-white p-3 border border-gray-200 shadow-md rounded-md">
                               <p className="font-medium text-gray-800">{data.status}</p>
-                              <p className="text-sm mt-1">Count: <span className="font-medium">{data.count}</span></p>
+                              <p className="text-sm mt-1">{t('common.count')}: <span className="font-medium">{data.count}</span></p>
                             </div>
                           );
                         }}
@@ -391,29 +366,6 @@ const DashboardPage: React.FC = () => {
                 </div>
               </CardContent>
             </Card>
-          </div>
-        </div>
-      )}
-
-      {/* Role specific metrics */}
-      {user && roleMetrics[user.role as keyof typeof roleMetrics] && (
-        <div className="mb-6">
-          <h2 className="text-xl font-semibold mb-3 text-gray-700">
-            {roleMetrics[user.role as keyof typeof roleMetrics].title}
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {roleMetrics[user.role as keyof typeof roleMetrics].metrics.map((metric, index) => (
-              <div key={index} className="bg-white p-5 rounded-lg shadow-sm">
-                <div className="flex justify-between items-center">
-                  <span className="text-2xl">{metric.icon}</span>
-                  <span className={`text-sm font-medium ${metric.change.startsWith('+') ? 'text-green' : 'text-red-500'}`}>
-                    {metric.change}
-                  </span>
-                </div>
-                <div className="mt-2 text-2xl font-bold">{metric.value}</div>
-                <div className="text-sm text-gray-500">{metric.name}</div>
-              </div>
-            ))}
           </div>
         </div>
       )}

@@ -164,4 +164,30 @@ def delete_user_endpoint(
             detail="The user with this ID does not exist in the system",
         )
     user = delete_user(db, id=user_id)
+    return user
+
+@router.put("/users/{user_id}/reset-password", response_model=schemas.User)
+def reset_user_password(
+    *,
+    db: Session = Depends(get_db),
+    user_id: int,
+    password_reset: schemas.ResetPasswordRequest,
+    current_user: models.User = Depends(get_current_active_superuser),
+) -> Any:
+    """
+    Reset a user's password (Admin only).
+    """
+    user = get_user(db, id=user_id)
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="The user with this ID does not exist in the system",
+        )
+    
+    # Update the user's password
+    user.password = security.get_password_hash(password_reset.new_password)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    
     return user 

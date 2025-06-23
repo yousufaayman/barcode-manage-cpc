@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, date
 from enum import Enum
 
 # User schemas
@@ -21,9 +21,7 @@ class UserUpdate(UserBase):
     password: Optional[str] = None
 
 class UserInDB(UserBase):
-    user_id: int
-    created_at: datetime
-    updated_at: Optional[datetime] = None
+    id: int
 
     class Config:
         from_attributes = True
@@ -38,6 +36,9 @@ class Token(BaseModel):
 class TokenPayload(BaseModel):
     sub: Optional[str] = None  # username
     exp: Optional[datetime] = None
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str
 
 # Brand schemas
 class BrandBase(BaseModel):
@@ -113,7 +114,7 @@ class BatchBase(BaseModel):
     color_id: int
     quantity: int
     layers: int
-    serial: int
+    serial: str
     current_phase: int
     status: str
 
@@ -128,7 +129,7 @@ class BatchUpdate(BaseModel):
     color_id: Optional[int] = None
     quantity: Optional[int] = None
     layers: Optional[int] = None
-    serial: Optional[int] = None
+    serial: Optional[str] = None
     current_phase: Optional[int] = None
     status: Optional[str] = None
 
@@ -174,6 +175,13 @@ class BulkSubmitResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class BulkValidationResponse(BaseModel):
+    valid_rows: List[Dict[str, Any]]
+    error_rows: List[ErrorRow]
+
+    class Config:
+        from_attributes = True
+
 class BatchStats(BaseModel):
     total_batches: int
     in_production: int
@@ -207,6 +215,193 @@ class TimelineEntryResponse(TimelineEntryBase):
     start_time: datetime
     end_time: Optional[datetime]
     duration_minutes: Optional[int]
+
+    class Config:
+        from_attributes = True
+
+class TurnoverRateByPhase(BaseModel):
+    phase_id: int
+    phase_name: str
+    average_minutes: float
+
+    class Config:
+        from_attributes = True
+
+class TurnoverStat(BaseModel):
+    batch_id: int
+    phase_id: int
+    phase_name: str
+    duration_minutes: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
+class BottleneckPhaseStat(BaseModel):
+    phase_id: int
+    phase_name: str
+    average_minutes: float
+
+    class Config:
+        from_attributes = True
+
+class TimeSpentStatusStat(BaseModel):
+    batch_id: int
+    phase_id: int
+    phase_name: str
+    total_minutes: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
+class ThroughputStat(BaseModel):
+    period: date
+    completed_batches: int
+
+    class Config:
+        from_attributes = True
+
+class PhaseEntryExitStat(BaseModel):
+    phase_id: int
+    phase_name: str
+    entries: int
+    exits: int
+
+    class Config:
+        from_attributes = True
+
+class WIPStat(BaseModel):
+    phase_id: int
+    phase_name: str
+    pending: int
+    in_progress: int
+    completed: int
+
+    class Config:
+        from_attributes = True
+
+class WIPByBrandStat(BaseModel):
+    brand_id: int
+    brand_name: str
+    pending: int
+    in_progress: int
+    completed: int
+    total: int
+
+    class Config:
+        from_attributes = True
+
+class WorkingPhaseByBrandStat(BaseModel):
+    brand_id: int
+    brand_name: str
+    phase_id: int
+    phase_name: str
+    pending: int
+    in_progress: int
+    completed: int
+    total: int
+
+    class Config:
+        from_attributes = True
+
+class WorkingPhaseByModelStat(BaseModel):
+    model_id: int
+    model_name: str
+    brand_id: int
+    brand_name: str
+    phase_id: int
+    phase_name: str
+    pending: int
+    in_progress: int
+    completed: int
+    total: int
+
+    class Config:
+        from_attributes = True
+
+class AttributeCompletionTimeStat(BaseModel):
+    attribute: str  # e.g., 'brand', 'model', etc.
+    value: str
+    average_minutes: float
+
+    class Config:
+        from_attributes = True
+
+class StuckBatchStat(BaseModel):
+    batch_id: int
+    phase_id: int
+    phase_name: str
+    status: str
+    duration_minutes: float
+
+    class Config:
+        from_attributes = True
+
+class PhaseReentryStat(BaseModel):
+    batch_id: int
+    phase_id: int
+    phase_name: str
+    reentry_count: int
+
+    class Config:
+        from_attributes = True
+
+class PendingInProgressRatioStat(BaseModel):
+    phase_id: int
+    phase_name: str
+    pending_minutes: float
+    in_progress_minutes: float
+    ratio: float
+
+    class Config:
+        from_attributes = True
+
+class BatchAgeStat(BaseModel):
+    batch_id: int
+    age_minutes: float
+
+    class Config:
+        from_attributes = True
+
+class StatusDistributionStat(BaseModel):
+    status: str
+    count: int
+
+    class Config:
+        from_attributes = True
+
+class CommonAttributeStat(BaseModel):
+    attribute: str
+    value: str
+    count: int
+
+    class Config:
+        from_attributes = True
+
+class AdvancedStatisticsResponse(BaseModel):
+    turnover_rate_by_phase: List[TurnoverRateByPhase]
+    slowest_turnover: Optional[TurnoverRateByPhase]
+    fastest_turnover: Optional[TurnoverRateByPhase]
+    bottleneck_phase: Optional[TurnoverRateByPhase]
+    most_time_spent_pending: Optional[TimeSpentStatusStat]
+    fastest_pending: Optional[TimeSpentStatusStat]
+    fastest_in_progress: Optional[TimeSpentStatusStat]
+    batch_throughput: List[ThroughputStat]
+    average_batch_size: float
+    phase_entry_exit_counts: List[PhaseEntryExitStat]
+    average_phases_per_batch: float
+    longest_time_in_single_phase: Optional[TurnoverRateByPhase]
+    shortest_time_in_single_phase: Optional[TurnoverRateByPhase]
+    current_wip: List[WIPStat]
+    wip_by_brand: List[WIPByBrandStat]
+    working_phase_by_brand: List[WorkingPhaseByBrandStat]
+    working_phase_by_model: List[WorkingPhaseByModelStat]
+    avg_time_to_completion_by_attribute: List[AttributeCompletionTimeStat]
+    stuck_batches: List[StuckBatchStat]
+    phase_reentries: List[PhaseReentryStat]
+    pending_in_progress_ratio: List[PendingInProgressRatioStat]
+    batch_ages: List[BatchAgeStat]
+    status_distribution: List[StatusDistributionStat]
+    most_common_batch_attributes: List[CommonAttributeStat]
 
     class Config:
         from_attributes = True 

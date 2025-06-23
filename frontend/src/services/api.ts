@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:8000/api/v1';
+// Use relative URL for API calls - Nginx will proxy /api/ requests to backend
+const API_URL = '/api/v1';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -29,7 +30,7 @@ export interface LoginResponse {
 }
 
 export interface User {
-  user_id: number;
+  id: number;
   username: string;
   role: 'Admin' | 'Cutting' | 'Sewing' | 'Packaging';
 }
@@ -49,6 +50,10 @@ export interface UserUpdate {
 export interface BarcodeData {
   batch_id: number;
   barcode: string;
+  brand_id: number;
+  model_id: number;
+  size_id: number;
+  color_id: number;
   brand_name: string;
   model_name: string;
   size_value: string;
@@ -59,6 +64,7 @@ export interface BarcodeData {
   phase_name: string;
   current_phase: number;
   status: string;
+  archived_at?: string | null;
 }
 
 export interface BarcodeListResponse {
@@ -92,6 +98,82 @@ export interface PhaseStats {
   cutting: PhaseStatusStats;
   sewing: PhaseStatusStats;
   packaging: PackagingStats;
+}
+
+// Types for Advanced Statistics Page
+export interface TurnoverRateByPhase {
+  phase_id: number;
+  phase_name: string;
+  average_minutes: number;
+}
+
+export interface TurnoverStat {
+  batch_id?: number;
+  phase_id: number;
+  phase_name: string;
+  duration_minutes?: number;
+  average_minutes?: number;
+}
+
+export interface StatusDistribution {
+  status: string;
+  count: number;
+}
+
+export interface WIPStat {
+  phase_id: number;
+  phase_name: string;
+  pending: number;
+  in_progress: number;
+  completed: number;
+}
+
+export interface WIPByBrandStat {
+  brand_id: number;
+  brand_name: string;
+  pending: number;
+  in_progress: number;
+  completed: number;
+  total: number;
+}
+
+export interface WorkingPhaseByBrandStat {
+  brand_id: number;
+  brand_name: string;
+  phase_id: number;
+  phase_name: string;
+  pending: number;
+  in_progress: number;
+  completed: number;
+  total: number;
+}
+
+export interface WorkingPhaseByModelStat {
+  model_id: number;
+  model_name: string;
+  brand_id: number;
+  brand_name: string;
+  phase_id: number;
+  phase_name: string;
+  pending: number;
+  in_progress: number;
+  completed: number;
+  total: number;
+}
+
+export interface AdvancedStatisticsResponse {
+  turnover_rate_by_phase: TurnoverRateByPhase[];
+  slowest_turnover: TurnoverRateByPhase | null;
+  fastest_turnover: TurnoverRateByPhase | null;
+  bottleneck_phase: TurnoverRateByPhase | null;
+  status_distribution: StatusDistribution[];
+  average_batch_size: number;
+  current_wip: WIPStat[];
+  wip_by_brand: WIPByBrandStat[];
+  working_phase_by_brand: WorkingPhaseByBrandStat[];
+  working_phase_by_model: WorkingPhaseByModelStat[];
+  // Add other stats as they are implemented
+  [key: string]: any; // Allow other properties for now
 }
 
 export const authApi = {

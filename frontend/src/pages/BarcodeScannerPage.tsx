@@ -2,6 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import Layout from '../components/Layout';
 import { barcodeApi, BarcodeData } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import { useTranslation } from 'react-i18next';
+import { RadioGroup, RadioGroupItem } from '../components/ui/radio-group';
+import { Label } from '../components/ui/label';
+import { Card, CardContent } from '../components/ui/card';
+import { Eye, Edit3 } from 'lucide-react';
 
 interface Phase {
   id: number;
@@ -20,6 +25,7 @@ type ScannerMode = 'update' | 'view';
 
 const BarcodeScannerPage: React.FC = () => {
   const { user } = useAuth();
+  const { t } = useTranslation();
   const [barcode, setBarcode] = useState('');
   const [currentPhase, setCurrentPhase] = useState<number>(1);
   const [status, setStatus] = useState('');
@@ -128,7 +134,7 @@ const BarcodeScannerPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!barcode.trim()) {
-      setError('Please enter a barcode');
+      setError(t('barcode.enterBarcode'));
       return;
     }
     
@@ -154,7 +160,7 @@ const BarcodeScannerPage: React.FC = () => {
             };
             const allowedPhaseId = roleToPhaseId[user.role];
             if (selectedPhase !== allowedPhaseId) {
-              setError(`You can only scan items in the ${user.role} phase`);
+              setError(t('barcode.phaseRestriction', { role: user.role }));
               return;
             }
           }
@@ -185,26 +191,23 @@ const BarcodeScannerPage: React.FC = () => {
         } catch (updateErr: any) {
           // Handle specific error cases
           if (updateErr.response?.status === 404) {
-            setError('Batch not found. Please check the barcode.');
+            setError(t('barcode.batchNotFound'));
           } else if (updateErr.response?.status === 500) {
-            setError('Server error. Please try again or contact support.');
+            setError(t('barcode.serverError'));
             console.error('Server error details:', updateErr.response?.data);
           } else {
-            setError('Failed to update batch. Please try again.');
+            setError(t('barcode.failedToUpdate'));
           }
           console.error('Failed to update batch:', updateErr);
         }
       }
-
-      // Clear barcode and ensure focus
-      setBarcode('');
-      if (barcodeInputRef.current) {
-        barcodeInputRef.current.focus();
+    } catch (err: any) {
+      if (err.response?.status === 404) {
+        setError(t('barcode.barcodeNotFound'));
+      } else {
+        setError(t('barcode.failedToScan'));
       }
-    } catch (err) {
-      setError('Failed to scan barcode. Please try again.');
-      setBarcodeData(null);
-      setScanned(false);
+      console.error('Failed to scan barcode:', err);
     } finally {
       setIsLoading(false);
     }
@@ -212,236 +215,295 @@ const BarcodeScannerPage: React.FC = () => {
 
   const handleReset = () => {
     setBarcode('');
-    setCurrentPhase(1);
-    setStatus('');
+    setBarcodeData(null);
     setError('');
     setScanned(false);
-    setBarcodeData(null);
+    setCurrentPhase(1);
+    setStatus('');
     if (barcodeInputRef.current) {
       barcodeInputRef.current.focus();
     }
   };
 
   const handleSaveChanges = async (phase: number, newStatus: string) => {
-    if (barcodeData) {
-      try {
-        const updatedData = await barcodeApi.updateBarcode(barcodeData.barcode, {
-          current_phase: phase,
-          status: newStatus
-        });
-        
+    if (!barcodeData) return;
+    
+    try {
+      const updateData: any = {};
+      if (phase !== barcodeData.current_phase) {
+        updateData.current_phase = phase;
+      }
+      if (newStatus !== barcodeData.status) {
+        updateData.status = newStatus;
+      }
+      
+      if (Object.keys(updateData).length > 0) {
+        const updatedData = await barcodeApi.updateBarcode(barcodeData.barcode, updateData);
         setBarcodeData(updatedData);
         setCurrentPhase(updatedData.current_phase);
         setStatus(updatedData.status);
-      } catch (err) {
-        console.error('Failed to save changes:', err);
       }
+    } catch (err) {
+      console.error('Failed to save changes:', err);
     }
+  };
+
+  const getPhaseName = (phaseId: number) => {
+    const phase = PHASES.find(p => p.id === phaseId);
+    return phase ? t(`phases.${phase.name.toLowerCase()}`) : 'Unknown';
+  };
+
+  const getStatusName = (status: string) => {
+    // Fix the status key mapping to handle "In Progress" correctly
+    if (status === 'In Progress') return t('status.inProgress');
+    if (status === 'Pending') return t('status.pending');
+    if (status === 'Completed') return t('status.completed');
+    return status; // fallback
   };
 
   return (
     <Layout>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2 text-gray-800">Barcode Scanner</h1>
-        <p className="text-gray-600">Scan or enter a barcode to {mode === 'update' ? 'update' : 'view'} item status</p>
+        <h1 className="text-2xl font-bold mb-2 text-gray-800">{t('navigation.barcodeScanner')}</h1>
+        <p className="text-gray-600">{t('barcode.scannerSubtitle')}</p>
       </div>
 
-      <div className="bg-white rounded-lg shadow-sm p-6">
-        {/* Mode Selection */}
-        <div className="mb-6">
-          <h2 className="text-lg font-semibold mb-3">Scanner Mode</h2>
-          <div className="flex space-x-4">
-            <label className="inline-flex items-center">
-              <input
-                type="radio"
-                className="form-radio"
-                name="mode"
-                value="view"
-                checked={mode === 'view'}
-                onChange={() => setMode('view')}
-              />
-              <span className="ml-2">View Mode</span>
-            </label>
-            <label className="inline-flex items-center">
-              <input
-                type="radio"
-                className="form-radio"
-                name="mode"
-                value="update"
-                checked={mode === 'update'}
-                onChange={() => setMode('update')}
-              />
-              <span className="ml-2">Update Mode</span>
-            </label>
-          </div>
-        </div>
-
-        {/* Phase and Status Selection (only in update mode) */}
-        {mode === 'update' && (
-          <>
-            {/* Phase Selection */}
-            <div className="mb-6">
-              <h2 className="text-lg font-semibold mb-3">Select Phase</h2>
-              <div className="flex space-x-4">
-                {PHASES.map(phase => {
-                  // Only show the phase that matches the user's role, or all phases for admin
-                  const isAllowed = user?.role === 'Admin' || 
-                    (user && phase.name === user.role);
-                  
-                  return (
-                    <label 
-                      key={phase.id} 
-                      className={`inline-flex items-center ${!isAllowed ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      <input
-                        type="radio"
-                        className="form-radio"
-                        name="phase"
-                        value={phase.id}
-                        checked={selectedPhase === phase.id}
-                        onChange={() => isAllowed && setSelectedPhase(phase.id)}
-                        disabled={!isAllowed}
-                      />
-                      <span className="ml-2">{phase.name}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Status Selection */}
-            <div className="mb-6">
-              <h2 className="text-lg font-semibold mb-3">Select Status</h2>
-              <div className="flex space-x-4">
-                {STATUS_OPTIONS.map(statusOption => (
-                  <label key={statusOption} className="inline-flex items-center">
-                    <input
-                      type="radio"
-                      className="form-radio"
-                      name="status"
-                      value={statusOption}
-                      checked={selectedStatus === statusOption}
-                      onChange={() => setSelectedStatus(statusOption)}
-                    />
-                    <span className="ml-2">{statusOption}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Barcode Input */}
-        <form onSubmit={handleSubmit}>
-          <div className="mb-6">
-            <label htmlFor="barcode" className="block text-gray-700 font-medium mb-2">
-              Barcode {isScanning && <span className="text-green-600">(Scanning...)</span>}
-            </label>
-            <div className="flex">
-              <input
-                ref={barcodeInputRef}
-                id="barcode"
-                type="text"
-                value={barcode}
-                onChange={(e) => setBarcode(e.target.value)}
-                className="input-field flex-grow"
-                placeholder="Scan or enter barcode"
-                autoFocus
-                autoComplete="off"
-                onBlur={(e) => e.target.focus()} // Re-focus on blur
-              />
-              <button 
-                type="submit"
-                className="btn-primary ml-2 flex items-center"
-                disabled={isLoading}
-              >
-                {isLoading ? (
-                  <>
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Scanning...
-                  </>
-                ) : (
-                  'Scan'
-                )}
-              </button>
-            </div>
-            {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-          </div>
-        </form>
-
-        {/* Last Scanned Item */}
-        {scanned && barcodeData && (
-          <div className="mt-8">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-gray-800">Last Scanned Item</h2>
-              <div className="flex items-center space-x-4">
-                {mode === 'update' && (
-                  <div className="text-sm text-green-600">
-                    ✓ Updated with Phase: {PHASES.find(p => p.id === selectedPhase)?.name} and Status: {selectedStatus}
-                  </div>
-                )}
-                <button 
-                  onClick={handleReset}
-                  className="text-sm text-gray-600 hover:text-green underline"
+      {/* Mode Selection */}
+      <div className="mb-6">
+        <Card>
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">{t('barcode.scannerMode')}</h2>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setMode('view')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    mode === 'view'
+                      ? 'bg-green text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
                 >
-                  Clear
+                  <Eye className="inline-block w-4 h-4 mr-2" />
+                  {t('barcode.viewMode')}
+                </button>
+                <button
+                  onClick={() => setMode('update')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    mode === 'update'
+                      ? 'bg-green text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  <Edit3 className="inline-block w-4 h-4 mr-2" />
+                  {t('barcode.updateMode')}
                 </button>
               </div>
             </div>
             
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <dt className="text-gray-600">Brand</dt>
-                <dd>{barcodeData.brand_name}</dd>
+            {mode === 'update' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                    {t('barcode.phase')}
+                  </Label>
+                  <RadioGroup
+                    value={selectedPhase.toString()}
+                    onValueChange={(value) => setSelectedPhase(parseInt(value))}
+                    className="flex flex-col space-y-2"
+                  >
+                    {PHASES.map((phase) => (
+                      <div key={phase.id} className="flex items-center space-x-2">
+                        <RadioGroupItem value={phase.id.toString()} id={`phase-${phase.id}`} />
+                        <Label htmlFor={`phase-${phase.id}`} className="text-sm">
+                          {t(`phases.${phase.name.toLowerCase()}`)}
+                        </Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                </div>
+                
+                <div>
+                  <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                    {t('common.status')}
+                  </Label>
+                  <RadioGroup
+                    value={selectedStatus}
+                    onValueChange={setSelectedStatus}
+                    className="flex flex-col space-y-2"
+                  >
+                    {STATUS_OPTIONS.map((status) => (
+                      <div key={status} className="flex items-center space-x-2">
+                        <RadioGroupItem value={status} id={`status-${status}`} />
+                        <Label htmlFor={`status-${status}`} className="text-sm">
+                          {status === 'In Progress' ? t('status.inProgress') : 
+                           status === 'Pending' ? t('status.pending') : 
+                           t('status.completed')}
+                        </Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                </div>
               </div>
-              <div>
-                <dt className="text-gray-600">Model</dt>
-                <dd>{barcodeData.model_name}</dd>
-              </div>
-              <div>
-                <dt className="text-gray-600">Size</dt>
-                <dd>{barcodeData.size_value}</dd>
-              </div>
-              <div>
-                <dt className="text-gray-600">Color</dt>
-                <dd>{barcodeData.color_name}</dd>
-              </div>
-              <div>
-                <dt className="text-gray-600">Quantity</dt>
-                <dd>{barcodeData.quantity}</dd>
-              </div>
-              <div>
-                <dt className="text-gray-600">Layers</dt>
-                <dd>{barcodeData.layers}</dd>
-              </div>
-              <div>
-                <dt className="text-gray-600">Serial</dt>
-                <dd>{barcodeData.serial}</dd>
-              </div>
-              <div>
-                <dt className="text-gray-600">Phase</dt>
-                <dd>{barcodeData.phase_name}</dd>
-              </div>
-              <div>
-                <dt className="text-gray-600">Status</dt>
-                <dd>{barcodeData.status}</dd>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {!scanned && !isLoading && (
-          <div className="mt-8 text-center py-8 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-            <div className="text-4xl mb-3">🔍</div>
-            <p className="text-gray-600">
-              Scan a barcode to {mode === 'update' ? 'update' : 'view'} item status
-            </p>
-          </div>
-        )}
+            )}
+          </CardContent>
+        </Card>
       </div>
+
+      {/* Barcode Input */}
+      <form onSubmit={handleSubmit}>
+        <div className="mb-6">
+          <label htmlFor="barcode" className="block text-gray-700 font-medium mb-2">
+            {t('barcode.barcode')} {isScanning && <span className="text-green-600">({t('barcode.scanning')})</span>}
+          </label>
+          <div className="flex">
+            <input
+              ref={barcodeInputRef}
+              id="barcode"
+              type="text"
+              value={barcode}
+              onChange={(e) => setBarcode(e.target.value)}
+              className="input-field flex-grow"
+              placeholder={t('barcode.scanOrEnter')}
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setBarcode('');
+                setError('');
+                setBarcodeData(null);
+                setScanned(false);
+                if (barcodeInputRef.current) {
+                  barcodeInputRef.current.focus();
+                }
+              }}
+              className="btn-secondary ml-2 px-4"
+              disabled={isLoading}
+            >
+              {t('common.clear')}
+            </button>
+            <button
+              type="submit"
+              className="btn-primary ml-2 px-6"
+              disabled={isLoading}
+            >
+              {isLoading ? t('common.loading') : t('common.search')}
+            </button>
+          </div>
+        </div>
+      </form>
+
+      {/* Error Display */}
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 border-l-4 border-red-400 text-red-700">
+          <p>{error}</p>
+        </div>
+      )}
+
+      {/* Results Display */}
+      {barcodeData && (
+        <>
+          <div className="mb-6">
+            <Card>
+              <CardContent className="p-6">
+                {/* Basic Information */}
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('barcode.basicInformation')}</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.batchId')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{barcodeData.batch_id}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.barcode')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{barcodeData.barcode}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.quantity')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{barcodeData.quantity}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.layers')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{barcodeData.layers}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Product Details */}
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('barcode.productDetails')}</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.brand')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{barcodeData.brand_name}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.model')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{barcodeData.model_name}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.size')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{barcodeData.size_value}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.color')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{barcodeData.color_name}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Production Information */}
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('barcode.productionInformation')}</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.serial')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{barcodeData.serial}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.phase')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{getPhaseName(barcodeData.current_phase)}</p>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('common.status')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{getStatusName(barcodeData.status)}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Archive Status */}
+                {barcodeData.archived_at && (
+                  <div className="mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('barcode.archiveInformation')}</h3>
+                    <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <div className="flex items-center">
+                        <div className="flex-shrink-0">
+                          <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                        <div className="ml-3">
+                          <h4 className="text-sm font-medium text-yellow-800">{t('barcode.archivedBatch')}</h4>
+                          <p className="text-sm text-yellow-700">{t('barcode.archivedAt')}: {new Date(barcodeData.archived_at).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="flex gap-4">
+            <button
+              onClick={handleReset}
+              className="btn-secondary"
+            >
+              {t('common.clear')}
+            </button>
+          </div>
+        </>
+      )}
     </Layout>
   );
 };
