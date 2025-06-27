@@ -46,6 +46,9 @@ const DashboardPage: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        // Debug API configuration
+        console.log('Dashboard API Debug:', barcodeApi.debug());
+        
         const [batchStats, phaseData] = await Promise.all([
           barcodeApi.getBatchStats(),
           barcodeApi.getPhaseStats()
@@ -56,6 +59,7 @@ const DashboardPage: React.FC = () => {
         // Fetch barcodes for each phase if user is not admin
         if (user && user.role !== 'Admin') {
           const phase = user.role;
+          console.log('Fetching barcodes for phase:', phase);
           const [pendingBarcodes, inProgressBarcodes] = await Promise.all([
             barcodeApi.getBarcodesByPhase(phase, 'Pending'),
             barcodeApi.getBarcodesByPhase(phase, 'In Progress')

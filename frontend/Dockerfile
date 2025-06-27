@@ -28,9 +28,6 @@ COPY nginx.conf /etc/nginx/nginx.conf
 # Set proper permissions
 RUN chown -R nginx:nginx /usr/share/nginx/html
 
-# Switch to nginx user
-USER nginx
-
 # Expose port
 EXPOSE 80
 

@@ -239,6 +239,8 @@
     "size": "Size",
     "color": "Color",
     "layers": "Layers",
-    "serial": "Serial"
+    "serial": "Serial",
+    "markAsDefective": "Mark as Defective",
+    "defectiveDescription": "Check this box to mark all barcodes in this batch as defective (second rate). This will add a 'DEFECT' label when printing."
   }
 } 

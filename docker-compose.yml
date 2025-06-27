@@ -9,13 +9,13 @@ services:
     container_name: barcode_backend
     restart: unless-stopped
     environment:
-      - MYSQL_HOST=host.docker.internal
-      - MYSQL_PORT=3306
-      - MYSQL_USER=${MYSQL_USER:-barcode_user}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-barcode_password}
-      - MYSQL_DATABASE=${MYSQL_DATABASE:-barcode_management}
-      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here-change-in-production}
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://192.168.0.249:3000,http://192.168.0.106:3000}
+      - MYSQL_HOST=${MYSQL_HOST}
+      - MYSQL_PORT=${MYSQL_PORT}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - SECRET_KEY=${SECRET_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS}
     ports:
       - "5000:8000"
     networks:

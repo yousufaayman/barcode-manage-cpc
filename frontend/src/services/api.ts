@@ -1,7 +1,7 @@
 import axios from 'axios';
 
-// Use relative URL for API calls - Nginx will proxy /api/ requests to backend
-const API_URL = '/api/v1';
+// Use environment variable if available, otherwise use relative URL
+const API_URL = process.env.REACT_APP_API_URL || '/api/v1';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -17,9 +17,22 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    // Log the full URL being requested for debugging
+    console.log('API Request URL:', config.baseURL + config.url);
     return config;
   },
   (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Add a response interceptor for debugging
+api.interceptors.response.use(
+  (response) => {
+    return response;
+  },
+  (error) => {
+    console.error('API Error:', error.config?.url, error.message);
     return Promise.reject(error);
   }
 );
@@ -223,6 +236,13 @@ export const authApi = {
 };
 
 export const barcodeApi = {
+  // Debug function to test API configuration
+  debug: () => {
+    console.log('API Base URL:', API_URL);
+    console.log('Environment REACT_APP_API_URL:', process.env.REACT_APP_API_URL);
+    return { baseURL: API_URL, env: process.env.REACT_APP_API_URL };
+  },
+
   scanBarcode: async (barcode: string): Promise<BarcodeData> => {
     const response = await api.get<BarcodeData>(`/batches/barcode/${barcode}`);
     return response.data;

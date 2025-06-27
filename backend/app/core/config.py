@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Barcode Management System"
     
     # CORS Configuration - Dynamic from environment
-    CORS_ORIGINS: List[str] = []
+    CORS_ORIGINS: str = "*"
     
     # Database Configuration - All from environment variables (no hardcoded defaults)
     MYSQL_HOST: str
@@ -25,14 +25,11 @@ class Settings(BaseSettings):
     
     model_config = SettingsConfigDict(case_sensitive=True, env_file=".env")
     
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Parse CORS_ORIGINS from environment variable if provided
-        cors_origins_env = os.getenv("CORS_ORIGINS")
-        if cors_origins_env:
-            self.CORS_ORIGINS = [origin.strip() for origin in cors_origins_env.split(",")]
-        elif not self.CORS_ORIGINS:
-            # Default to allow all origins if not specified
-            self.CORS_ORIGINS = ["*"]
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Convert CORS_ORIGINS string to list"""
+        if self.CORS_ORIGINS == "*":
+            return ["*"]
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
 
 settings = Settings() 
