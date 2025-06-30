@@ -15,6 +15,8 @@ import { Link } from 'react-router-dom';
 
 interface Barcode {
   batch_id: number;
+  job_order_id: number;
+  job_order_number?: string;
   barcode: string;
   brand_name: string;
   model_name: string;
@@ -53,7 +55,8 @@ const BarcodeManagementPage: React.FC = () => {
           size: '',
           color: '',
           phase: '',
-          status: ''
+          status: '',
+          job_order_number: ''
         };
       } else {
         const roleToPhase: { [key: string]: string } = {
@@ -68,7 +71,8 @@ const BarcodeManagementPage: React.FC = () => {
           size: '',
           color: '',
           phase: roleToPhase[user.role] || '',
-          status: ''
+          status: '',
+          job_order_number: ''
         };
       }
     }
@@ -79,7 +83,8 @@ const BarcodeManagementPage: React.FC = () => {
     size: '',
     color: '',
     phase: '',
-    status: ''
+    status: '',
+    job_order_number: ''
     };
   };
 
@@ -93,7 +98,8 @@ const BarcodeManagementPage: React.FC = () => {
   // Temporary state for edited values
   const [editValues, setEditValues] = useState({
     phase_name: '',
-    status: '' as 'Pending' | 'In Progress' | 'Completed'
+    status: '' as 'Pending' | 'In Progress' | 'Completed',
+    quantity: 0
   });
   
   // Items per page
@@ -170,7 +176,9 @@ const BarcodeManagementPage: React.FC = () => {
           )
         });
         
+        console.log('Fetching barcodes with params:', queryParams.toString());
         const response = await api.get(`/batches/?${queryParams.toString()}`);
+        console.log('API response:', response.data);
         setBarcodes(response.data.items);
         setTotalBarcodes(response.data.total);
       } catch (error) {
@@ -203,7 +211,15 @@ const BarcodeManagementPage: React.FC = () => {
   // Handle changes to filter inputs
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
+    console.log('Filter change:', name, value);
     setFilters(prev => ({ ...prev, [name]: value }));
+    setCurrentPage(1); // Reset to first page when filters change
+  };
+  
+  // Handle SearchableDropdown filter changes
+  const handleDropdownFilterChange = (field: string, value: string) => {
+    console.log('Dropdown filter change:', field, value);
+    setFilters(prev => ({ ...prev, [field]: value }));
     setCurrentPage(1); // Reset to first page when filters change
   };
   
@@ -247,7 +263,8 @@ const BarcodeManagementPage: React.FC = () => {
     setEditingId(barcode.batch_id);
     setEditValues({
       phase_name: barcode.phase_name,
-      status: barcode.status
+      status: barcode.status,
+      quantity: barcode.quantity
     });
   }, []);
   
@@ -256,7 +273,7 @@ const BarcodeManagementPage: React.FC = () => {
     const { name, value } = e.target;
     setEditValues(prev => ({ 
       ...prev, 
-      [name]: value
+      [name]: name === 'quantity' ? parseInt(value) || 0 : value
     }));
   }, []);
   
@@ -272,7 +289,8 @@ const BarcodeManagementPage: React.FC = () => {
 
       const updateData = {
         current_phase: phaseMap[editValues.phase_name],
-        status: editValues.status
+        status: editValues.status,
+        quantity: editValues.quantity
       };
 
       const response = await api.put(`/batches/${id}`, updateData);
@@ -427,6 +445,7 @@ const BarcodeManagementPage: React.FC = () => {
       )
     },
     { key: 'barcode', header: t('barcode.barcode'), width: 150 },
+    { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 120, hidden: true },
     { key: 'brand_name', header: t('bulkBarcode.brand'), width: 120, hidden: true },
     { key: 'model_name', header: t('bulkBarcode.model'), width: 120, hidden: true },
     { key: 'size_value', header: t('bulkBarcode.size'), width: 100, hidden: true },
@@ -436,7 +455,20 @@ const BarcodeManagementPage: React.FC = () => {
       header: t('barcode.quantity'),
       width: 100,
       hidden: true,
-      render: (item: Barcode) => item.quantity
+      render: (item: Barcode) => (
+        editingId === item.batch_id ? (
+          <input
+            type="number"
+            name="quantity"
+            value={editValues.quantity}
+            onChange={handleEditChange}
+            className="w-20 p-1 border rounded text-sm"
+            min="1"
+          />
+        ) : (
+          item.quantity
+        )
+      )
     },
     {
       key: 'layers',
@@ -521,16 +553,23 @@ const BarcodeManagementPage: React.FC = () => {
           <div className="flex space-x-1">
             <button
               onClick={() => handleSaveEdit(item.batch_id)}
-              className="p-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+              className="px-3 py-1 text-sm !bg-green-600 text-white rounded hover:bg-green-700 transition-colors font-medium flex items-center justify-center min-w-[32px] border border-green-800"
               title={t('common.save')}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="black"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </button>
             <button
               onClick={handleCancelEdit}
-              className="p-1.5 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+              className="px-3 py-1 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors font-medium flex items-center justify-center min-w-[32px]"
               title={t('common.cancel')}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -542,7 +581,65 @@ const BarcodeManagementPage: React.FC = () => {
           <div className="flex space-x-1">
                 <button
                   onClick={() => handleEdit(item)}
-                  className="p-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                  className="px-2 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
+                  title={t('common.edit')}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => handleDelete(item.batch_id)}
+                  className="px-2 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors font-medium"
+                  title={t('common.delete')}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+          </div>
+        )
+      )
+      });
+    } else if (user?.role === 'Creator') {
+      baseColumns.push({
+      key: 'actions',
+      header: t('common.actions'),
+      width: 120,
+      render: (item: Barcode) => (
+        editingId === item.batch_id ? (
+          <div className="flex space-x-1">
+            <button
+              onClick={() => handleSaveEdit(item.batch_id)}
+              className="px-3 py-1 text-sm !bg-green-600 text-white rounded hover:bg-green-700 transition-colors font-medium flex items-center justify-center min-w-[32px] border border-green-800"
+              title={t('common.save')}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="black"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </button>
+            <button
+              onClick={handleCancelEdit}
+              className="px-3 py-1 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors font-medium flex items-center justify-center min-w-[32px]"
+              title={t('common.cancel')}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        ) : (
+          <div className="flex space-x-1">
+                <button
+                  onClick={() => handleEdit(item)}
+                  className="px-2 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
                   title={t('common.edit')}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -568,10 +665,7 @@ const BarcodeManagementPage: React.FC = () => {
       <div className="mb-6">
         <h1 className="text-2xl font-bold mb-2 text-gray-800">{t('barcodeManagement.title')}</h1>
         <p className="text-gray-600">
-          {user && user.role !== 'Admin' 
-            ? t('barcodeManagement.subtitleForRole', { role: user.role })
-            : t('barcodeManagement.subtitle')
-          }
+          {t('barcodeManagement.subtitle')}
         </p>
       </div>
 
@@ -603,10 +697,22 @@ const BarcodeManagementPage: React.FC = () => {
             </div>
             
             <div className="form-group">
+              <label htmlFor="job_order_number" className="text-sm font-medium text-gray-700">{t('barcode.jobOrderNumber')}</label>
+              <input
+                type="text"
+                id="job_order_number"
+                name="job_order_number"
+                value={filters.job_order_number || ''}
+                onChange={handleFilterChange}
+                className="input-field"
+              />
+            </div>
+            
+            <div className="form-group">
               <SearchableDropdown
                 options={brandOptions}
                 value={filters.brand}
-                onChange={(value) => setFilters(prev => ({ ...prev, brand: value }))}
+                onChange={(value) => handleDropdownFilterChange('brand', value)}
                 placeholder={t('bulkBarcode.brand')}
                 label={t('bulkBarcode.brand')}
               />
@@ -628,7 +734,7 @@ const BarcodeManagementPage: React.FC = () => {
               <SearchableDropdown
                 options={sizeOptions}
                 value={filters.size}
-                onChange={(value) => setFilters(prev => ({ ...prev, size: value }))}
+                onChange={(value) => handleDropdownFilterChange('size', value)}
                 placeholder={t('bulkBarcode.size')}
                 label={t('bulkBarcode.size')}
               />
@@ -638,7 +744,7 @@ const BarcodeManagementPage: React.FC = () => {
               <SearchableDropdown
                 options={colorOptions}
                 value={filters.color}
-                onChange={(value) => setFilters(prev => ({ ...prev, color: value }))}
+                onChange={(value) => handleDropdownFilterChange('color', value)}
                 placeholder={t('bulkBarcode.color')}
                 label={t('bulkBarcode.color')}
               />
@@ -689,6 +795,21 @@ const BarcodeManagementPage: React.FC = () => {
                     {t('barcodeManagement.deleteSelected')}
                   </button>
                   
+                  <button 
+                    className="btn-outline text-sm text-orange-600 border-orange-600 hover:bg-orange-600 hover:text-white flex-1" 
+                    onClick={handleArchiveSelected}
+                    disabled={selectedBarcodes.length === 0}
+                  >
+                    {t('barcodeManagement.archiveSelected')}
+                  </button>
+                </div>
+              </div>
+            )}
+            
+            {user?.role === 'Creator' && (
+              <div className="form-group">
+                <label className="text-sm font-medium text-gray-700">{t('common.actions')}</label>
+                <div className="flex gap-2">
                   <button 
                     className="btn-outline text-sm text-orange-600 border-orange-600 hover:bg-orange-600 hover:text-white flex-1" 
                     onClick={handleArchiveSelected}

@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { RadioGroup, RadioGroupItem } from '../components/ui/radio-group';
 import { Label } from '../components/ui/label';
 import { Card, CardContent } from '../components/ui/card';
-import { Eye, Edit3 } from 'lucide-react';
+import { Eye, Edit3, Scan, Keyboard } from 'lucide-react';
 
 interface Phase {
   id: number;
@@ -22,6 +22,7 @@ const PHASES: Phase[] = [
 const STATUS_OPTIONS = ['Pending', 'In Progress', 'Completed'];
 
 type ScannerMode = 'update' | 'view';
+type InputMode = 'manual' | 'scanner';
 
 const BarcodeScannerPage: React.FC = () => {
   const { user } = useAuth();
@@ -36,6 +37,7 @@ const BarcodeScannerPage: React.FC = () => {
   const [selectedPhase, setSelectedPhase] = useState<number>(1);
   const [selectedStatus, setSelectedStatus] = useState<string>('Pending');
   const [mode, setMode] = useState<ScannerMode>('view');
+  const [inputMode, setInputMode] = useState<InputMode>('scanner');
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const [isScanning, setIsScanning] = useState(false);
   const scanBufferRef = useRef<string>('');
@@ -84,15 +86,39 @@ const BarcodeScannerPage: React.FC = () => {
     };
   }, []);
 
-  // Auto-capture barcode input
+  // Auto-capture barcode input - only active in scanner mode
   useEffect(() => {
+    if (inputMode !== 'scanner') {
+      return;
+    }
+
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore modifier keys and other non-printable characters
+      const modifierKeys = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Escape', 'Backspace', 'Delete'];
+      const functionKeys = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'];
+      const navigationKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'];
+      
+      // Skip if it's a modifier key, function key, or navigation key
+      if (modifierKeys.includes(e.key) || functionKeys.includes(e.key) || navigationKeys.includes(e.key)) {
+        return;
+      }
+      
+      // Skip if it's a key combination (e.g., Ctrl+A, Shift+A)
+      if (e.ctrlKey || e.altKey || e.metaKey) {
+        return;
+      }
+      
+      // Skip if the key length is not 1 (indicating a special key)
+      if (e.key.length !== 1) {
+        return;
+      }
+
       // If Enter is pressed, process the buffer
       if (e.key === 'Enter') {
         const scannedBarcode = scanBufferRef.current;
         if (scannedBarcode) {
-          setBarcode(scannedBarcode);
-          handleSubmit(new Event('submit') as unknown as React.FormEvent);
+          // In scanner mode, don't set the barcode state, just submit directly
+          handleSubmitWithBarcode(scannedBarcode);
           scanBufferRef.current = '';
         }
         return;
@@ -114,8 +140,8 @@ const BarcodeScannerPage: React.FC = () => {
         setIsScanning(false);
         const scannedBarcode = scanBufferRef.current;
         if (scannedBarcode) {
-          setBarcode(scannedBarcode);
-          handleSubmit(new Event('submit') as unknown as React.FormEvent);
+          // In scanner mode, don't set the barcode state, just submit directly
+          handleSubmitWithBarcode(scannedBarcode);
           scanBufferRef.current = '';
         }
       }, 50);
@@ -129,11 +155,29 @@ const BarcodeScannerPage: React.FC = () => {
         clearTimeout(scanTimeoutRef.current);
       }
     };
-  }, []);
+  }, [inputMode]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!barcode.trim()) {
+  // Function to handle input mode switching
+  const handleInputModeChange = (newMode: InputMode) => {
+    // Clear the entry field and results when switching modes
+    setBarcode('');
+    setBarcodeData(null);
+    setError('');
+    setScanned(false);
+    setInputMode(newMode);
+    
+    // Clear the scan buffer when switching modes
+    scanBufferRef.current = '';
+    
+    // Focus the input field after mode switch
+    if (barcodeInputRef.current) {
+      barcodeInputRef.current.focus();
+    }
+  };
+
+  // New function to handle submission with a specific barcode (for scanner mode)
+  const handleSubmitWithBarcode = async (barcodeToSubmit: string) => {
+    if (!barcodeToSubmit.trim()) {
       setError(t('barcode.enterBarcode'));
       return;
     }
@@ -141,8 +185,16 @@ const BarcodeScannerPage: React.FC = () => {
     setError('');
     setIsLoading(true);
     
+    // In scanner mode, clear the text field and old results immediately
+    if (inputMode === 'scanner') {
+      setBarcode('');
+      setBarcodeData(null);
+      setScanned(false);
+      setError('');
+    }
+    
     try {
-      const data = await barcodeApi.scanBarcode(barcode);
+      const data = await barcodeApi.scanBarcode(barcodeToSubmit);
       setBarcodeData(data);
       setCurrentPhase(data.current_phase);
       setStatus(data.status);
@@ -178,7 +230,7 @@ const BarcodeScannerPage: React.FC = () => {
           
           // Only make the API call if there are changes
           if (Object.keys(updateData).length > 0) {
-            const updatedData = await barcodeApi.updateBarcode(barcode, updateData);
+            const updatedData = await barcodeApi.updateBarcode(barcodeToSubmit, updateData);
             
             // Update the local state with the response
             setBarcodeData(updatedData);
@@ -200,6 +252,115 @@ const BarcodeScannerPage: React.FC = () => {
           }
           console.error('Failed to update batch:', updateErr);
         }
+      }
+      
+      // Focus the input field for the next scan
+      if (barcodeInputRef.current) {
+        barcodeInputRef.current.focus();
+      }
+    } catch (err: any) {
+      if (err.response?.status === 404) {
+        setError(t('barcode.barcodeNotFound'));
+      } else {
+        setError(t('barcode.failedToScan'));
+      }
+      console.error('Failed to scan barcode:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!barcode.trim()) {
+      setError(t('barcode.enterBarcode'));
+      return;
+    }
+    
+    setError('');
+    setIsLoading(true);
+    
+    // Store the current barcode for the API call
+    const currentBarcode = barcode;
+    
+    // In scanner mode, clear the text field immediately after submission
+    if (inputMode === 'scanner') {
+      setBarcode('');
+      // Also clear old results immediately for continuous scanning
+      setBarcodeData(null);
+      setScanned(false);
+      setError('');
+    }
+    
+    try {
+      const data = await barcodeApi.scanBarcode(currentBarcode);
+      setBarcodeData(data);
+      setCurrentPhase(data.current_phase);
+      setStatus(data.status);
+      setScanned(true);
+
+      // Only update if in update mode
+      if (mode === 'update') {
+        try {
+          // Validate phase selection for non-admin users
+          if (user && user.role !== 'Admin') {
+            const roleToPhaseId: { [key: string]: number } = {
+              'Cutting': 1,
+              'Sewing': 2,
+              'Packaging': 3
+            };
+            const allowedPhaseId = roleToPhaseId[user.role];
+            if (selectedPhase !== allowedPhaseId) {
+              setError(t('barcode.phaseRestriction', { role: user.role }));
+              return;
+            }
+          }
+
+          // Update the batch using the correct endpoint
+          const updateData: any = {};
+          
+          // Only include fields that have changed
+          if (selectedPhase !== data.current_phase) {
+            updateData.current_phase = selectedPhase;
+          }
+          if (selectedStatus !== data.status) {
+            updateData.status = selectedStatus;
+          }
+          
+          // Only make the API call if there are changes
+          if (Object.keys(updateData).length > 0) {
+            const updatedData = await barcodeApi.updateBarcode(currentBarcode, updateData);
+            
+            // Update the local state with the response
+            setBarcodeData(updatedData);
+            setCurrentPhase(updatedData.current_phase);
+            setStatus(updatedData.status);
+            
+            // Show success message
+            setError('');
+          }
+        } catch (updateErr: any) {
+          // Handle specific error cases
+          if (updateErr.response?.status === 404) {
+            setError(t('barcode.batchNotFound'));
+          } else if (updateErr.response?.status === 500) {
+            setError(t('barcode.serverError'));
+            console.error('Server error details:', updateErr.response?.data);
+          } else {
+            setError(t('barcode.failedToUpdate'));
+          }
+          console.error('Failed to update batch:', updateErr);
+        }
+      }
+
+      // In manual mode, clear the barcode input field after successful submission
+      if (inputMode === 'manual') {
+        setBarcode('');
+      }
+      
+      // Focus the input field for the next scan
+      if (barcodeInputRef.current) {
+        barcodeInputRef.current.focus();
       }
     } catch (err: any) {
       if (err.response?.status === 404) {
@@ -349,6 +510,49 @@ const BarcodeScannerPage: React.FC = () => {
         </Card>
       </div>
 
+      {/* Input Mode Selection */}
+      <div className="mb-6">
+        <Card>
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">{t('barcode.inputMode')}</h2>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleInputModeChange('manual')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    inputMode === 'manual'
+                      ? 'bg-green text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  <Keyboard className="inline-block w-4 h-4 mr-2" />
+                  {t('barcode.manualMode')}
+                </button>
+                <button
+                  onClick={() => handleInputModeChange('scanner')}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    inputMode === 'scanner'
+                      ? 'bg-green text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  <Scan className="inline-block w-4 h-4 mr-2" />
+                  {t('barcode.scannerMode')}
+                </button>
+              </div>
+            </div>
+            
+            <div className="text-sm text-gray-600">
+              {inputMode === 'manual' ? (
+                <p>{t('barcode.manualModeDescription')}</p>
+              ) : (
+                <p>{t('barcode.scannerModeDescription')}</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Barcode Input */}
       <form onSubmit={handleSubmit}>
         <div className="mb-6">
@@ -371,8 +575,6 @@ const BarcodeScannerPage: React.FC = () => {
               onClick={() => {
                 setBarcode('');
                 setError('');
-                setBarcodeData(null);
-                setScanned(false);
                 if (barcodeInputRef.current) {
                   barcodeInputRef.current.focus();
                 }
@@ -470,6 +672,23 @@ const BarcodeScannerPage: React.FC = () => {
                     </div>
                   </div>
                 </div>
+
+                {/* Job Order Information */}
+                {barcodeData.job_order_id && (
+                  <div className="mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('barcode.jobOrderInformation')}</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.jobOrderId')}</h4>
+                        <p className="text-lg font-semibold text-gray-900">{barcodeData.job_order_id}</p>
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.jobOrderNumber')}</h4>
+                        <p className="text-lg font-semibold text-gray-900">{barcodeData.job_order_number || 'N/A'}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Archive Status */}
                 {barcodeData.archived_at && (

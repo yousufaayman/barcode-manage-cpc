@@ -18,6 +18,7 @@ const BarcodeScannerPage = lazy(() => import('./pages/BarcodeScannerPage'));
 const BulkBarcodeCreatePage = lazy(() => import('./pages/BulkBarcodeCreatePage'));
 const BarcodeManagementPage = lazy(() => import('./pages/BarcodeManagementPage'));
 const ArchivedBatchesPage = lazy(() => import('./pages/ArchivedBatchesPage'));
+const JobOrdersPage = lazy(() => import('./pages/JobOrdersPage'));
 const UnauthorizedPage = lazy(() => import('./pages/UnauthorizedPage'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 const AdvancedStatisticsPage = lazy(() => import('./pages/AdvancedStatisticsPage'));
@@ -47,6 +48,11 @@ const AppContent: React.FC = () => {
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/scanner" element={<BarcodeScannerPage />} />
             <Route path="/barcode-management" element={<BarcodeManagementPage />} />
+            <Route path="/job-orders" element={<JobOrdersPage />} />
+          </Route>
+          
+          {/* Admin and Creator Only Routes */}
+          <Route element={<PrivateRoute allowedRoles={['Admin', 'Creator']} />}>
             <Route path="/bulk-create" element={<BulkBarcodeCreatePage />} />
           </Route>
           

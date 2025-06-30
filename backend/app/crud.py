@@ -127,6 +127,8 @@ def get_batch(db: Session, batch_id: int):
     if batch:
         return schemas.BatchResponse(
             batch_id=batch.Batch.batch_id,
+            job_order_id=batch.Batch.job_order_id,
+            job_order_number=batch.Batch.job_order_number,
             barcode=batch.Batch.barcode,
             brand_id=batch.Batch.brand_id,
             model_id=batch.Batch.model_id,
@@ -153,7 +155,8 @@ def get_batch_by_barcode(db: Session, barcode: str):
         models.Model.model_name,
         models.Size.size_value,
         models.Color.color_name,
-        models.ProductionPhase.phase_name
+        models.ProductionPhase.phase_name,
+        models.JobOrder.job_order_number
     ).join(
         models.Brand,
         models.Batch.brand_id == models.Brand.brand_id
@@ -169,6 +172,9 @@ def get_batch_by_barcode(db: Session, barcode: str):
     ).join(
         models.ProductionPhase,
         models.Batch.current_phase == models.ProductionPhase.phase_id
+    ).join(
+        models.JobOrder,
+        models.Batch.job_order_id == models.JobOrder.job_order_id
     ).filter(models.Batch.barcode == barcode).first()
     
     if not batch:
@@ -179,7 +185,8 @@ def get_batch_by_barcode(db: Session, barcode: str):
             models.Model.model_name,
             models.Size.size_value,
             models.Color.color_name,
-            models.ProductionPhase.phase_name
+            models.ProductionPhase.phase_name,
+            models.JobOrder.job_order_number
         ).join(
             models.Brand,
             models.ArchivedBatch.brand_id == models.Brand.brand_id
@@ -195,6 +202,9 @@ def get_batch_by_barcode(db: Session, barcode: str):
         ).join(
             models.ProductionPhase,
             models.ArchivedBatch.current_phase == models.ProductionPhase.phase_id
+        ).join(
+            models.JobOrder,
+            models.ArchivedBatch.job_order_id == models.JobOrder.job_order_id
         ).filter(models.ArchivedBatch.barcode == barcode).first()
         if not batch:
             return None
@@ -205,6 +215,8 @@ def get_batch_by_barcode(db: Session, barcode: str):
         archived_at = None
     return schemas.BatchResponse(
         batch_id=batch_obj.batch_id,
+        job_order_id=batch_obj.job_order_id,
+        job_order_number=batch.job_order_number,
         barcode=batch_obj.barcode,
         brand_id=batch_obj.brand_id,
         model_id=batch_obj.model_id,
@@ -231,7 +243,8 @@ def get_batches(db: Session, skip: int = 0, limit: int = 100):
         models.Model.model_name,
         models.Size.size_value,
         models.Color.color_name,
-        models.ProductionPhase.phase_name
+        models.ProductionPhase.phase_name,
+        models.JobOrder.job_order_number
     ).join(
         models.Brand,
         models.Batch.brand_id == models.Brand.brand_id
@@ -247,11 +260,16 @@ def get_batches(db: Session, skip: int = 0, limit: int = 100):
     ).join(
         models.ProductionPhase,
         models.Batch.current_phase == models.ProductionPhase.phase_id
+    ).join(
+        models.JobOrder,
+        models.Batch.job_order_id == models.JobOrder.job_order_id
     ).offset(skip).limit(limit).all()
     
     return [
         schemas.BatchResponse(
             batch_id=batch.Batch.batch_id,
+            job_order_id=batch.Batch.job_order_id,
+            job_order_number=batch.job_order_number,
             barcode=batch.Batch.barcode,
             brand_id=batch.Batch.brand_id,
             model_id=batch.Batch.model_id,
@@ -294,7 +312,7 @@ def close_current_timeline_entry(db: Session, batch_id: int):
     if current:
         current.end_time = datetime.utcnow()
         current.duration_minutes = int((current.end_time - current.start_time).total_seconds() // 60)
-        current.status = 'Completed'
+        # Don't change the status - keep the original batch status
         db.commit()
         db.refresh(current)
     return current
@@ -338,31 +356,38 @@ def create_batch(db: Session, batch: schemas.BatchCreate):
     db.add(db_batch)
     db.commit()
     db.refresh(db_batch)
-    # Create initial timeline entry
-    create_timeline_entry(db, db_batch.batch_id, db_batch.status, db_batch.current_phase)
+    # Timeline management is handled by database triggers, so we don't need to do it here
+    # create_timeline_entry(db, db_batch.batch_id, db_batch.status, db_batch.current_phase)
     return db_batch
 
 def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate):
     update_data = batch.dict(exclude_unset=True)
-    status_changed = 'status' in update_data and update_data['status'] != db_batch.status
-    phase_changed = 'current_phase' in update_data and update_data['current_phase'] != db_batch.current_phase
+    # Note: Timeline management is handled by database triggers, so we don't need to do it here
+    # status_changed = 'status' in update_data and update_data['status'] != db_batch.status
+    # phase_changed = 'current_phase' in update_data and update_data['current_phase'] != db_batch.current_phase
+    
     # Update the SQLAlchemy model instance
     for field, value in update_data.items():
         setattr(db_batch, field, value)
     db.commit()
     db.refresh(db_batch)
-    # If status or phase changed, close previous timeline and create new one
-    if status_changed or phase_changed:
-        close_current_timeline_entry(db, db_batch.batch_id)
-        create_timeline_entry(db, db_batch.batch_id, db_batch.status, db_batch.current_phase)
+    
+    # Timeline management is handled by database triggers, so we don't need to do it here
+    # if status_changed or phase_changed:
+    #     close_current_timeline_entry(db, db_batch.batch_id)
+    #     create_timeline_entry(db, db_batch.batch_id, db_batch.status, db_batch.current_phase)
+    
     # Fetch related names for response
     brand = db.query(models.Brand).filter(models.Brand.brand_id == db_batch.brand_id).first()
     model = db.query(models.Model).filter(models.Model.model_id == db_batch.model_id).first()
     size = db.query(models.Size).filter(models.Size.size_id == db_batch.size_id).first()
     color = db.query(models.Color).filter(models.Color.color_id == db_batch.color_id).first()
     phase = db.query(models.ProductionPhase).filter(models.ProductionPhase.phase_id == db_batch.current_phase).first()
+    job_order = db.query(models.JobOrder).filter(models.JobOrder.job_order_id == db_batch.job_order_id).first()
     return schemas.BatchResponse(
         batch_id=db_batch.batch_id,
+        job_order_id=db_batch.job_order_id,
+        job_order_number=job_order.job_order_number if job_order else None,
         barcode=db_batch.barcode,
         brand_id=db_batch.brand_id,
         model_id=db_batch.model_id,
@@ -422,6 +447,7 @@ def archive_batch(db: Session, batch_id: int):
     # Create archived batch record
     archived_batch = models.ArchivedBatch(
         batch_id=batch_data.batch_id,
+        job_order_id=batch_data.job_order_id,
         barcode=batch_data.barcode,
         brand_id=batch_data.brand_id,
         model_id=batch_data.model_id,
@@ -457,6 +483,7 @@ def archive_batches_bulk(db: Session, batch_ids: List[int]):
             # Create archived batch record
             archived_batch = models.ArchivedBatch(
                 batch_id=batch_data.batch_id,
+                job_order_id=batch_data.job_order_id,
                 barcode=batch_data.barcode,
                 brand_id=batch_data.brand_id,
                 model_id=batch_data.model_id,
@@ -566,6 +593,7 @@ def process_row(db: Session, row_data: Dict[str, Any]) -> Dict[str, Any]:
     
     return {
         "barcode": barcode,
+        "job_order_id": 1,  # Default to legacy job order
         "brand_id": brand.brand_id,
         "model_id": model.model_id,
         "size_id": size.size_id,
@@ -1026,6 +1054,8 @@ def delete_archived_batch(db: Session, batch_id: int):
         # Return the deleted batch data for response
         return schemas.BatchResponse(
             batch_id=archived_batch.batch_id,
+            job_order_id=archived_batch.job_order_id,
+            job_order_number=archived_batch.job_order_number,
             barcode=archived_batch.barcode,
             brand_id=archived_batch.brand_id,
             model_id=archived_batch.model_id,
@@ -1100,6 +1130,8 @@ def recover_archived_batch(db: Session, batch_id: int):
     
     return schemas.BatchResponse(
         batch_id=active_batch.batch_id,
+        job_order_id=active_batch.job_order_id,
+        job_order_number=active_batch.job_order_number,
         barcode=active_batch.barcode,
         brand_id=active_batch.brand_id,
         model_id=active_batch.model_id,
@@ -1120,23 +1152,334 @@ def recover_archived_batch(db: Session, batch_id: int):
     )
 
 def recover_archived_batches_bulk(db: Session, batch_ids: List[int]):
-    """Recover multiple archived batches by moving them back to the active batches table"""
+    """
+    Recover multiple archived batches back to the main batches table
+    """
     recovered_batches = []
-    errors = []
     
     for batch_id in batch_ids:
         try:
-            recovered_batch = recover_archived_batch(db, batch_id)
-            if recovered_batch:
-                recovered_batches.append(recovered_batch)
+            # Get the archived batch
+            archived_batch = db.query(models.ArchivedBatch).filter(
+                models.ArchivedBatch.batch_id == batch_id
+            ).first()
+            
+            if not archived_batch:
+                continue
+            
+            # Check if a batch with this barcode already exists in the main table
+            existing_batch = db.query(models.Batch).filter(
+                models.Batch.barcode == archived_batch.barcode
+            ).first()
+            
+            if existing_batch:
+                # Update the existing batch with archived data
+                for field in ['brand_id', 'model_id', 'size_id', 'color_id', 'quantity', 
+                             'layers', 'serial', 'current_phase', 'status', 'last_updated_at']:
+                    if hasattr(archived_batch, field):
+                        setattr(existing_batch, field, getattr(archived_batch, field))
+                
+                # Delete the archived batch
+                db.delete(archived_batch)
+                recovered_batches.append(existing_batch)
             else:
-                errors.append(f"Batch {batch_id} not found in archived batches")
-        except ValueError as e:
-            errors.append(f"Batch {batch_id}: {str(e)}")
+                # Create new batch from archived data
+                new_batch = models.Batch(
+                    batch_id=archived_batch.batch_id,
+                    barcode=archived_batch.barcode,
+                    brand_id=archived_batch.brand_id,
+                    model_id=archived_batch.model_id,
+                    size_id=archived_batch.size_id,
+                    color_id=archived_batch.color_id,
+                    quantity=archived_batch.quantity,
+                    layers=archived_batch.layers,
+                    serial=archived_batch.serial,
+                    current_phase=archived_batch.current_phase,
+                    status=archived_batch.status,
+                    last_updated_at=archived_batch.last_updated_at
+                )
+                
+                db.add(new_batch)
+                db.delete(archived_batch)
+                recovered_batches.append(new_batch)
+                
         except Exception as e:
-            errors.append(f"Batch {batch_id}: Unexpected error - {str(e)}")
+            print(f"Error recovering batch {batch_id}: {str(e)}")
+            continue
     
-    if errors:
-        raise ValueError(f"Some batches could not be recovered: {'; '.join(errors)}")
+    db.commit()
+    return recovered_batches
+
+# Job Order CRUD functions
+def create_job_order(db: Session, job_order: schemas.JobOrderCreate) -> models.JobOrder:
+    """
+    Create a new job order with its items
+    """
+    # Create the job order
+    db_job_order = models.JobOrder(
+        model_id=job_order.model_id,
+        job_order_number=job_order.job_order_number
+    )
+    db.add(db_job_order)
+    db.flush()  # Flush to get the job_order_id
     
-    return recovered_batches 
+    # Create job order items
+    for item in job_order.items:
+        db_item = models.JobOrderItem(
+            job_order_id=db_job_order.job_order_id,
+            color_id=item.color_id,
+            size_id=item.size_id,
+            quantity=item.quantity
+        )
+        db.add(db_item)
+    
+    db.commit()
+    db.refresh(db_job_order)
+    return db_job_order
+
+def get_job_order(db: Session, job_order_id: int) -> Optional[models.JobOrder]:
+    """
+    Get a job order by ID with its items
+    """
+    return db.query(models.JobOrder).filter(
+        models.JobOrder.job_order_id == job_order_id
+    ).first()
+
+def get_job_order_by_number(db: Session, job_order_number: str) -> Optional[models.JobOrder]:
+    """
+    Get a job order by job order number
+    """
+    return db.query(models.JobOrder).filter(
+        models.JobOrder.job_order_number == job_order_number
+    ).first()
+
+def get_job_orders(db: Session, skip: int = 0, limit: int = 100) -> List[models.JobOrder]:
+    """
+    Get all job orders with pagination
+    """
+    return db.query(models.JobOrder).offset(skip).limit(limit).all()
+
+def update_job_order(db: Session, job_order_id: int, job_order_update: schemas.JobOrderUpdate) -> Optional[models.JobOrder]:
+    """
+    Update a job order and its items
+    """
+    db_job_order = get_job_order(db, job_order_id)
+    if not db_job_order:
+        return None
+    
+    # Update job order fields
+    if job_order_update.model_id is not None:
+        db_job_order.model_id = job_order_update.model_id
+    if job_order_update.job_order_number is not None:
+        db_job_order.job_order_number = job_order_update.job_order_number
+    
+    # Update items if provided
+    if job_order_update.items is not None:
+        # Delete existing items
+        db.query(models.JobOrderItem).filter(
+            models.JobOrderItem.job_order_id == job_order_id
+        ).delete()
+        
+        # Create new items
+        for item in job_order_update.items:
+            db_item = models.JobOrderItem(
+                job_order_id=job_order_id,
+                color_id=item.color_id,
+                size_id=item.size_id,
+                quantity=item.quantity
+            )
+            db.add(db_item)
+    
+    db.commit()
+    db.refresh(db_job_order)
+    return db_job_order
+
+def delete_job_order(db: Session, job_order_id: int) -> bool:
+    """
+    Delete a job order and all its items
+    """
+    db_job_order = get_job_order(db, job_order_id)
+    if not db_job_order:
+        return False
+    
+    db.delete(db_job_order)
+    db.commit()
+    return True
+
+def get_job_order_summary(db: Session, job_order_id: int) -> Optional[Dict]:
+    """
+    Get job order summary with totals
+    """
+    job_order = get_job_order(db, job_order_id)
+    if not job_order:
+        return None
+    
+    # Get model name
+    model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first()
+    
+    # Calculate totals
+    total_colors = len(job_order.items)
+    total_quantity = sum(item.quantity for item in job_order.items)
+    
+    return {
+        "job_order_id": job_order.job_order_id,
+        "job_order_number": job_order.job_order_number,
+        "model_name": model.model_name if model else None,
+        "total_colors": total_colors,
+        "total_quantity": total_quantity
+    }
+
+def get_job_orders_by_model(db: Session, model_id: int) -> List[models.JobOrder]:
+    """
+    Get all job orders for a specific model
+    """
+    return db.query(models.JobOrder).filter(
+        models.JobOrder.model_id == model_id
+    ).all()
+
+def get_job_order_items_with_details(db: Session, job_order_id: int) -> List[Dict]:
+    """
+    Get job order items with color and size information
+    """
+    items = db.query(
+        models.JobOrderItem,
+        models.Color.color_name,
+        models.Size.size_value
+    ).join(
+        models.Color,
+        models.JobOrderItem.color_id == models.Color.color_id
+    ).join(
+        models.Size,
+        models.JobOrderItem.size_id == models.Size.size_id
+    ).filter(
+        models.JobOrderItem.job_order_id == job_order_id
+    ).all()
+    
+    return [
+        {
+            "item_id": item.JobOrderItem.item_id,
+            "color_id": item.JobOrderItem.color_id,
+            "color_name": item.color_name,
+            "size_id": item.JobOrderItem.size_id,
+            "size_value": item.size_value,
+            "quantity": item.JobOrderItem.quantity
+        }
+        for item in items
+    ]
+
+def get_job_order_production_tracking(db: Session, job_order_id: int) -> List[Dict]:
+    """
+    Get production tracking data for a job order showing expected vs produced quantities
+    """
+    # Get job order items with expected quantities
+    items = db.query(
+        models.JobOrderItem,
+        models.Color.color_name,
+        models.Size.size_value,
+        models.JobOrder.job_order_number,
+        models.Model.model_name
+    ).join(
+        models.Color,
+        models.JobOrderItem.color_id == models.Color.color_id
+    ).join(
+        models.Size,
+        models.JobOrderItem.size_id == models.Size.size_id
+    ).join(
+        models.JobOrder,
+        models.JobOrderItem.job_order_id == models.JobOrder.job_order_id
+    ).join(
+        models.Model,
+        models.JobOrder.model_id == models.Model.model_id
+    ).filter(
+        models.JobOrderItem.job_order_id == job_order_id
+    ).all()
+    
+    result = []
+    for item in items:
+        # Get produced quantity from batches
+        produced_quantity = db.query(
+            sa_func.sum(models.Batch.quantity)
+        ).filter(
+            models.Batch.job_order_id == job_order_id,
+            models.Batch.color_id == item.JobOrderItem.color_id,
+            models.Batch.size_id == item.JobOrderItem.size_id
+        ).scalar() or 0
+        
+        remaining_quantity = item.JobOrderItem.quantity - produced_quantity
+        
+        # Determine production status
+        if produced_quantity >= item.JobOrderItem.quantity:
+            production_status = "Completed"
+        elif produced_quantity > 0:
+            production_status = "In Progress"
+        else:
+            production_status = "Not Started"
+        
+        result.append({
+            "item_id": item.JobOrderItem.item_id,
+            "color_id": item.JobOrderItem.color_id,
+            "color_name": item.color_name,
+            "size_id": item.JobOrderItem.size_id,
+            "size_value": item.size_value,
+            "expected_quantity": item.JobOrderItem.quantity,
+            "produced_quantity": produced_quantity,
+            "remaining_quantity": remaining_quantity,
+            "production_status": production_status
+        })
+    
+    return result
+
+def get_job_order_overall_status(db: Session, job_order_id: int) -> Optional[Dict]:
+    """
+    Get overall production status for a job order
+    """
+    # Get job order with model info
+    job_order = db.query(
+        models.JobOrder,
+        models.Model.model_name
+    ).join(
+        models.Model,
+        models.JobOrder.model_id == models.Model.model_id
+    ).filter(
+        models.JobOrder.job_order_id == job_order_id
+    ).first()
+    
+    if not job_order:
+        return None
+    
+    # Get total expected quantity
+    total_expected = db.query(
+        sa_func.sum(models.JobOrderItem.quantity)
+    ).filter(
+        models.JobOrderItem.job_order_id == job_order_id
+    ).scalar() or 0
+    
+    # Get total produced quantity
+    total_produced = db.query(
+        sa_func.sum(models.Batch.quantity)
+    ).filter(
+        models.Batch.job_order_id == job_order_id
+    ).scalar() or 0
+    
+    total_remaining = total_expected - total_produced
+    
+    # Determine overall status
+    if total_produced >= total_expected:
+        overall_status = "Completed"
+    elif total_produced > 0:
+        overall_status = "In Progress"
+    else:
+        overall_status = "Not Started"
+    
+    completion_percentage = round((total_produced / total_expected) * 100, 2) if total_expected > 0 else 0
+    
+    return {
+        "job_order_id": job_order.JobOrder.job_order_id,
+        "job_order_number": job_order.JobOrder.job_order_number,
+        "model_name": job_order.model_name,
+        "total_expected": total_expected,
+        "total_produced": total_produced,
+        "total_remaining": total_remaining,
+        "overall_status": overall_status,
+        "completion_percentage": completion_percentage
+    } 

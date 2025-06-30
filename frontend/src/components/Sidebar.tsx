@@ -12,7 +12,8 @@ import {
   LogOut, 
   X,
   User,
-  Settings
+  Settings,
+  FileText
 } from 'lucide-react';
 import LanguageSwitcher from './LanguageSwitcher';
 
@@ -84,7 +85,10 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
             <NavItem to="/dashboard" label={t('navigation.dashboard')} icon={LayoutDashboard} />
             <NavItem to="/scanner" label={t('navigation.barcodeScanner')} icon={QrCode} />
             <NavItem to="/barcode-management" label={t('navigation.barcodeManagement')} icon={Package} />
-            <NavItem to="/bulk-create" label={t('navigation.barcodeCreate')} icon={Package} />
+            <NavItem to="/job-orders" label={t('navigation.jobOrders')} icon={FileText} />
+            {(user?.role === 'Admin' || user?.role === 'Creator') && (
+              <NavItem to="/bulk-create" label={t('navigation.barcodeCreate')} icon={Package} />
+            )}
           </div>
         </div>
 

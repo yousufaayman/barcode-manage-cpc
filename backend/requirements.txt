@@ -31,3 +31,4 @@ base36==0.1.1
 
 # Testing
 pytest==7.4.0 
+zebra

@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Dict, Optional
 from app import crud, models, schemas
-from app.core.deps import get_db, get_current_active_superuser, get_current_user
+from app.core.deps import get_db, get_current_active_superuser, get_current_user, get_optional_current_user
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -21,6 +21,13 @@ def read_brands(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     """Get all brands"""
     brands = crud.get_brands(db, skip=skip, limit=limit)
     return brands
+
+# Model endpoints
+@router.get("/models/", response_model=List[schemas.Model])
+def read_models(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """Get all models"""
+    models_list = crud.get_models(db, skip=skip, limit=limit)
+    return models_list
 
 # Size endpoints
 @router.get("/sizes/", response_model=List[schemas.Size])
@@ -48,8 +55,9 @@ def read_batches(
     color: str = None,
     phase: str = None,
     status: str = None,
+    job_order_number: str = None,
     archived: bool = False,
-    current_user: Optional[schemas.User] = Depends(get_current_user)
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
 ):
     """Get all batches with optional filtering"""
     # Require admin access for archived batches
@@ -69,7 +77,8 @@ def read_batches(
         models.Model.model_name,
         models.Size.size_value,
         models.Color.color_name,
-        models.ProductionPhase.phase_name
+        models.ProductionPhase.phase_name,
+        models.JobOrder.job_order_number
     ).join(
         models.Brand,
         base_table.brand_id == models.Brand.brand_id
@@ -85,23 +94,28 @@ def read_batches(
     ).join(
         models.ProductionPhase,
         base_table.current_phase == models.ProductionPhase.phase_id
+    ).join(
+        models.JobOrder,
+        base_table.job_order_id == models.JobOrder.job_order_id
     )
 
     # Apply filters if provided
     if barcode:
         query = query.filter(base_table.barcode.ilike(f"%{barcode}%"))
     if brand:
-        query = query.filter(models.Brand.brand_name.ilike(f"%{brand}%"))
+        query = query.filter(models.Brand.brand_name == brand)
     if model:
         query = query.filter(models.Model.model_name.ilike(f"%{model}%"))
     if size:
-        query = query.filter(models.Size.size_value.ilike(f"%{size}%"))
+        query = query.filter(models.Size.size_value == size)
     if color:
-        query = query.filter(models.Color.color_name.ilike(f"%{color}%"))
+        query = query.filter(models.Color.color_name == color)
     if phase:
         query = query.filter(models.ProductionPhase.phase_name == phase)
     if status:
         query = query.filter(base_table.status == status)
+    if job_order_number:
+        query = query.filter(models.JobOrder.job_order_number.ilike(f"%{job_order_number}%"))
 
     # Get total count before pagination
     total_count = query.count()
@@ -113,6 +127,8 @@ def read_batches(
         "items": [
             schemas.BatchResponse(
                 batch_id=batch[0].batch_id,
+                job_order_id=batch[0].job_order_id,
+                job_order_number=batch.job_order_number,
                 barcode=batch[0].barcode,
                 brand_id=batch[0].brand_id,
                 model_id=batch[0].model_id,
@@ -257,7 +273,11 @@ def update_batch(
         updated_batch = crud.update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
         return updated_batch
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log the full error for debugging
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error updating batch {batch_id}: {error_details}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.delete("/{batch_id}", response_model=schemas.BatchResponse)
 def delete_batch(
@@ -413,7 +433,11 @@ def update_batch_by_barcode(
         updated_batch = crud.update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
         return updated_batch
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log the full error for debugging
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error updating batch by barcode {barcode}: {error_details}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @router.get("/{batch_id}/timeline", response_model=List[schemas.TimelineEntryResponse])
 def get_batch_timeline(batch_id: int, db: Session = Depends(get_db)):

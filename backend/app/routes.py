@@ -161,7 +161,7 @@ async def download_barcode_template():
             # Add column descriptions
             descriptions = {
                 'A1': 'Brand name (required)',
-                'B1': 'Model name (required, min 7 alphanumeric chars)',
+                'B1': 'Model name (required, alphanumeric characters)',
                 'C1': 'Size value (required)',
                 'D1': 'Color name (required)',
                 'E1': 'Quantity (required, 1-999)',

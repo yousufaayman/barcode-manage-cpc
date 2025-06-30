@@ -26,6 +26,9 @@ def create_initial_admin() -> None:
                 password="admin123",
                 role=UserRole.ADMIN
             )
-            crud.user.create(db, obj_in=admin_in)
+            crud.create_user(db, obj_in=admin_in)
+            print("Admin user created successfully!")
+        else:
+            print("Admin user already exists!")
     finally:
         db.close()

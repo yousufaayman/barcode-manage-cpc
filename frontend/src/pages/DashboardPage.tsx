@@ -54,7 +54,7 @@ const DashboardPage: React.FC = () => {
         setPhaseStats(phaseData);
 
         // Fetch barcodes for each phase if user is not admin
-        if (user && user.role !== 'Admin') {
+        if (user && user.role !== 'Admin' && user.role !== 'Creator') {
           const phase = user.role;
           const [pendingBarcodes, inProgressBarcodes] = await Promise.all([
             barcodeApi.getBarcodesByPhase(phase, 'Pending'),
@@ -186,7 +186,7 @@ const DashboardPage: React.FC = () => {
       </div>
 
       {/* Phase-specific content for non-admin users */}
-      {user && user.role !== 'Admin' && (
+      {user && user.role !== 'Admin' && user.role !== 'Creator' && (
         <div className="mb-6">
           <h2 className="text-xl font-semibold mb-3 text-gray-700">
             {user.role} Department Overview

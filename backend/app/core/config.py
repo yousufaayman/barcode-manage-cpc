@@ -6,10 +6,14 @@ import os
 
 class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
-    PROJECT_NAME: str = "Barcode Management System"
+    PROJECT_NAME: str = "Product Management System"
+    
+    # Server Configuration
+    PORT: int = 5000
+    HOST: str = "0.0.0.0"
     
     # CORS Configuration - Dynamic from environment
-    CORS_ORIGINS: List[str] = []
+    CORS_ORIGINS: str = "*"
     
     # Database Configuration - All from environment variables (no hardcoded defaults)
     MYSQL_HOST: str
@@ -25,14 +29,18 @@ class Settings(BaseSettings):
     
     model_config = SettingsConfigDict(case_sensitive=True, env_file=".env")
     
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Parse CORS_ORIGINS from environment variable if provided
-        cors_origins_env = os.getenv("CORS_ORIGINS")
-        if cors_origins_env:
-            self.CORS_ORIGINS = [origin.strip() for origin in cors_origins_env.split(",")]
-        elif not self.CORS_ORIGINS:
-            # Default to allow all origins if not specified
-            self.CORS_ORIGINS = ["*"]
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Convert CORS_ORIGINS string to list"""
+        if self.CORS_ORIGINS == "*":
+            return ["*"]
+        # Handle case where CORS_ORIGINS might be a JSON string
+        if self.CORS_ORIGINS.startswith("[") and self.CORS_ORIGINS.endswith("]"):
+            import json
+            try:
+                return json.loads(self.CORS_ORIGINS)
+            except json.JSONDecodeError:
+                pass
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
 
 settings = Settings() 

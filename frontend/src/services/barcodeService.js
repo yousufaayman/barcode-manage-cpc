@@ -5,9 +5,9 @@ import Papa from 'papaparse';
 class BarcodeService {
     static validationRules = {
         modelName: {
-            minLength: 7,
+            minLength: 1,
             pattern: /^[a-zA-Z0-9]+$/,
-            message: "Model name must be at least 7 alphanumeric characters."
+            message: "Model name must be at least 1 alphanumeric character."
         },
         quantity: {
             min: 1,
@@ -80,11 +80,6 @@ class BarcodeService {
         
         // Keep only alphanumeric characters
         formatted = formatted.replace(/[^a-zA-Z0-9]/g, '');
-        
-        // Pad with zeros if needed
-        if (formatted.length < 7) {
-            formatted = formatted.padStart(7, '0');
-        }
         
         return formatted;
     }

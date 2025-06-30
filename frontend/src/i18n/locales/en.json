@@ -51,16 +51,16 @@
     "dashboard": "Dashboard",
     "barcodeScanner": "Barcode Scanner",
     "barcodeManagement": "Barcode Management",
-    "advancedStatistics": "Advanced Statistics",
-    "barcodeCreate": "Barcode Create",
-    "bulkBarcodeCreate": "Bulk Barcode Create",
-    "userManagement": "User Management",
+    "barcodeCreate": "Bulk Barcode Create",
+    "jobOrders": "Job Orders",
     "archivedBatches": "Archived Batches",
+    "advancedStatistics": "Advanced Statistics",
+    "userManagement": "User Management",
     "goToDashboard": "Go to Dashboard"
   },
   "company": {
     "name": "Cotton Plus Clothing",
-    "tagline": "Barcode Management System",
+    "tagline": "Product Management System",
     "copyright": "All rights reserved."
   },
   "dashboard": {
@@ -74,6 +74,7 @@
   },
   "barcode": {
     "scanning": "Scanning...",
+    "scanBarcode": "Scan barcode",
     "scanOrEnter": "Scan or enter barcode",
     "barcode": "Barcode",
     "batchId": "Batch ID",
@@ -99,6 +100,10 @@
     "scannerMode": "Scanner Mode",
     "viewMode": "View Mode",
     "updateMode": "Update Mode",
+    "inputMode": "Input Mode",
+    "manualMode": "Manual Mode",
+    "scannerModeDescription": "Automatically capture barcodes from scanner. Results will be automatically cleared after each scan for continuous scanning.",
+    "manualModeDescription": "Enter barcodes manually using the keyboard. Results will be preserved until manually cleared.",
     "enterBarcode": "Please enter a barcode",
     "barcodeNotFound": "Barcode not found. Please check the barcode and try again.",
     "failedToScan": "Failed to scan barcode. Please try again.",
@@ -112,7 +117,14 @@
     "productionInformation": "Production Information",
     "archiveInformation": "Archive Information",
     "archivedBatch": "Archived Batch",
-    "archivedAt": "Archived At"
+    "archivedAt": "Archived At",
+    "jobOrderInformation": "Job Order Information",
+    "jobOrderId": "Job Order ID",
+    "jobOrderNumber": "Job Order Number",
+    "scanSuccess": "Barcode Scanned Successfully",
+    "scanUpdateSuccess": "Barcode Updated Successfully",
+    "barcodeScannedSuccessfully": "The barcode has been scanned and information retrieved successfully.",
+    "barcodeUpdatedSuccessfully": "The barcode has been scanned and updated successfully."
   },
   "barcodeManagement": {
     "title": "Barcode Management",
@@ -162,6 +174,7 @@
     "username": "Username",
     "role": "Role",
     "admin": "Admin",
+    "creator": "Creator",
     "cutting": "Cutting",
     "sewing": "Sewing",
     "packaging": "Packaging",
@@ -173,6 +186,7 @@
     "hidePassword": "Hide",
     "rolePermissions": "Role Permissions:",
     "adminPermissions": "Admin: Full access to all features",
+    "creatorPermissions": "Creator: Access to bulk barcode creation and management",
     "cuttingPermissions": "Cutting: Barcode scanning and management for cutting phase",
     "sewingPermissions": "Sewing: Barcode scanning and management for sewing phase",
     "packagingPermissions": "Packaging: Barcode scanning and management for packaging phase"
@@ -239,6 +253,8 @@
     "size": "Size",
     "color": "Color",
     "layers": "Layers",
-    "serial": "Serial"
+    "serial": "Serial",
+    "markAsDefective": "Mark as Defective",
+    "defectiveDescription": "Check this box to mark all barcodes in this batch as defective (second rate). This will add a 'DEFECT' label when printing."
   }
 } 

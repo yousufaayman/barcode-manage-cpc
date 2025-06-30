@@ -6,6 +6,7 @@ from enum import Enum
 # User schemas
 class RoleEnum(str, Enum):
     ADMIN = "Admin"
+    CREATOR = "Creator"
     CUTTING = "Cutting"
     SEWING = "Sewing"
     PACKAGING = "Packaging"
@@ -107,6 +108,7 @@ class ProductionPhase(ProductionPhaseBase):
 
 # Batch schemas
 class BatchBase(BaseModel):
+    job_order_id: int
     barcode: str
     brand_id: int
     model_id: int
@@ -122,6 +124,7 @@ class BatchCreate(BatchBase):
     pass
 
 class BatchUpdate(BaseModel):
+    job_order_id: Optional[int] = None
     barcode: Optional[str] = None
     brand_id: Optional[int] = None
     model_id: Optional[int] = None
@@ -135,6 +138,7 @@ class BatchUpdate(BaseModel):
 
 class BatchResponse(BatchBase):
     batch_id: int
+    job_order_number: Optional[str] = None
     brand_name: str
     model_name: str
     size_value: str
@@ -402,6 +406,61 @@ class AdvancedStatisticsResponse(BaseModel):
     batch_ages: List[BatchAgeStat]
     status_distribution: List[StatusDistributionStat]
     most_common_batch_attributes: List[CommonAttributeStat]
+
+    class Config:
+        from_attributes = True
+
+# Job Order schemas
+class JobOrderItemBase(BaseModel):
+    color_id: int
+    size_id: int
+    quantity: int
+
+class JobOrderItem(JobOrderItemBase):
+    item_id: int
+    job_order_id: int
+    color_name: Optional[str] = None
+    size_value: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class JobOrderItemCreate(JobOrderItemBase):
+    pass
+
+class JobOrderItemUpdate(BaseModel):
+    color_id: Optional[int] = None
+    size_id: Optional[int] = None
+    quantity: Optional[int] = None
+
+class JobOrderBase(BaseModel):
+    model_id: int
+    job_order_number: str
+
+class JobOrderCreate(BaseModel):
+    model_id: int
+    job_order_number: str
+    items: List[JobOrderItemCreate]
+
+class JobOrderUpdate(BaseModel):
+    model_id: Optional[int] = None
+    job_order_number: Optional[str] = None
+    items: Optional[List[JobOrderItemCreate]] = None
+
+class JobOrder(JobOrderBase):
+    job_order_id: int
+    model_name: Optional[str] = None
+    items: List[JobOrderItem] = []
+
+    class Config:
+        from_attributes = True
+
+class JobOrderSummary(BaseModel):
+    job_order_id: int
+    job_order_number: str
+    model_name: str
+    total_colors: int
+    total_quantity: int
 
     class Config:
         from_attributes = True 

@@ -51,16 +51,16 @@
     "dashboard": "لوحة التحكم",
     "barcodeScanner": "قارئ الباركود",
     "barcodeManagement": "إدارة الباركود",
-    "advancedStatistics": "الإحصائيات المتقدمة",
     "barcodeCreate": "إنشاء الباركود",
-    "bulkBarcodeCreate": "إنشاء باركود مجمع",
-    "userManagement": "إدارة المستخدمين",
+    "jobOrders": "أوامر العمل",
     "archivedBatches": "الدفعات المؤرشفة",
+    "advancedStatistics": "الإحصائيات المتقدمة",
+    "userManagement": "إدارة المستخدمين",
     "goToDashboard": "الذهاب إلى لوحة التحكم"
   },
   "company": {
     "name": "قطن بلس للملابس",
-    "tagline": "نظام إدارة الباركود",
+    "tagline": "نظام إدارة المنتجات",
     "copyright": "جميع الحقوق محفوظة."
   },
   "dashboard": {
@@ -74,6 +74,7 @@
   },
   "barcode": {
     "scanning": "جاري المسح...",
+    "scanBarcode": "امسح الباركود",
     "scanOrEnter": "امسح أو أدخل الباركود",
     "barcode": "الباركود",
     "batchId": "معرف الدفعة",
@@ -99,6 +100,10 @@
     "scannerMode": "وضع الماسح",
     "viewMode": "وضع العرض",
     "updateMode": "وضع التحديث",
+    "inputMode": "وضع الإدخال",
+    "manualMode": "الوضع اليدوي",
+    "scannerModeDescription": "التقاط الباركود تلقائياً من الماسح. سيتم مسح النتائج تلقائياً بعد كل مسح للمسح المستمر.",
+    "manualModeDescription": "أدخل الباركود يدوياً باستخدام لوحة المفاتيح. سيتم الاحتفاظ بالنتائج حتى يتم مسحها يدوياً.",
     "enterBarcode": "يرجى إدخال باركود",
     "barcodeNotFound": "لم يتم العثور على الباركود. يرجى التحقق من الباركود والمحاولة مرة أخرى.",
     "failedToScan": "فشل في مسح الباركود. يرجى المحاولة مرة أخرى.",
@@ -112,7 +117,14 @@
     "productionInformation": "معلومات الإنتاج",
     "archiveInformation": "معلومات الأرشيف",
     "archivedBatch": "دفعة مؤرشفة",
-    "archivedAt": "تاريخ الأرشفة"
+    "archivedAt": "تاريخ الأرشفة",
+    "jobOrderInformation": "معلومات أمر العمل",
+    "jobOrderId": "معرف أمر العمل",
+    "jobOrderNumber": "رقم أمر العمل",
+    "scanSuccess": "تم مسح الباركود بنجاح",
+    "scanUpdateSuccess": "تم تحديث الباركود بنجاح",
+    "barcodeScannedSuccessfully": "تم مسح الباركود واسترجاع المعلومات بنجاح.",
+    "barcodeUpdatedSuccessfully": "تم مسح الباركود وتحديثه بنجاح."
   },
   "barcodeManagement": {
     "title": "إدارة الباركود",
@@ -162,6 +174,7 @@
     "username": "اسم المستخدم",
     "role": "الدور",
     "admin": "مدير",
+    "creator": "منشئ",
     "cutting": "قص",
     "sewing": "الحياکة",
     "packaging": "تعبئة",
@@ -173,6 +186,7 @@
     "hidePassword": "إخفاء",
     "rolePermissions": "صلاحيات الأدوار:",
     "adminPermissions": "مدير: وصول كامل لجميع الميزات",
+    "creatorPermissions": "منشئ: الوصول إلى إنشاء وإدارة الباركود المجمع",
     "cuttingPermissions": "قص: مسح الباركود وإدارته لمرحلة القص",
     "sewingPermissions": "الحياکة: مسح الباركود وإدارته لمرحلة الحياکة",
     "packagingPermissions": "تعبئة: مسح الباركود وإدارته لمرحلة التعبئة"
@@ -239,6 +253,8 @@
     "size": "المقاس",
     "color": "اللون",
     "layers": "الطبقات",
-    "serial": "الرقم التسلسلي"
+    "serial": "الرقم التسلسلي",
+    "markAsDefective": "تحديد كمعيب",
+    "defectiveDescription": "حدد هذا المربع لتحديد جميع الباركود في هذه الدفعة كمعيبة (درجة ثانية). سيتم إضافة علامة 'معيب' عند الطباعة."
   }
 } 

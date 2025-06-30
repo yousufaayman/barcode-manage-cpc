@@ -9,6 +9,8 @@ import { Link } from 'react-router-dom';
 
 interface Barcode {
   batch_id: number;
+  job_order_id: number;
+  job_order_number?: string;
   barcode: string;
   brand_name: string;
   model_name: string;
@@ -44,7 +46,8 @@ const ArchivedBatchesPage: React.FC = () => {
     size: '',
     color: '',
     phase: '',
-    status: ''
+    status: '',
+    job_order_number: ''
   });
 
   // Items per page
@@ -97,7 +100,9 @@ const ArchivedBatchesPage: React.FC = () => {
           )
         });
         
+        console.log('Fetching archived barcodes with params:', queryParams.toString());
         const response = await api.get(`/batches/?${queryParams.toString()}`);
+        console.log('API response:', response.data);
         setBarcodes(response.data.items);
         setTotalBarcodes(response.data.total);
         // Clear selections when data changes
@@ -115,7 +120,15 @@ const ArchivedBatchesPage: React.FC = () => {
   // Handle changes to filter inputs
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
+    console.log('Filter change:', name, value);
     setFilters(prev => ({ ...prev, [name]: value }));
+    setCurrentPage(1); // Reset to first page when filters change
+  };
+
+  // Handle SearchableDropdown filter changes
+  const handleDropdownFilterChange = (field: string, value: string) => {
+    console.log('Dropdown filter change:', field, value);
+    setFilters(prev => ({ ...prev, [field]: value }));
     setCurrentPage(1); // Reset to first page when filters change
   };
 
@@ -128,7 +141,8 @@ const ArchivedBatchesPage: React.FC = () => {
       size: '',
       color: '',
       phase: '',
-      status: ''
+      status: '',
+      job_order_number: ''
     });
     setCurrentPage(1); // Reset to first page when filters are cleared
   };
@@ -273,6 +287,7 @@ const ArchivedBatchesPage: React.FC = () => {
         )
       },
       { key: 'barcode', header: t('barcode.barcode'), width: 150 },
+      { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 120 },
       { key: 'brand_name', header: t('bulkBarcode.brand'), width: 120 },
       { key: 'model_name', header: t('bulkBarcode.model'), width: 120 },
       { key: 'size_value', header: t('bulkBarcode.size'), width: 100 },
@@ -379,10 +394,22 @@ const ArchivedBatchesPage: React.FC = () => {
             </div>
             
             <div className="form-group">
+              <label htmlFor="job_order_number" className="text-sm font-medium text-gray-700">{t('barcode.jobOrderNumber')}</label>
+              <input
+                type="text"
+                id="job_order_number"
+                name="job_order_number"
+                value={filters.job_order_number}
+                onChange={handleFilterChange}
+                className="input-field"
+              />
+            </div>
+            
+            <div className="form-group">
               <SearchableDropdown
                 options={brandOptions}
                 value={filters.brand}
-                onChange={(value) => setFilters(prev => ({ ...prev, brand: value }))}
+                onChange={(value) => handleDropdownFilterChange('brand', value)}
                 placeholder={t('bulkBarcode.brand')}
                 label={t('bulkBarcode.brand')}
               />
@@ -404,7 +431,7 @@ const ArchivedBatchesPage: React.FC = () => {
               <SearchableDropdown
                 options={sizeOptions}
                 value={filters.size}
-                onChange={(value) => setFilters(prev => ({ ...prev, size: value }))}
+                onChange={(value) => handleDropdownFilterChange('size', value)}
                 placeholder={t('bulkBarcode.size')}
                 label={t('bulkBarcode.size')}
               />
@@ -414,7 +441,7 @@ const ArchivedBatchesPage: React.FC = () => {
               <SearchableDropdown
                 options={colorOptions}
                 value={filters.color}
-                onChange={(value) => setFilters(prev => ({ ...prev, color: value }))}
+                onChange={(value) => handleDropdownFilterChange('color', value)}
                 placeholder={t('bulkBarcode.color')}
                 label={t('bulkBarcode.color')}
               />

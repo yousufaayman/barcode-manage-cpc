@@ -38,8 +38,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             <Menu size={24} />
           </button>
           <div className="flex items-center gap-2">
-            <img src="/company-logo.png" alt="Company Logo" className="w-8 h-8 rounded-full" />
-            <span className="font-semibold text-gray-800">Barcode Management System</span>
+            <img src="/lovable-uploads/33fc39df-cd6b-474a-93eb-94892c005f8e.png" alt="Cotton Plus Logo" className="w-8 h-8 rounded-full" />
+            <span className="hidden md:inline">Product Management System</span>
           </div>
         </div>
 
