@@ -428,6 +428,11 @@ class JobOrderItem(JobOrderItemBase):
 class JobOrderItemCreate(JobOrderItemBase):
     pass
 
+class JobOrderItemCreateWithNames(BaseModel):
+    color_name: str
+    size_value: str
+    quantity: int
+
 class JobOrderItemUpdate(BaseModel):
     color_id: Optional[int] = None
     size_id: Optional[int] = None
@@ -441,16 +446,26 @@ class JobOrderCreate(BaseModel):
     model_id: int
     job_order_number: str
     items: List[JobOrderItemCreate]
+    closed: bool = False
+
+class JobOrderCreateWithNames(BaseModel):
+    model_name: str
+    job_order_number: str
+    items: List[JobOrderItemCreateWithNames]
+    closed: bool = False
 
 class JobOrderUpdate(BaseModel):
     model_id: Optional[int] = None
     job_order_number: Optional[str] = None
-    items: Optional[List[JobOrderItemCreate]] = None
+    items: Optional[List[Dict[str, int]]] = None  # List of {item_id: int, quantity: int}
+    closed: Optional[bool] = None
 
 class JobOrder(JobOrderBase):
     job_order_id: int
     model_name: Optional[str] = None
     items: List[JobOrderItem] = []
+    total_working_quantity: Optional[int] = None
+    closed: bool = False
 
     class Config:
         from_attributes = True

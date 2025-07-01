@@ -139,17 +139,18 @@ GROUP BY jo.job_order_id, jo.job_order_number, m.model_name;
 -- ============================================================================
 
 -- Insert sample job order items with sizes (uncomment if you want sample data)
-/*
+select * from job_orders;
 INSERT INTO `job_order_items` (`job_order_id`, `color_id`, `size_id`, `quantity`) VALUES
 (1, 31, 21, 50),   -- Black, S: 50 pieces
 (1, 31, 23, 75),   -- Black, M: 75 pieces
 (1, 31, 25, 60),   -- Black, L: 60 pieces
 (1, 687, 21, 30),  -- Beige, S: 30 pieces
 (1, 687, 23, 45),  -- Beige, M: 45 pieces
-(1, 721, 25, 40),  -- Navy, L: 40 pieces
-(2, 31, 23, 100),  -- Black, M: 100 pieces
-(2, 590, 25, 80);  -- Red, L: 80 pieces
-*/
+(1, 721, 25, 40);
+
+select * from job_order_items;
+select * from colors;
+select * from sizes;
 
 -- ============================================================================
 -- VERIFICATION QUERIES

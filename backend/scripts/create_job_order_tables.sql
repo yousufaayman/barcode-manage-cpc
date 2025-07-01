@@ -103,8 +103,14 @@ SHOW TABLES LIKE 'job_orders';
 SHOW TABLES LIKE 'job_order_items';
 
 -- Show table structure
-DESCRIBE job_orders;
+select * from job_orders;
 DESCRIBE job_order_items;
+
+-- Add closed column to job_orders table
+ALTER TABLE job_orders ADD COLUMN closed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Update existing job orders to be open by default
+UPDATE job_orders SET closed = FALSE WHERE closed IS NULL;
 
 -- Show views
 SHOW TABLES LIKE 'job_orders_with_model';

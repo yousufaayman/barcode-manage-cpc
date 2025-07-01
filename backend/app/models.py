@@ -149,6 +149,7 @@ class JobOrder(Base):
     job_order_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     model_id = Column(Integer, ForeignKey("models.model_id", ondelete="RESTRICT"), nullable=False)
     job_order_number = Column(String(100), unique=True, nullable=False, index=True)
+    closed = Column(Boolean, default=False, nullable=False)
 
     model = relationship("Model", back_populates="job_orders")
     items = relationship("JobOrderItem", back_populates="job_order", cascade="all, delete-orphan")

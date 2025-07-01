@@ -83,9 +83,12 @@ const VirtualizedTable: React.FC<VirtualizedTableProps> = ({
     };
   }, []);
 
+  // Filter visible columns based on showAllColumns prop
+  const visibleColumns = showAllColumns ? columns : columns.filter(col => !col.hidden);
+  
   // Calculate column widths
-  const totalWidth = columns.reduce((sum, col) => sum + col.width, 0);
-  const columnStyles = columns.map(col => ({
+  const totalWidth = visibleColumns.reduce((sum, col) => sum + col.width, 0);
+  const columnStyles = visibleColumns.map(col => ({
     width: `${(col.width / totalWidth) * 100}%`,
     minWidth: col.width
   }));
@@ -104,14 +107,11 @@ const VirtualizedTable: React.FC<VirtualizedTableProps> = ({
         {/* Header */}
         <div className="sticky top-0 z-10 bg-gray-50">
           <div className="flex w-full border-b">
-            {columns.map((column, index) => (
+            {visibleColumns.map((column, index) => (
               <div
                 key={column.key}
                 style={columnStyles[index]}
-                className={cn(
-                  "px-4 py-2 font-medium text-sm whitespace-nowrap overflow-hidden text-ellipsis",
-                  column.hidden && !showAllColumns && "hidden md:block" // Hide on mobile unless showAllColumns is true
-                )}
+                className="px-4 py-2 font-medium text-sm whitespace-nowrap overflow-hidden text-ellipsis"
               >
                 {column.key === 'batch_id' && onSelectAll ? (
                   <input
@@ -136,11 +136,13 @@ const VirtualizedTable: React.FC<VirtualizedTableProps> = ({
           {/* Visible Rows */}
           {data.slice(visibleRange.start, visibleRange.end).map((item, index) => {
             const actualIndex = visibleRange.start + index;
-            const isSelected = selectedItems?.includes(item.batch_id);
+            // Use a more flexible key - try common ID fields
+            const itemKey = item.batch_id || item.job_order_id || item.id || actualIndex;
+            const isSelected = selectedItems?.includes(item.batch_id || item.job_order_id);
 
             return (
               <div
-                key={item.batch_id}
+                key={itemKey}
                 className={cn(
                   "flex w-full border-b hover:bg-gray-50",
                   isSelected && "bg-lime bg-opacity-30"
@@ -148,16 +150,13 @@ const VirtualizedTable: React.FC<VirtualizedTableProps> = ({
                 style={{ height: rowHeight }}
                 onClick={() => onRowClick?.(item)}
               >
-                {columns.map((column, colIndex) => (
+                {visibleColumns.map((column, colIndex) => (
                   <div
                     key={column.key}
                     style={columnStyles[colIndex]}
-                    className={cn(
-                      "px-4 py-2 text-sm whitespace-nowrap overflow-hidden text-ellipsis",
-                      column.hidden && !showAllColumns && "hidden md:block" // Hide on mobile unless showAllColumns is true
-                    )}
+                    className="px-4 py-2 text-sm whitespace-nowrap overflow-hidden text-ellipsis"
                   >
-                    {column.render ? column.render(item) : item[column.key]}
+                    {column.render ? column.render(item) : (typeof item[column.key] === 'object' ? JSON.stringify(item[column.key]) : item[column.key])}
                   </div>
                 ))}
               </div>

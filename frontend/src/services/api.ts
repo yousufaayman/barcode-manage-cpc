@@ -206,6 +206,8 @@ export interface JobOrder {
   job_order_number: string;
   model_name?: string;
   items: JobOrderItem[];
+  total_working_quantity?: number;
+  closed: boolean;
 }
 
 export interface JobOrderCreate {
@@ -218,12 +220,21 @@ export interface JobOrderCreate {
   }[];
 }
 
+export interface JobOrderCreateWithNames {
+  model_name: string;
+  job_order_number: string;
+  items: {
+    color_name: string;
+    size_value: string;
+    quantity: number;
+  }[];
+}
+
 export interface JobOrderUpdate {
   model_id?: number;
   job_order_number?: string;
   items?: {
-    color_id: number;
-    size_id: number;
+    item_id: number;
     quantity: number;
   }[];
 }
@@ -333,13 +344,23 @@ export const barcodeApi = {
     return response.data;
   },
 
-  getBarcodeStats: async (): Promise<BatchStats> => {
+  getBatchStats: async (): Promise<BatchStats> => {
     const response = await api.get<BatchStats>('/batches/stats');
     return response.data;
   },
 
   getPhaseStats: async (): Promise<PhaseStats> => {
     const response = await api.get<PhaseStats>('/batches/phase-stats');
+    return response.data;
+  },
+
+  getBarcodesByPhase: async (phase: string, status: string): Promise<BarcodeListResponse> => {
+    const response = await api.get<BarcodeListResponse>('/batches/', {
+      params: {
+        phase: phase,
+        status: status
+      }
+    });
     return response.data;
   },
 
@@ -382,8 +403,19 @@ export const barcodeApi = {
 };
 
 export const jobOrderApi = {
-  getAll: async (): Promise<JobOrder[]> => {
-    const response = await api.get('/job-orders/');
+  getAll: async (params?: {
+    skip?: number;
+    limit?: number;
+    job_order_number?: string;
+    model_name?: string;
+    closed?: boolean;
+  }): Promise<JobOrderListResponse> => {
+    const response = await api.get<JobOrderListResponse>('/job-orders/', { params });
+    return response.data;
+  },
+
+  getAllSimple: async (): Promise<{job_order_id: number, job_order_number: string, model_name: string | null}[]> => {
+    const response = await api.get<{job_order_id: number, job_order_number: string, model_name: string | null}[]>('/job-orders/simple/');
     return response.data;
   },
 
@@ -399,6 +431,11 @@ export const jobOrderApi = {
 
   create: async (jobOrder: JobOrderCreate): Promise<JobOrder> => {
     const response = await api.post('/job-orders/', jobOrder);
+    return response.data;
+  },
+
+  createWithNames: async (jobOrder: JobOrderCreateWithNames): Promise<JobOrder> => {
+    const response = await api.post('/job-orders/with-names/', jobOrder);
     return response.data;
   },
 
@@ -423,6 +460,21 @@ export const jobOrderApi = {
 
   getOverallStatus: async (id: number): Promise<JobOrderOverallStatus> => {
     const response = await api.get(`/job-orders/${id}/overall-status`);
+    return response.data;
+  },
+
+  getExistingColors: async (): Promise<string[]> => {
+    const response = await api.get<string[]>('/job-orders/options/colors');
+    return response.data;
+  },
+
+  getExistingSizes: async (): Promise<string[]> => {
+    const response = await api.get<string[]>('/job-orders/options/sizes');
+    return response.data;
+  },
+
+  getExistingModels: async (): Promise<string[]> => {
+    const response = await api.get<string[]>('/job-orders/options/models');
     return response.data;
   }
 };

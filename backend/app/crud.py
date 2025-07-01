@@ -1237,6 +1237,48 @@ def create_job_order(db: Session, job_order: schemas.JobOrderCreate) -> models.J
     db.refresh(db_job_order)
     return db_job_order
 
+def create_job_order_with_names(db: Session, job_order: schemas.JobOrderCreateWithNames) -> models.JobOrder:
+    """
+    Create a new job order with names, creating models, colors, and sizes if they don't exist
+    """
+    # Get or create model
+    model = get_model_by_name(db, job_order.model_name)
+    if not model:
+        model = create_model(db, schemas.ModelCreate(model_name=job_order.model_name))
+    
+    # Create the job order
+    db_job_order = models.JobOrder(
+        model_id=model.model_id,
+        job_order_number=job_order.job_order_number,
+        closed=job_order.closed
+    )
+    db.add(db_job_order)
+    db.flush()  # Flush to get the job_order_id
+    
+    # Create job order items
+    for item in job_order.items:
+        # Get or create color
+        color = get_color_by_name(db, item.color_name)
+        if not color:
+            color = create_color(db, schemas.ColorCreate(color_name=item.color_name))
+        
+        # Get or create size
+        size = get_size_by_value(db, item.size_value)
+        if not size:
+            size = create_size(db, schemas.SizeCreate(size_value=item.size_value))
+        
+        db_item = models.JobOrderItem(
+            job_order_id=db_job_order.job_order_id,
+            color_id=color.color_id,
+            size_id=size.size_id,
+            quantity=item.quantity
+        )
+        db.add(db_item)
+    
+    db.commit()
+    db.refresh(db_job_order)
+    return db_job_order
+
 def get_job_order(db: Session, job_order_id: int) -> Optional[models.JobOrder]:
     """
     Get a job order by ID with its items
@@ -1259,6 +1301,12 @@ def get_job_orders(db: Session, skip: int = 0, limit: int = 100) -> List[models.
     """
     return db.query(models.JobOrder).offset(skip).limit(limit).all()
 
+def get_job_orders_count(db: Session) -> int:
+    """
+    Get total count of job orders
+    """
+    return db.query(models.JobOrder).count()
+
 def update_job_order(db: Session, job_order_id: int, job_order_update: schemas.JobOrderUpdate) -> Optional[models.JobOrder]:
     """
     Update a job order and its items
@@ -1272,23 +1320,19 @@ def update_job_order(db: Session, job_order_id: int, job_order_update: schemas.J
         db_job_order.model_id = job_order_update.model_id
     if job_order_update.job_order_number is not None:
         db_job_order.job_order_number = job_order_update.job_order_number
+    if job_order_update.closed is not None:
+        db_job_order.closed = job_order_update.closed
     
     # Update items if provided
     if job_order_update.items is not None:
-        # Delete existing items
-        db.query(models.JobOrderItem).filter(
-            models.JobOrderItem.job_order_id == job_order_id
-        ).delete()
-        
-        # Create new items
+        # Update existing items with new quantities
         for item in job_order_update.items:
-            db_item = models.JobOrderItem(
-                job_order_id=job_order_id,
-                color_id=item.color_id,
-                size_id=item.size_id,
-                quantity=item.quantity
-            )
-            db.add(db_item)
+            db_item = db.query(models.JobOrderItem).filter(
+                models.JobOrderItem.item_id == item["item_id"],
+            models.JobOrderItem.job_order_id == job_order_id
+            ).first()
+            if db_item:
+                db_item.quantity = item["quantity"]
     
     db.commit()
     db.refresh(db_job_order)
@@ -1358,6 +1402,7 @@ def get_job_order_items_with_details(db: Session, job_order_id: int) -> List[Dic
     return [
         {
             "item_id": item.JobOrderItem.item_id,
+            "job_order_id": item.JobOrderItem.job_order_id,
             "color_id": item.JobOrderItem.color_id,
             "color_name": item.color_name,
             "size_id": item.JobOrderItem.size_id,

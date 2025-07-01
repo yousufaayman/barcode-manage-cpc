@@ -105,21 +105,29 @@ const BarcodeManagementPage: React.FC = () => {
   // Items per page
   const itemsPerPage = 50;
 
-  // Temporary state for mobile responsiveness
-  const [showAllColumns, setShowAllColumns] = useState(false);
+  // Mobile view state
   const [isMobile, setIsMobile] = useState(false);
+  const [showFullView, setShowFullView] = useState(false);
+  const [initialLoad, setInitialLoad] = useState(true);
 
   // Check if we're on mobile
   useEffect(() => {
     const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768); // md breakpoint is 768px
+      const mobile = window.innerWidth < 768; // md breakpoint is 768px
+      setIsMobile(mobile);
+      
+      // Only set default view on initial load
+      if (initialLoad) {
+        setShowFullView(!mobile); // Full view on desktop, compact on mobile
+        setInitialLoad(false);
+      }
     };
     
     checkMobile();
     window.addEventListener('resize', checkMobile);
     
     return () => window.removeEventListener('resize', checkMobile);
-  }, []);
+  }, [initialLoad]);
 
   // Fetch dropdown options
   useEffect(() => {
@@ -445,16 +453,16 @@ const BarcodeManagementPage: React.FC = () => {
       )
     },
     { key: 'barcode', header: t('barcode.barcode'), width: 150 },
-    { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 120, hidden: true },
-    { key: 'brand_name', header: t('bulkBarcode.brand'), width: 120, hidden: true },
-    { key: 'model_name', header: t('bulkBarcode.model'), width: 120, hidden: true },
-    { key: 'size_value', header: t('bulkBarcode.size'), width: 100, hidden: true },
-    { key: 'color_name', header: t('bulkBarcode.color'), width: 100, hidden: true },
+    { key: 'brand_name', header: t('bulkBarcode.brand'), width: 120 },
+    { key: 'model_name', header: t('bulkBarcode.model'), width: 120 },
+    { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 120 },
+    { key: 'size_value', header: t('bulkBarcode.size'), width: 100, hidden: !showFullView },
+    { key: 'color_name', header: t('bulkBarcode.color'), width: 100, hidden: !showFullView },
     {
       key: 'quantity',
       header: t('barcode.quantity'),
       width: 100,
-      hidden: true,
+      hidden: !showFullView,
       render: (item: Barcode) => (
         editingId === item.batch_id ? (
           <input
@@ -474,14 +482,14 @@ const BarcodeManagementPage: React.FC = () => {
       key: 'layers',
       header: t('bulkBarcode.layers'),
       width: 100,
-      hidden: true,
+      hidden: !showFullView,
       render: (item: Barcode) => item.layers
     },
     {
       key: 'serial',
       header: t('bulkBarcode.serial'),
       width: 100,
-      hidden: true,
+      hidden: !showFullView,
       render: (item: Barcode) => item.serial
     },
     {
@@ -548,6 +556,7 @@ const BarcodeManagementPage: React.FC = () => {
       key: 'actions',
       header: t('common.edit'),
       width: 120,
+      hidden: !showFullView,
       render: (item: Barcode) => (
         editingId === item.batch_id ? (
           <div className="flex space-x-1">
@@ -606,6 +615,7 @@ const BarcodeManagementPage: React.FC = () => {
       key: 'actions',
       header: t('common.actions'),
       width: 120,
+      hidden: !showFullView,
       render: (item: Barcode) => (
         editingId === item.batch_id ? (
           <div className="flex space-x-1">
@@ -655,10 +665,7 @@ const BarcodeManagementPage: React.FC = () => {
     return baseColumns;
   }, [selectedBarcodes, editingId, editValues, user?.role, t]);
 
-  // Check if there are any hidden columns
-  const hasHiddenColumns = useMemo(() => {
-    return columns.some(column => column.hidden);
-  }, [columns]);
+
 
   return (
     <Layout>
@@ -899,46 +906,31 @@ const BarcodeManagementPage: React.FC = () => {
         ) : (
           <>
             <div className="table-container mb-4 w-full">
-              {hasHiddenColumns && isMobile && (
-                <div className="flex justify-end mb-2">
-                  <button
-                    onClick={() => setShowAllColumns(!showAllColumns)}
-                    className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 ease-in-out"
-                  >
-                    {showAllColumns ? (
-                      <>
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-gray-500 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                        <span>{t('barcodeManagement.hideAdditionalColumns')}</span>
-                      </>
-                    ) : (
-                      <>
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-gray-500 transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                        <span>{t('barcodeManagement.showAdditionalColumns')}</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
+              <div className="mb-4">
+                <Button
+                  variant="outline"
+                  onClick={() => setShowFullView(!showFullView)}
+                  className="w-full"
+                >
+                  {showFullView ? t('barcodeManagement.compactView') : t('barcodeManagement.fullView')}
+                </Button>
+              </div>
               <div className="overflow-x-auto w-full">
                 {barcodes.length === 0 ? (
                   <div className="text-center py-4">
                     {t('barcodeManagement.noBarcodesFound')}
                   </div>
                 ) : (
-                  <VirtualizedTable
-                    columns={columns}
-                    data={barcodes}
-                    height={600}
-                    rowHeight={48}
-                    selectedItems={selectedBarcodes}
-                    showAllColumns={showAllColumns}
-                    onSelectAll={handleSelectAll}
-                    isAllSelected={selectedBarcodes.length === barcodes.length && barcodes.length > 0}
-                  />
+                                      <VirtualizedTable
+                      columns={columns}
+                      data={barcodes}
+                      height={600}
+                      rowHeight={48}
+                      selectedItems={selectedBarcodes}
+                      showAllColumns={showFullView}
+                      onSelectAll={handleSelectAll}
+                      isAllSelected={selectedBarcodes.length === barcodes.length && barcodes.length > 0}
+                    />
                 )}
               </div>
             </div>
