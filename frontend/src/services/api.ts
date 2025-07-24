@@ -200,14 +200,26 @@ export interface JobOrderItem {
   quantity: number;
 }
 
+export interface JobOrderItemWithDetails {
+  item_id: number;
+  job_order_id: number;
+  color_id: number;
+  color_name: string;
+  size_id: number;
+  size_value: string;
+  quantity: number;
+}
+
 export interface JobOrder {
   job_order_id: number;
   model_id: number;
   job_order_number: string;
   model_name?: string;
+  brand_id?: number;
+  brand_name?: string;
   items: JobOrderItem[];
   total_working_quantity?: number;
-  closed: boolean;
+  notes?: string;
 }
 
 export interface JobOrderCreate {
@@ -237,6 +249,7 @@ export interface JobOrderUpdate {
     item_id: number;
     quantity: number;
   }[];
+  notes?: string;
 }
 
 export interface JobOrderProductionTracking {
@@ -269,6 +282,17 @@ export interface JobOrderOverallStatus {
 export interface JobOrderListResponse {
   items: JobOrder[];
   total: number;
+}
+
+export interface BulkValidationResponse {
+  valid_rows: any[];
+  error_rows: { rowNumber: number; data: any; error: string }[];
+}
+
+export interface BulkSubmitResponse {
+  created_batches: any[];
+  duplicate_barcodes: any[];
+  message: string;
 }
 
 export const authApi = {
@@ -408,14 +432,15 @@ export const jobOrderApi = {
     limit?: number;
     job_order_number?: string;
     model_name?: string;
-    closed?: boolean;
+    brand_name?: string;
+    issues_first?: boolean;
   }): Promise<JobOrderListResponse> => {
     const response = await api.get<JobOrderListResponse>('/job-orders/', { params });
     return response.data;
   },
 
-  getAllSimple: async (): Promise<{job_order_id: number, job_order_number: string, model_name: string | null}[]> => {
-    const response = await api.get<{job_order_id: number, job_order_number: string, model_name: string | null}[]>('/job-orders/simple/');
+  getAllSimple: async (): Promise<{job_order_id: number, job_order_number: string, model_name: string | null, brand_name: string | null}[]> => {
+    const response = await api.get<{job_order_id: number, job_order_number: string, model_name: string | null, brand_name: string | null}[]>('/job-orders/simple/');
     return response.data;
   },
 
@@ -476,7 +501,31 @@ export const jobOrderApi = {
   getExistingModels: async (): Promise<string[]> => {
     const response = await api.get<string[]>('/job-orders/options/models');
     return response.data;
-  }
+  },
+
+  getExistingMaterials: async (): Promise<string[]> => {
+    const response = await api.get<string[]>('/job-orders/options/materials');
+    return response.data;
+  },
+
+  getItemsWithDetails: async (jobOrderId: number): Promise<JobOrderItemWithDetails[]> => {
+    const response = await api.get<JobOrderItemWithDetails[]>(`/job-orders/${jobOrderId}/items-with-details/`);
+    return response.data;
+  },
+
+  getMaterials: async (jobOrderId: number): Promise<{id:number,material_id:number,material_name:string,color_name?:string,quantity:number,notes?:string}[]> => {
+    const response = await api.get(`/job-orders/${jobOrderId}/materials`);
+    return response.data;
+  },
+
+  getSummary: async (params: any) => {
+    const response = await api.get('/job-orders/summary/', { params });
+    return response.data;
+  },
 };
+
+export async function refreshJobOrderSummary() {
+  await api.post('/job-orders/refresh-summary/');
+}
 
 export default api; 

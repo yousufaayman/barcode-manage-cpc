@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
-import { jobOrderApi, JobOrder } from '../services/api';
+import api, { jobOrderApi, JobOrder, refreshJobOrderSummary } from '../services/api';
 import { cn } from '../lib/utils';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -26,29 +26,32 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
-import { Plus, Search, Filter, X, Package, CheckCircle, Edit } from 'lucide-react';
+import { Plus, Search, Filter, X, Package, CheckCircle, Edit, Eye } from 'lucide-react';
 import VirtualizedTable from '../components/VirtualizedTable';
 import SearchableDropdown, { EditableDropdown } from '../components/SearchableDropdown';
 import { useToast } from '../hooks/use-toast';
 import { Label } from '../components/ui/label';
+import { Link } from 'react-router-dom';
+import { Textarea } from '../components/ui/textarea';
 
 interface JobOrderSummary {
   job_order_id: number;
   job_order_number: string;
   model_name: string;
+  brand_name?: string;
   total_colors: number;
   total_quantity: number;
   total_working_quantity: number;
   completion_percentage: number;
-  closed: boolean;
+  batches?: { status: string }[];
 }
 
 const JobOrdersPage: React.FC = () => {
   const { user } = useAuth();
   const { t } = useTranslation();
   const { toast } = useToast();
-  const [openJobOrders, setOpenJobOrders] = useState<JobOrderSummary[]>([]);
-  const [closedJobOrders, setClosedJobOrders] = useState<JobOrderSummary[]>([]);
+  const [openJobOrders, setOpenJobOrders] = useState<any[]>([]);
+  const [closedJobOrders, setClosedJobOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingClosed, setLoadingClosed] = useState(false);
   const [showClosedOrders, setShowClosedOrders] = useState(false);
@@ -60,12 +63,14 @@ const JobOrdersPage: React.FC = () => {
   // Filter states
   const [filters, setFilters] = useState({
     job_order_number: '',
-    model_name: ''
+    model_name: '',
+    brand_name: ''
   });
   
   // Dropdown options
   const [jobOrderOptions, setJobOrderOptions] = useState<string[]>([]);
   const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [brandOptions, setBrandOptions] = useState<string[]>([]);
   
   // Edit dialog state
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -89,13 +94,70 @@ const JobOrdersPage: React.FC = () => {
   const [newJobOrder, setNewJobOrder] = useState({
     job_order_number: '',
     model_name: '',
+    brand_name: '',
     items: [{ color_name: '', size_value: '', quantity: 1 }]
   });
+  const [newJobOrderImage, setNewJobOrderImage] = useState<File | null>(null);
+  const [newJobOrderImagePreview, setNewJobOrderImagePreview] = useState<string | null>(null);
+  // Prints flags state
+  const [printsFlags, setPrintsFlags] = useState({
+    chest: false,
+    back: false,
+    waist: false,
+    right_leg: false,
+    left_leg: false,
+    pocket: false,
+    hood: false,
+    right_arm: false,
+    left_arm: false,
+  });
+  
+  // Table-based item entry states
+  const [tableColors, setTableColors] = useState<string[]>(['']);
+  const [tableSizes, setTableSizes] = useState<string[]>(['']);
+  const [tableQuantities, setTableQuantities] = useState<number[][]>([[0]]);
   
   // Existing options for dropdowns
   const [existingColors, setExistingColors] = useState<string[]>([]);
   const [existingSizes, setExistingSizes] = useState<string[]>([]);
   const [existingModels, setExistingModels] = useState<string[]>([]);
+  const [existingBrands, setExistingBrands] = useState<string[]>([]);
+  const [existingMaterials, setExistingMaterials] = useState<string[]>([]);
+  // Material name input
+  const [materialName, setMaterialName] = useState<string>('');
+
+  // -------------------- Consumption Table State --------------------
+  const generateKey = (name: string) => name.replace(/\s+/g, '_').toLowerCase();
+  const [consumptionCategories, setConsumptionCategories] = useState<Array<{key: string; label: string; usesMaterialName: boolean}>>([
+    { key: 'body', label: 'الجسم', usesMaterialName: true },
+  ]);
+
+  const [newCategoryName, setNewCategoryName] = useState<string>('');
+  const handleAddCategory = () => {
+    const name = newCategoryName.trim();
+    if (!name) return;
+    const key = generateKey(name);
+    if (consumptionCategories.find(c => c.key === key)) {
+      setNewCategoryName('');
+      return;
+    }
+    setConsumptionCategories(prev => [...prev, { key, label: name, usesMaterialName: false }]);
+    setNewCategoryName('');
+  };
+
+  // Per-cell consumption values keyed by `${rowIndex}-${categoryKey}`
+  const [consumptionValues, setConsumptionValues] = useState<Record<string, number>>({});
+  // Bulk values per category
+  const [bulkConsumption, setBulkConsumption] = useState<Record<string, number>>({});
+  const [jobOrderNotes, setJobOrderNotes] = useState<string>('');
+
+  const handleBulkConsumptionChange = (categoryKey: string, value: number) => {
+    setBulkConsumption(prev => ({ ...prev, [categoryKey]: value }));
+  };
+
+  const handleConsumptionCellChange = (rowIndex: number, categoryKey: string, value: number) => {
+    setConsumptionValues(prev => ({ ...prev, [`${rowIndex}-${categoryKey}`]: value }));
+  };
   
   // Items per page
   const itemsPerPage = 50;
@@ -103,76 +165,64 @@ const JobOrdersPage: React.FC = () => {
   // Calculate total pages
   const totalPagesOpen = Math.ceil(totalOpenJobOrders / itemsPerPage);
   const totalPagesClosed = Math.ceil(totalClosedJobOrders / itemsPerPage);
+  
+  // Total quantity entered in the table
+  const totalTableQuantity = tableQuantities.reduce((sum, row) => sum + row.reduce((s, v) => s + (v || 0), 0), 0);
 
-  // Fetch open job orders from the database with filters and pagination
+  // Automatically load open job orders on page load
+  const [showOpenOrders, setShowOpenOrders] = useState(true);
+  
+  // Fetch open job orders using summary endpoint
+  const fetchOpenJobOrders = async () => {
+    try {
+      setLoading(true);
+      await refreshJobOrderSummary(); // Ensure summary is refreshed before fetching
+      // Fetch all open job orders (no skip/limit)
+      const allOpenResponse = await jobOrderApi.getSummary({
+        limit: 10000,
+        ...Object.fromEntries(
+          Object.entries(filters).filter(([_, value]) => value !== '')
+        )
+      });
+      // Sort so that has_issues === true come first
+      const sortedOpenItems = [...allOpenResponse.items].sort((a, b) => (b.has_issues === true ? 1 : 0) - (a.has_issues === true ? 1 : 0));
+      // Apply pagination after sorting
+      const pagedOpenItems = sortedOpenItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+      setOpenJobOrders(pagedOpenItems);
+      setTotalOpenJobOrders(sortedOpenItems.length);
+    } catch (error) {
+      console.error('Error fetching open job orders:', error);
+      toast({
+        title: t('common.error'),
+        description: 'Failed to fetch open job orders',
+        variant: 'destructive'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchOpenJobOrders = async () => {
-      try {
-        setLoading(true);
-        const skip = (currentPage - 1) * itemsPerPage;
-        
-        // Fetch open job orders only
-        const openResponse = await jobOrderApi.getAll({
-          skip,
-          limit: itemsPerPage,
-          closed: false,
-          ...Object.fromEntries(
-            Object.entries(filters).filter(([_, value]) => value !== '')
-          )
-        });
-        
-        // Transform open job orders data
-        const transformedOpenData: JobOrderSummary[] = openResponse.items.map((jobOrder: JobOrder) => {
-          const totalQuantity = jobOrder.items.reduce((sum, item) => sum + item.quantity, 0);
-          const totalWorkingQuantity = jobOrder.total_working_quantity || 0;
-          const completionPercentage = totalQuantity > 0 ? Math.round((totalWorkingQuantity / totalQuantity) * 100) : 0;
-          
-          return {
-            job_order_id: jobOrder.job_order_id,
-            job_order_number: jobOrder.job_order_number,
-            model_name: jobOrder.model_name || 'Unknown',
-            total_colors: jobOrder.items.length,
-            total_quantity: totalQuantity,
-            total_working_quantity: totalWorkingQuantity,
-            completion_percentage: completionPercentage,
-            closed: jobOrder.closed
-          };
-        });
-        
-        setOpenJobOrders(transformedOpenData);
-        setTotalOpenJobOrders(openResponse.total);
-      } catch (error) {
-        console.error('Error fetching open job orders:', error);
-        toast({
-          title: t('common.error'),
-          description: 'Failed to fetch open job orders',
-          variant: 'destructive'
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
-
+    if (!showOpenOrders) return;
     fetchOpenJobOrders();
-  }, [currentPage, filters, t, toast]);
+  }, [showOpenOrders, currentPage, filters, t, toast]);
 
   // Fetch dropdown options
   useEffect(() => {
     const fetchDropdownOptions = async () => {
       try {
         const response = await jobOrderApi.getAllSimple();
-        
-        // Extract unique job order numbers and model names
+        // Extract unique job order numbers, model names, and brand names
         const jobOrderNumbers = [...new Set(response.map(jo => jo.job_order_number))];
         const modelNames = [...new Set(response.map(jo => jo.model_name).filter(name => name))];
-        
+        const brandNames = [...new Set(response.map(jo => jo.brand_name).filter(name => name))];
         setJobOrderOptions(jobOrderNumbers);
         setModelOptions(modelNames);
+        setBrandOptions(brandNames);
       } catch (error) {
         console.error('Error fetching dropdown options:', error);
       }
     };
-
     fetchDropdownOptions();
   }, []);
 
@@ -180,15 +230,20 @@ const JobOrdersPage: React.FC = () => {
   useEffect(() => {
     const fetchExistingOptions = async () => {
       try {
-        const [colors, sizes, models] = await Promise.all([
+        const [colors, sizes, models, materials] = await Promise.all([
           jobOrderApi.getExistingColors(),
           jobOrderApi.getExistingSizes(),
-          jobOrderApi.getExistingModels()
+          jobOrderApi.getExistingModels(),
+          jobOrderApi.getExistingMaterials()
         ]);
-        
+        // Fetch brands from jobOrderApi.getAllSimple
+        const simpleJobOrders = await jobOrderApi.getAllSimple();
+        const brands = [...new Set(simpleJobOrders.map(jo => jo.brand_name).filter(name => name))];
         setExistingColors(colors);
         setExistingSizes(sizes);
         setExistingModels(models);
+        setExistingMaterials(materials);
+        setExistingBrands(brands);
       } catch (error) {
         console.error('Error fetching existing options:', error);
       }
@@ -220,7 +275,8 @@ const JobOrdersPage: React.FC = () => {
   const handleClearFilters = () => {
     setFilters({
       job_order_number: '',
-      model_name: ''
+      model_name: '',
+      brand_name: ''
     });
     setCurrentPage(1);
   };
@@ -229,58 +285,27 @@ const JobOrdersPage: React.FC = () => {
     setCurrentPage(pageNumber);
   };
 
-  const handlePageChangeClosed = (pageNumber: number) => {
-    setCurrentPageClosed(pageNumber);
-  };
+  // Removed closed pagination
 
-  // Refresh closed orders when pagination changes
-  useEffect(() => {
-    if (showClosedOrders) {
-      handleLoadClosedOrders();
-    }
-  }, [currentPageClosed, filters]);
-
-  const handleAddJobOrder = () => {
-    setAddDialogOpen(true);
-  };
-
+  // Fetch closed job orders using summary endpoint
   const handleLoadClosedOrders = async () => {
-    if (showClosedOrders) return; // Already loaded
-    
+    if (showClosedOrders) return;
     try {
       setLoadingClosed(true);
-      const skip = (currentPageClosed - 1) * itemsPerPage;
-      
-      // Fetch closed job orders
-      const closedResponse = await jobOrderApi.getAll({
-        skip,
-        limit: itemsPerPage,
+      // Fetch all closed job orders (no skip/limit)
+      const allClosedResponse = await jobOrderApi.getSummary({
         closed: true,
+        limit: 10000,
         ...Object.fromEntries(
           Object.entries(filters).filter(([_, value]) => value !== '')
         )
       });
-      
-      // Transform closed job orders data
-      const transformedClosedData: JobOrderSummary[] = closedResponse.items.map((jobOrder: JobOrder) => {
-        const totalQuantity = jobOrder.items.reduce((sum, item) => sum + item.quantity, 0);
-        const totalWorkingQuantity = jobOrder.total_working_quantity || 0;
-        const completionPercentage = totalQuantity > 0 ? Math.round((totalWorkingQuantity / totalQuantity) * 100) : 0;
-        
-        return {
-          job_order_id: jobOrder.job_order_id,
-          job_order_number: jobOrder.job_order_number,
-          model_name: jobOrder.model_name || 'Unknown',
-          total_colors: jobOrder.items.length,
-          total_quantity: totalQuantity,
-          total_working_quantity: totalWorkingQuantity,
-          completion_percentage: completionPercentage,
-          closed: jobOrder.closed
-        };
-      });
-      
-      setClosedJobOrders(transformedClosedData);
-      setTotalClosedJobOrders(closedResponse.total);
+      // Sort so that has_issues === true come first
+      const sortedClosedItems = [...allClosedResponse.items].sort((a, b) => (b.has_issues === true ? 1 : 0) - (a.has_issues === true ? 1 : 0));
+      // Apply pagination after sorting
+      const pagedClosedItems = sortedClosedItems.slice((currentPageClosed - 1) * itemsPerPage, currentPageClosed * itemsPerPage);
+      setClosedJobOrders(pagedClosedItems);
+      setTotalClosedJobOrders(sortedClosedItems.length);
       if (!showClosedOrders) {
         setShowClosedOrders(true);
       }
@@ -355,71 +380,7 @@ const JobOrdersPage: React.FC = () => {
       setEditDialogOpen(false);
       setEditingJobOrder(null);
       setEditItems([]);
-      
-      // Refresh both tables
-      const skip = (currentPage - 1) * itemsPerPage;
-      
-      // Fetch updated open job orders
-      const openResponse = await jobOrderApi.getAll({
-        skip,
-        limit: itemsPerPage,
-        closed: false,
-        ...Object.fromEntries(
-          Object.entries(filters).filter(([_, value]) => value !== '')
-        )
-      });
-      
-      // Fetch updated closed job orders
-      const skipClosed = (currentPageClosed - 1) * itemsPerPage;
-      const closedResponse = await jobOrderApi.getAll({
-        skip: skipClosed,
-        limit: itemsPerPage,
-        closed: true,
-        ...Object.fromEntries(
-          Object.entries(filters).filter(([_, value]) => value !== '')
-        )
-      });
-      
-      // Transform open job orders data
-      const transformedOpenData: JobOrderSummary[] = openResponse.items.map((jobOrder: JobOrder) => {
-        const totalQuantity = jobOrder.items.reduce((sum, item) => sum + item.quantity, 0);
-        const totalWorkingQuantity = jobOrder.total_working_quantity || 0;
-        const completionPercentage = totalQuantity > 0 ? Math.round((totalWorkingQuantity / totalQuantity) * 100) : 0;
-        
-        return {
-          job_order_id: jobOrder.job_order_id,
-          job_order_number: jobOrder.job_order_number,
-          model_name: jobOrder.model_name || 'Unknown',
-          total_colors: jobOrder.items.length,
-          total_quantity: totalQuantity,
-          total_working_quantity: totalWorkingQuantity,
-          completion_percentage: completionPercentage,
-          closed: jobOrder.closed
-        };
-      });
-      
-      // Transform closed job orders data
-      const transformedClosedData: JobOrderSummary[] = closedResponse.items.map((jobOrder: JobOrder) => {
-        const totalQuantity = jobOrder.items.reduce((sum, item) => sum + item.quantity, 0);
-        const totalWorkingQuantity = jobOrder.total_working_quantity || 0;
-        const completionPercentage = totalQuantity > 0 ? Math.round((totalWorkingQuantity / totalQuantity) * 100) : 0;
-        
-        return {
-          job_order_id: jobOrder.job_order_id,
-          job_order_number: jobOrder.job_order_number,
-          model_name: jobOrder.model_name || 'Unknown',
-          total_colors: jobOrder.items.length,
-          total_quantity: totalQuantity,
-          total_working_quantity: totalWorkingQuantity,
-          completion_percentage: completionPercentage,
-          closed: jobOrder.closed
-        };
-      });
-      
-      setOpenJobOrders(transformedOpenData);
-      setClosedJobOrders(transformedClosedData);
-      setTotalOpenJobOrders(openResponse.total);
-      setTotalClosedJobOrders(closedResponse.total);
+      await fetchOpenJobOrders(); // Refresh open job orders and loading state
       
       toast({
         title: t('common.success'),
@@ -447,115 +408,10 @@ const JobOrdersPage: React.FC = () => {
     return editItems.reduce((sum, item) => sum + item.quantity, 0);
   };
 
-  const handleToggleClosed = (jobOrder: JobOrderSummary) => {
-    setConfirmingJobOrder(jobOrder);
-    setConfirmAction(jobOrder.closed ? 'reopen' : 'close');
-    setConfirmDialogOpen(true);
-  };
+  // Removed closed/open toggle logic
+  const handleToggleClosed = undefined as never;
 
-  const handleConfirmToggleClosed = async () => {
-    if (!confirmingJobOrder || !confirmAction) return;
-    
-    try {
-      setEditLoading(true);
-      
-      // Toggle the closed status
-      const newClosedStatus = !confirmingJobOrder.closed;
-      
-      // Call the API to update the job order
-      await jobOrderApi.update(confirmingJobOrder.job_order_id, {
-        closed: newClosedStatus
-      });
-      
-      // Refresh open job orders
-      const skip = (currentPage - 1) * itemsPerPage;
-      const openResponse = await jobOrderApi.getAll({
-        skip,
-        limit: itemsPerPage,
-        closed: false,
-        ...Object.fromEntries(
-          Object.entries(filters).filter(([_, value]) => value !== '')
-        )
-      });
-      
-      // Transform and update open job orders
-      const transformedOpenData: JobOrderSummary[] = openResponse.items.map((jobOrder: JobOrder) => {
-        const totalQuantity = jobOrder.items.reduce((sum, item) => sum + item.quantity, 0);
-        const totalWorkingQuantity = jobOrder.total_working_quantity || 0;
-        const completionPercentage = totalQuantity > 0 ? Math.round((totalWorkingQuantity / totalQuantity) * 100) : 0;
-        
-        return {
-          job_order_id: jobOrder.job_order_id,
-          job_order_number: jobOrder.job_order_number,
-          model_name: jobOrder.model_name || 'Unknown',
-          total_colors: jobOrder.items.length,
-          total_quantity: totalQuantity,
-          total_working_quantity: totalWorkingQuantity,
-          completion_percentage: completionPercentage,
-          closed: jobOrder.closed
-        };
-      });
-      
-      setOpenJobOrders(transformedOpenData);
-      setTotalOpenJobOrders(openResponse.total);
-      
-      // If closed orders are loaded, refresh them too
-      if (showClosedOrders) {
-        const skipClosed = (currentPageClosed - 1) * itemsPerPage;
-        const closedResponse = await jobOrderApi.getAll({
-          skip: skipClosed,
-          limit: itemsPerPage,
-          closed: true,
-          ...Object.fromEntries(
-            Object.entries(filters).filter(([_, value]) => value !== '')
-          )
-        });
-        
-        const transformedClosedData: JobOrderSummary[] = closedResponse.items.map((jobOrder: JobOrder) => {
-          const totalQuantity = jobOrder.items.reduce((sum, item) => sum + item.quantity, 0);
-          const totalWorkingQuantity = jobOrder.total_working_quantity || 0;
-          const completionPercentage = totalQuantity > 0 ? Math.round((totalWorkingQuantity / totalQuantity) * 100) : 0;
-          
-          return {
-            job_order_id: jobOrder.job_order_id,
-            job_order_number: jobOrder.job_order_number,
-            model_name: jobOrder.model_name || 'Unknown',
-            total_colors: jobOrder.items.length,
-            total_quantity: totalQuantity,
-            total_working_quantity: totalWorkingQuantity,
-            completion_percentage: completionPercentage,
-            closed: jobOrder.closed
-          };
-        });
-        
-        setClosedJobOrders(transformedClosedData);
-        setTotalClosedJobOrders(closedResponse.total);
-      }
-      
-      toast({
-        title: t('common.success'),
-        description: `Job order ${newClosedStatus ? 'closed' : 'opened'} successfully`,
-      });
-    } catch (error) {
-      console.error('Error toggling job order status:', error);
-      toast({
-        title: t('common.error'),
-        description: 'Failed to update job order status',
-        variant: 'destructive'
-      });
-    } finally {
-      setEditLoading(false);
-      setConfirmDialogOpen(false);
-      setConfirmingJobOrder(null);
-      setConfirmAction(null);
-    }
-  };
-
-  const handleCancelToggleClosed = () => {
-    setConfirmDialogOpen(false);
-    setConfirmingJobOrder(null);
-    setConfirmAction(null);
-  };
+  // Removed closed orders refresh
 
   const handleAddJobOrderItem = () => {
     setNewJobOrder(prev => ({
@@ -582,6 +438,67 @@ const JobOrdersPage: React.FC = () => {
     }));
   };
 
+  // ==================== TABLE-BASED ITEM ENTRY HELPERS ====================
+  const handleAddColorRow = () => {
+    setTableColors(prev => [...prev, '']);
+    setTableQuantities(prev => [...prev, Array(tableSizes.length).fill(0)]);
+  };
+
+  const handleAddSizeColumn = () => {
+    setTableSizes(prev => [...prev, '']);
+    setTableQuantities(prev => prev.map(row => [...row, 0]));
+  };
+
+  const handleUpdateColor = (rowIndex: number, value: string) => {
+    setTableColors(prev => prev.map((c, i) => (i === rowIndex ? value : c)));
+  };
+
+  const handleUpdateSize = (colIndex: number, value: string) => {
+    setTableSizes(prev => prev.map((s, i) => (i === colIndex ? value : s)));
+  };
+
+  const handleRemoveColorRow = (rowIndex: number) => {
+    if (tableColors.length === 1) return;
+    setTableColors(prev => prev.filter((_, i) => i !== rowIndex));
+    setTableQuantities(prev => prev.filter((_, i) => i !== rowIndex));
+  };
+
+  const handleRemoveSizeColumn = (colIndex: number) => {
+    if (tableSizes.length === 1) return;
+    setTableSizes(prev => prev.filter((_, i) => i !== colIndex));
+    setTableQuantities(prev => prev.map(row => row.filter((_, i) => i !== colIndex)));
+  };
+
+  const handleQuantityTableChange = (rowIndex: number, colIndex: number, value: number) => {
+    setTableQuantities(prev => prev.map((row, i) =>
+      i === rowIndex ? row.map((v, j) => (j === colIndex ? value : v)) : row
+    ));
+  };
+
+  const getItemsFromTable = () => {
+    // Merge duplicates (same color & size) by summing their quantities
+    const map = new Map<string, { color_name: string; size_value: string; quantity: number }>();
+    for (let r = 0; r < tableColors.length; r++) {
+      const color = tableColors[r].trim();
+      if (!color) continue;
+      for (let c = 0; c < tableSizes.length; c++) {
+        const size = tableSizes[c].trim();
+        if (!size) continue;
+        const qty = tableQuantities[r]?.[c] || 0;
+        if (qty > 0) {
+          const key = `${color}::${size}`;
+          if (!map.has(key)) {
+            map.set(key, { color_name: color, size_value: size, quantity: qty });
+          } else {
+            map.get(key)!.quantity += qty;
+          }
+        }
+      }
+    }
+    return Array.from(map.values());
+  };
+  // ==================== END TABLE HELPERS ====================
+
   const handleSaveNewJobOrder = async () => {
     // Validate required fields
     if (!newJobOrder.job_order_number.trim()) {
@@ -592,7 +509,14 @@ const JobOrdersPage: React.FC = () => {
       });
       return;
     }
-
+    if (!newJobOrder.brand_name.trim()) {
+      toast({
+        title: t('common.error'),
+        description: 'Brand name is required',
+        variant: 'destructive'
+      });
+      return;
+    }
     if (!newJobOrder.model_name.trim()) {
       toast({
         title: t('common.error'),
@@ -602,98 +526,93 @@ const JobOrdersPage: React.FC = () => {
       return;
     }
 
-    // Validate items
-    for (let i = 0; i < newJobOrder.items.length; i++) {
-      const item = newJobOrder.items[i];
-      if (!item.color_name.trim()) {
+    // Generate items from table data
+    const generatedItems = getItemsFromTable();
+    if (generatedItems.length === 0) {
         toast({
           title: t('common.error'),
-          description: t('jobOrders.validationErrors.colorRequired', { itemNumber: i + 1 }),
+        description: 'Please enter quantities for at least one color/size combination.',
           variant: 'destructive'
         });
         return;
       }
-      if (!item.size_value.trim()) {
-        toast({
-          title: t('common.error'),
-          description: t('jobOrders.validationErrors.sizeRequired', { itemNumber: i + 1 }),
-          variant: 'destructive'
-        });
-        return;
-      }
-      if (item.quantity <= 0) {
-        toast({
-          title: t('common.error'),
-          description: t('jobOrders.validationErrors.quantityRequired', { itemNumber: i + 1 }),
-          variant: 'destructive'
-        });
-        return;
-      }
-    }
 
     try {
       setAddLoading(true);
-      
-      // Create the job order
-      await jobOrderApi.createWithNames({
-        job_order_number: newJobOrder.job_order_number.trim(),
-        model_name: newJobOrder.model_name.trim(),
-        items: newJobOrder.items.map(item => ({
-          color_name: item.color_name.trim(),
-          size_value: item.size_value.trim(),
-          quantity: item.quantity
-        })),
-        closed: false
+      // Build FormData for multipart/form-data
+      const formData = new FormData();
+      formData.append('job_order_number', newJobOrder.job_order_number);
+      formData.append('model_name', newJobOrder.model_name);
+      formData.append('brand_name', newJobOrder.brand_name);
+      formData.append('items', JSON.stringify(generatedItems));
+      // Build materials array from consumption
+      const materialsMap: Record<string, number> = {};
+      const colorTotals = tableQuantities.map(row => row.reduce((s, v) => s + v, 0));
+      tableColors.forEach((color, rowIndex) => {
+        const totalQty = colorTotals[rowIndex] || 0;
+        if (!color || totalQty === 0) return;
+        consumptionCategories.forEach(cat => {
+          const cellKey = `${rowIndex}-${cat.key}`;
+          const cellVal = consumptionValues[cellKey] ?? bulkConsumption[cat.key] ?? 0;
+          if (cellVal && cellVal > 0) {
+            const matName = cat.usesMaterialName ? materialName || cat.label : cat.label;
+            if (!matName) return;
+            const key = `${matName}||${color}`;
+            materialsMap[key] = (materialsMap[key] || 0) + cellVal * totalQty;
+          }
+        });
       });
-
-      // Close dialog and reset form
+      const materialsArray = Object.entries(materialsMap).map(([key, quantity]) => {
+        const [material_name, color_name] = key.split('||');
+        return { material_name, color_name, quantity, consumption: quantity };
+      });
+      formData.append('materials', JSON.stringify(materialsArray));
+      // Append prints JSON
+      formData.append('prints', JSON.stringify(printsFlags));
+      formData.append('notes', jobOrderNotes);
+      if (newJobOrderImage) {
+        formData.append('image', newJobOrderImage);
+      }
+      await api.post('/job-orders/with-names/', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
       setAddDialogOpen(false);
       setNewJobOrder({
         job_order_number: '',
         model_name: '',
+        brand_name: '',
         items: [{ color_name: '', size_value: '', quantity: 1 }]
       });
-
-      // Refresh the open job orders list
-      const skip = (currentPage - 1) * itemsPerPage;
-      const openResponse = await jobOrderApi.getAll({
-        skip,
-        limit: itemsPerPage,
-        closed: false,
-        ...Object.fromEntries(
-          Object.entries(filters).filter(([_, value]) => value !== '')
-        )
+      setNewJobOrderImage(null);
+      setNewJobOrderImagePreview(null);
+      setPrintsFlags({
+        chest: false,
+        back: false,
+        waist: false,
+        right_leg: false,
+        left_leg: false,
+        pocket: false,
+        hood: false,
+        right_arm: false,
+        left_arm: false,
       });
-
-      const transformedOpenData: JobOrderSummary[] = openResponse.items.map((jobOrder: JobOrder) => {
-        const totalQuantity = jobOrder.items.reduce((sum, item) => sum + item.quantity, 0);
-        const totalWorkingQuantity = jobOrder.total_working_quantity || 0;
-        const completionPercentage = totalQuantity > 0 ? Math.round((totalWorkingQuantity / totalQuantity) * 100) : 0;
-        
-        return {
-          job_order_id: jobOrder.job_order_id,
-          job_order_number: jobOrder.job_order_number,
-          model_name: jobOrder.model_name || 'Unknown',
-          total_colors: jobOrder.items.length,
-          total_quantity: totalQuantity,
-          total_working_quantity: totalWorkingQuantity,
-          completion_percentage: completionPercentage,
-          closed: jobOrder.closed
-        };
-      });
-
-      setOpenJobOrders(transformedOpenData);
-      setTotalOpenJobOrders(openResponse.total);
-
+      // Reset table states
+      setTableColors(['']);
+      setTableSizes(['']);
+      setTableQuantities([[0]]);
+      await fetchOpenJobOrders();
       toast({
         title: t('common.success'),
         description: t('jobOrders.jobOrderCreated'),
       });
     } catch (error: any) {
-      console.error('Error creating job order:', error);
+      let errorMsg = error?.response?.data?.detail || error.message || 'Failed to create job order';
+      if (Array.isArray(errorMsg)) {
+        errorMsg = errorMsg.map((e: any) => e.msg || JSON.stringify(e)).join(', ');
+      }
       toast({
         title: t('common.error'),
-        description: error.response?.data?.detail || t('jobOrders.failedToCreate'),
+        description: errorMsg,
         variant: 'destructive'
       });
     } finally {
@@ -706,135 +625,129 @@ const JobOrdersPage: React.FC = () => {
     setNewJobOrder({
       job_order_number: '',
       model_name: '',
+      brand_name: '',
       items: [{ color_name: '', size_value: '', quantity: 1 }]
     });
+    setNewJobOrderImage(null);
+    setNewJobOrderImagePreview(null);
+    setPrintsFlags({
+      chest: false,
+      back: false,
+      waist: false,
+      right_leg: false,
+      left_leg: false,
+      pocket: false,
+      hood: false,
+      right_arm: false,
+      left_arm: false,
+    });
+    // Reset table states
+    setTableColors(['']);
+    setTableSizes(['']);
+    setTableQuantities([[0]]);
   };
 
-  // Table columns configuration
+  // Handler to open the view dialog and fetch tracking data
+  const handleViewJobOrder = async (jobOrder: JobOrderSummary) => {
+    // This function is no longer needed as the view is handled by a Link
+    // Keeping it for now in case it's called elsewhere, but it will be removed.
+  };
+
+  const handleAddJobOrder = () => {
+    setAddDialogOpen(true);
+  };
+
+  // Table columns using summary fields directly
   const columns = [
     {
       key: 'job_order_number',
       header: t('barcode.jobOrderNumber'),
-      width: 200
+      width: 200,
+      render: (item: any) => (
+        <span>{item.job_order_number}</span>
+      )
+    },
+    {
+      key: 'brand_name',
+      header: 'Client (Brand)',
+      width: 200,
+      render: (item: any) => (
+        <span>{item.brand_name || 'Unknown'}</span>
+      ),
+      hidden: isMobile && !showFullView
     },
     {
       key: 'model_name',
       header: t('barcode.model'),
       width: 200,
+      render: (item: any) => (
+        <span>{item.model_name}</span>
+      ),
+      hidden: false
+    },
+    {
+      key: 'total_items',
+      header: 'Total Items',
+      width: 150,
+      render: (item: any) => (
+        <Badge variant="secondary" className="bg-blue-100 text-blue-800">
+          {item.total_items}
+        </Badge>
+      ),
       hidden: isMobile && !showFullView
     },
     {
-      key: 'total_colors',
-      header: 'Total Colors',
-      width: 150,
-      hidden: isMobile && !showFullView,
-      render: (item: JobOrderSummary) => (
-        <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-          {item.total_colors}
-        </Badge>
-      )
-    },
-    {
-      key: 'total_quantity',
+      key: 'total_expected_quantity',
       header: t('barcode.quantity'),
       width: 150,
-      render: (item: JobOrderSummary) => (
-        <span className="font-medium text-gray-900">{item.total_quantity.toLocaleString()}</span>
-      )
+      render: (item: any) => (
+        <span>{item.total_expected_quantity?.toLocaleString()}</span>
+      ),
+      hidden: isMobile && !showFullView
     },
     {
-      key: 'total_working_quantity',
+      key: 'total_produced_quantity',
       header: t('barcode.workingQuantity'),
       width: 150,
-      render: (item: JobOrderSummary) => (
-        <span className="font-medium text-green-600">{item.total_working_quantity.toLocaleString()}</span>
-      )
+      render: (item: any) => (
+        <span>{item.total_produced_quantity?.toLocaleString()}</span>
+      ),
+      hidden: isMobile && !showFullView
     },
     {
       key: 'completion_percentage',
-      header: t('barcode.progress'),
-      width: 150,
-      render: (item: JobOrderSummary) => {
-        const percentage = item.completion_percentage;
-        const isCompleted = percentage >= 100;
-        const isOverQuantity = item.total_working_quantity > item.total_quantity;
-        const isBelowThreshold = percentage < 97; // Below 97% (3% below 100%)
-        
-        // Determine color based on conditions
-        let barColor = 'bg-blue-500'; // Default blue
-        let textColor = 'text-gray-600';
-        
-        if (isOverQuantity) {
-          barColor = 'bg-red-500'; // Red for over quantity
-          textColor = 'text-red-600';
-        } else if (isBelowThreshold) {
-          barColor = 'bg-red-500'; // Red for below threshold
-          textColor = 'text-red-600';
-        } else if (isCompleted) {
-          barColor = 'bg-green-500'; // Green for completed
-          textColor = 'text-green-600';
-        }
-        
-        return (
-          <div className="flex items-center gap-2">
-            <div className="flex-1 bg-gray-200 rounded-full h-2">
-              <div 
-                className={`h-2 rounded-full transition-all duration-300 ${barColor}`}
-                style={{ width: `${Math.min(percentage, 100)}%` }}
-              />
-            </div>
-            <span className={`text-sm font-medium ${textColor}`}>
-              {isCompleted && !isOverQuantity ? (
-                <CheckCircle className="w-4 h-4" />
-              ) : (
-                `${percentage}%`
-              )}
-            </span>
-          </div>
-        );
-      }
+      header: 'Completion %',
+      width: 120,
+      render: (item: any) => (
+        <span>{item.completion_percentage}%</span>
+      ),
+      hidden: isMobile && !showFullView
     },
     {
-      key: 'closed',
-      header: 'Status',
-      width: 120,
-      hidden: isMobile && !showFullView,
-      render: (item: JobOrderSummary) => (
-        <Badge 
-          variant={item.closed ? "secondary" : "default"}
-          className={item.closed ? "bg-gray-100 text-gray-800" : "bg-green-100 text-green-800"}
-        >
-          {item.closed ? 'Closed' : 'Open'}
-        </Badge>
-      )
+      key: 'has_issues',
+      header: 'Issues',
+      width: 80,
+      render: (item: any) => item.has_issues ? <span style={{color: 'red'}}>!</span> : null,
+      hidden: isMobile && !showFullView
     },
     {
       key: 'actions',
       header: t('common.actions'),
-      width: 200,
-      hidden: isMobile && !showFullView,
+      width: 120,
       render: (item: JobOrderSummary) => (
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleEditJobOrder(item)}
-            disabled={editLoading}
-          >
-            <Edit className="w-4 h-4 mr-1" />
-            Edit
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => handleToggleClosed(item)}
-            disabled={editLoading}
-            className={item.closed ? "!bg-orange-600 !hover:bg-orange-700 !text-white" : "!bg-blue-600 !hover:bg-blue-700 !text-white"}
-          >
-            {item.closed ? 'Reopen' : 'Close'}
-          </Button>
+        <div className="flex gap-1">
+          <Link to={`/job-orders/${item.job_order_id}`} title="View Production Details">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 hover:bg-gray-100"
+            >
+              <Eye className="w-4 h-4 text-gray-600" />
+            </Button>
+          </Link>
         </div>
-      )
+      ),
+      hidden: false
     }
   ];
 
@@ -863,10 +776,11 @@ const JobOrdersPage: React.FC = () => {
               Clear Filters
             </Button>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
             <div className="form-group">
               <label htmlFor="job_order_number" className="text-sm font-medium text-gray-700">Job Order Number</label>
               <SearchableDropdown
+                label="Job Order"
                 options={jobOrderOptions}
                 value={filters.job_order_number}
                 onChange={(value) => handleFilterChange('job_order_number', value)}
@@ -877,6 +791,7 @@ const JobOrdersPage: React.FC = () => {
             <div className="form-group">
               <label htmlFor="model_name" className="text-sm font-medium text-gray-700">Model Name</label>
               <SearchableDropdown
+                label="Model"
                 options={modelOptions}
                 value={filters.model_name}
                 onChange={(value) => handleFilterChange('model_name', value)}
@@ -885,10 +800,22 @@ const JobOrdersPage: React.FC = () => {
             </div>
             
             <div className="form-group">
+              <label htmlFor="brand_name" className="text-sm font-medium text-gray-700">Brand Name</label>
+              <SearchableDropdown
+                label="Brand"
+                options={brandOptions}
+                value={filters.brand_name}
+                onChange={(value) => handleFilterChange('brand_name', value)}
+                placeholder="Search brand name..."
+              />
+            </div>
+            
+            <div className="form-group">
               <label className="text-sm font-medium text-gray-700">Actions</label>
               <Button
                 onClick={handleAddJobOrder}
-                className="w-full bg-green-600 hover:bg-green-700 text-white font-medium"
+                className="w-full text-white font-medium"
+                style={{ backgroundColor: 'rgb(17, 139, 80)', borderColor: 'rgb(17, 139, 80)', color: '#fff', fontWeight: 500 }}
               >
                 Add Job Order
               </Button>
@@ -910,187 +837,76 @@ const JobOrdersPage: React.FC = () => {
         )}
         
         {/* Open Job Orders Section */}
-        <div className="mb-8">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-green-700">Open Job Orders</h3>
-            <div className="text-sm text-gray-600">
-              Showing {openJobOrders.length} of {totalOpenJobOrders} open job orders
-            </div>
-          </div>
-          
-          {loading ? (
-            <div className="text-center py-10">
-              <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-              <p className="text-gray-600">Loading open job orders...</p>
-            </div>
-          ) : (
-            <>
-              <div className="table-container mb-4 w-full">
-                <div className="overflow-x-auto w-full">
-                  {openJobOrders.length === 0 ? (
-                    <div className="text-center py-4 text-gray-500">
-                      {hasActiveFilters 
-                        ? "No open job orders match your current filters."
-                        : "No open job orders found."
-                      }
-                    </div>
-                  ) : (
-                    <VirtualizedTable
-                      columns={columns}
-                      data={openJobOrders}
-                      height={400}
-                      rowHeight={48}
-                      showAllColumns={showFullView}
-                    />
-                  )}
-                </div>
-              </div>
-              {totalPagesOpen > 0 && (
-                <div className="flex justify-center mt-4">
-                  <nav className="flex items-center space-x-2">
-                    <button
-                      onClick={() => handlePageChange(currentPage - 1)}
-                      disabled={currentPage === 1}
-                      className="px-3 py-1 rounded border disabled:opacity-50"
-                    >
-                      {t('common.previous')}
-                    </button>
-                    {Array.from({ length: Math.min(5, totalPagesOpen) }, (_, i) => {
-                      let pageNumber;
-                      if (totalPagesOpen <= 5) {
-                        pageNumber = i + 1;
-                      } else if (currentPage <= 3) {
-                        pageNumber = i + 1;
-                      } else if (currentPage >= totalPagesOpen - 2) {
-                        pageNumber = totalPagesOpen - 4 + i;
-                      } else {
-                        pageNumber = currentPage - 2 + i;
-                      }
-                      return (
-                        <button
-                          key={pageNumber}
-                          onClick={() => handlePageChange(pageNumber)}
-                          className={`px-3 py-1 rounded border ${currentPage === pageNumber ? 'bg-green text-white' : ''}`}
-                        >
-                          {pageNumber}
-                        </button>
-                      );
-                    })}
-                    <button
-                      onClick={() => handlePageChange(currentPage + 1)}
-                      disabled={currentPage === totalPagesOpen}
-                      className="px-3 py-1 rounded border disabled:opacity-50"
-                    >
-                      {t('common.next')}
-                    </button>
-                  </nav>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Load Closed Orders Button */}
-        {!showClosedOrders && (
+        {showOpenOrders && (
           <div className="mb-8">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-gray-700">Closed Job Orders</h3>
-              <Button
-                onClick={handleLoadClosedOrders}
-                disabled={loadingClosed}
-                variant="outline"
-                className="text-gray-600 hover:text-gray-800"
-              >
-                {loadingClosed ? 'Loading...' : 'Load Closed Orders'}
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Mobile Full View Toggle for Closed Job Orders */}
-        {isMobile && showClosedOrders && (
-          <div className="mb-4">
-            <Button
-              variant="outline"
-              onClick={() => setShowFullViewClosed(!showFullViewClosed)}
-              className="w-full"
-            >
-              {showFullViewClosed ? t('barcodeManagement.compactView') : t('barcodeManagement.fullView')} - Closed Orders
-            </Button>
-          </div>
-        )}
-
-        {/* Closed Job Orders Section */}
-        {showClosedOrders && (
-          <div className="mb-8">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-gray-700">Closed Job Orders</h3>
+              <h3 className="text-lg font-semibold text-green-700">Open Job Orders</h3>
               <div className="text-sm text-gray-600">
-                Showing {closedJobOrders.length} of {totalClosedJobOrders} closed job orders
+                Showing {openJobOrders.length} of {totalOpenJobOrders} open job orders
               </div>
             </div>
-            
-            {loadingClosed ? (
+            {loading ? (
               <div className="text-center py-10">
                 <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-                <p className="text-gray-600">Loading closed job orders...</p>
+                <p className="text-gray-600">Loading open job orders...</p>
               </div>
             ) : (
               <>
                 <div className="table-container mb-4 w-full">
                   <div className="overflow-x-auto w-full">
-                    {closedJobOrders.length === 0 ? (
+                    {openJobOrders.length === 0 ? (
                       <div className="text-center py-4 text-gray-500">
                         {hasActiveFilters 
-                          ? "No closed job orders match your current filters."
-                          : "No closed job orders found."
+                          ? "No open job orders match your current filters."
+                          : "No open job orders found."
                         }
                       </div>
                     ) : (
                       <VirtualizedTable
                         columns={columns}
-                        data={closedJobOrders}
-                        height={400}
+                        data={openJobOrders}
+                        height={700}
                         rowHeight={48}
-                        showAllColumns={showFullViewClosed}
+                        showAllColumns={showFullView}
+                        rowClassName={(index) => index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}
                       />
                     )}
                   </div>
                 </div>
-                {totalPagesClosed > 0 && (
+                {totalPagesOpen > 0 && (
                   <div className="flex justify-center mt-4">
                     <nav className="flex items-center space-x-2">
                       <button
-                        onClick={() => handlePageChangeClosed(currentPageClosed - 1)}
-                        disabled={currentPageClosed === 1}
+                        onClick={() => handlePageChange(currentPage - 1)}
+                        disabled={currentPage === 1}
                         className="px-3 py-1 rounded border disabled:opacity-50"
                       >
                         {t('common.previous')}
                       </button>
-                      {Array.from({ length: Math.min(5, totalPagesClosed) }, (_, i) => {
+                      {Array.from({ length: Math.min(5, totalPagesOpen) }, (_, i) => {
                         let pageNumber;
-                        if (totalPagesClosed <= 5) {
+                        if (totalPagesOpen <= 5) {
                           pageNumber = i + 1;
-                        } else if (currentPageClosed <= 3) {
+                        } else if (currentPage <= 3) {
                           pageNumber = i + 1;
-                        } else if (currentPageClosed >= totalPagesClosed - 2) {
-                          pageNumber = totalPagesClosed - 4 + i;
+                        } else if (currentPage >= totalPagesOpen - 2) {
+                          pageNumber = totalPagesOpen - 4 + i;
                         } else {
-                          pageNumber = currentPageClosed - 2 + i;
+                          pageNumber = currentPage - 2 + i;
                         }
                         return (
                           <button
                             key={pageNumber}
-                            onClick={() => handlePageChangeClosed(pageNumber)}
-                            className={`px-3 py-1 rounded border ${currentPageClosed === pageNumber ? 'bg-green text-white' : ''}`}
+                            onClick={() => handlePageChange(pageNumber)}
+                            className={`px-3 py-1 rounded border ${currentPage === pageNumber ? 'bg-green text-white' : ''}`}
                           >
                             {pageNumber}
                           </button>
                         );
                       })}
                       <button
-                        onClick={() => handlePageChangeClosed(currentPageClosed + 1)}
-                        disabled={currentPageClosed === totalPagesClosed}
+                        onClick={() => handlePageChange(currentPage + 1)}
+                        disabled={currentPage === totalPagesOpen}
                         className="px-3 py-1 rounded border disabled:opacity-50"
                       >
                         {t('common.next')}
@@ -1102,11 +918,13 @@ const JobOrdersPage: React.FC = () => {
             )}
           </div>
         )}
+
+      {/* Close bg-white container */}
       </div>
 
       {/* Edit Job Order Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="w-[90vw] max-w-[90vw] h-[90vh] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               Edit Job Order: {editingJobOrder?.job_order_number}
@@ -1181,37 +999,9 @@ const JobOrdersPage: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Confirmation Dialog for Close/Reopen */}
-      <AlertDialog open={confirmDialogOpen} onOpenChange={setConfirmDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirmAction === 'close' ? 'Close Job Order' : 'Reopen Job Order'}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirmAction === 'close' 
-                ? `Are you sure you want to close job order "${confirmingJobOrder?.job_order_number}"? This will mark it as completed.`
-                : `Are you sure you want to reopen job order "${confirmingJobOrder?.job_order_number}"? This will mark it as active again.`
-              }
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleCancelToggleClosed}>
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={handleConfirmToggleClosed}
-              className={confirmAction === 'close' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-600 hover:bg-orange-700'}
-            >
-              {confirmAction === 'close' ? 'Close Job Order' : 'Reopen Job Order'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       {/* Add Job Order Dialog */}
       <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="w-[90vw] max-w-[90vw] h-[90vh] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t('jobOrders.addNewJobOrder')}</DialogTitle>
           </DialogHeader>
@@ -1230,6 +1020,16 @@ const JobOrdersPage: React.FC = () => {
                 />
               </div>
               <div className="space-y-2">
+                <Label htmlFor="brand-name">Brand Name *</Label>
+                <EditableDropdown
+                  value={newJobOrder.brand_name}
+                  onValueChange={(value) => setNewJobOrder(prev => ({ ...prev, brand_name: value }))}
+                  options={existingBrands}
+                  placeholder={t('jobOrders.brandName')}
+                  disabled={addLoading}
+                />
+              </div>
+              <div className="space-y-2">
                 <Label htmlFor="model-name">{t('jobOrders.modelName')} *</Label>
                 <EditableDropdown
                   value={newJobOrder.model_name}
@@ -1239,78 +1039,221 @@ const JobOrdersPage: React.FC = () => {
                   disabled={addLoading}
                 />
               </div>
+              {/* Material Name Input */}
+              <div className="space-y-2">
+                <Label htmlFor="material-name-input">Material Name</Label>
+                <EditableDropdown
+                  value={materialName}
+                  onValueChange={(val) => setMaterialName(val)}
+                  options={existingMaterials}
+                  placeholder="Material Name"
+                  disabled={addLoading}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="job-order-image">Job Order Image (optional)</Label>
+                <Input
+                  id="job-order-image"
+                  type="file"
+                  accept="image/*"
+                  onChange={e => {
+                    const file = e.target.files?.[0] || null;
+                    setNewJobOrderImage(file);
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onload = ev => setNewJobOrderImagePreview(ev.target?.result as string);
+                      reader.readAsDataURL(file);
+                    } else {
+                      setNewJobOrderImagePreview(null);
+                    }
+                  }}
+                  disabled={addLoading}
+                />
+                {newJobOrderImagePreview && (
+                  <img src={newJobOrderImagePreview} alt="Preview" className="mt-2 max-h-40 rounded shadow" />
+                )}
+              </div>
             </div>
 
             {/* Job Order Items */}
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <h3 className="text-lg font-medium">{t('jobOrders.jobOrderItems')}</h3>
-                <Button
-                  type="button"
-                  onClick={handleAddJobOrderItem}
-                  disabled={addLoading}
-                  variant="outline"
-                  size="sm"
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  {t('jobOrders.addItem')}
+                <div className="flex gap-2">
+                  <Button type="button" onClick={handleAddColorRow} disabled={addLoading} variant="outline" size="sm">
+                    <Plus className="w-4 h-4 mr-1" /> Add Color Row
                 </Button>
-              </div>
-              
-              <div className="space-y-3">
-                {newJobOrder.items.map((item, index) => (
-                  <div key={index} className="border rounded-lg p-4 space-y-3">
-                    <div className="flex justify-between items-center">
-                      <h4 className="font-medium">{t('jobOrders.item')} {index + 1}</h4>
-                      {newJobOrder.items.length > 1 && (
-                        <Button
-                          type="button"
-                          onClick={() => handleRemoveJobOrderItem(index)}
-                          disabled={addLoading}
-                          variant="outline"
-                          size="sm"
-                          className="text-red-600 hover:text-red-700"
-                        >
-                          <X className="w-4 h-4" />
+                  <Button type="button" onClick={handleAddSizeColumn} disabled={addLoading} variant="outline" size="sm">
+                    <Plus className="w-4 h-4 mr-1" /> Add Size Column
                         </Button>
-                      )}
                     </div>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor={`color-${index}`}>{t('jobOrders.color')} *</Label>
+              </div>
+              <div className="min-h-[30vh] max-h-[50vh] overflow-auto">
+                <table className="min-w-full border text-sm">
+                  <thead>
+                    <tr>
+                      <th className="border p-2 text-left min-w-[8rem]">Color / Size</th>
+                      {tableSizes.map((size, colIndex) => (
+                        <th key={colIndex} className="border p-2 min-w-[6rem]">
+                          <div className="flex items-center">
                         <EditableDropdown
-                          value={item.color_name}
-                          onValueChange={(value) => handleUpdateJobOrderItem(index, 'color_name', value)}
-                          options={existingColors}
-                          placeholder={t('jobOrders.color')}
+                              value={size}
+                              onValueChange={(value) => handleUpdateSize(colIndex, value)}
+                              options={existingSizes}
                           disabled={addLoading}
                         />
+                            {tableSizes.length > 1 && (
+                              <button type="button" onClick={() => handleRemoveSizeColumn(colIndex)} disabled={addLoading}>
+                                <X className="w-3 h-3 ml-1 text-red-600" />
+                              </button>
+                            )}
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor={`size-${index}`}>{t('jobOrders.size')} *</Label>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tableColors.map((color, rowIndex) => (
+                      <tr key={rowIndex}>
+                        <td className="border p-2 min-w-[8rem]">
+                          <div className="flex items-center">
                         <EditableDropdown
-                          value={item.size_value}
-                          onValueChange={(value) => handleUpdateJobOrderItem(index, 'size_value', value)}
-                          options={existingSizes}
-                          placeholder={t('jobOrders.size')}
+                              value={color}
+                              onValueChange={(value) => handleUpdateColor(rowIndex, value)}
+                              options={existingColors}
                           disabled={addLoading}
                         />
+                            {tableColors.length > 1 && (
+                              <button type="button" onClick={() => handleRemoveColorRow(rowIndex)} disabled={addLoading}>
+                                <X className="w-3 h-3 ml-1 text-red-600" />
+                              </button>
+                            )}
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor={`quantity-${index}`}>{t('jobOrders.quantity')} *</Label>
+                        </td>
+                        {tableSizes.map((_, colIndex) => (
+                          <td key={colIndex} className="border p-1 min-w-[6rem]">
                         <Input
-                          id={`quantity-${index}`}
                           type="number"
-                          min="1"
-                          value={item.quantity}
-                          onChange={(e) => handleUpdateJobOrderItem(index, 'quantity', parseInt(e.target.value) || 1)}
-                          placeholder={t('jobOrders.quantity')}
+                              min="0"
+                              value={tableQuantities[rowIndex]?.[colIndex] ?? 0}
+                              onChange={(e) => handleQuantityTableChange(rowIndex, colIndex, parseInt(e.target.value) || 0)}
                           disabled={addLoading}
+                              className="w-24"
                         />
-                      </div>
-                    </div>
-                  </div>
+                          </td>
+                ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Job Order Notes */}
+            <div className="mt-4">
+              <Label htmlFor="order-notes">Notes</Label>
+              <Textarea
+                id="order-notes"
+                value={jobOrderNotes}
+                onChange={e => setJobOrderNotes(e.target.value)}
+                placeholder="Enter any notes for this job order"
+                disabled={addLoading}
+              />
+            </div>
+
+            {/* Consumption Table */}
+            <div className="space-y-4 mt-6">
+              <h3 className="text-lg font-medium">Material Consumption</h3>
+              <div className="overflow-auto border rounded-md">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50">
+                      <th className="border p-2 min-w-[6rem] text-left">Color</th>
+                      {consumptionCategories.map(cat => (
+                        <th key={cat.key} className="border p-2 min-w-[8rem] text-center space-y-1">
+                          {/* Bulk input */}
+                          <Input
+                            type="number"
+                            step="0.001"
+                            value={bulkConsumption[cat.key] ?? ''}
+                            onChange={e => handleBulkConsumptionChange(cat.key, parseFloat(e.target.value) || 0)}
+                            placeholder={cat.label}
+                            className="text-center"
+                            disabled={addLoading}
+                          />
+                          <div className="mt-1 text-xs text-gray-500">{cat.label}</div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tableColors.map((color, rowIndex) => (
+                      <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="border p-2">{color}</td>
+                        {consumptionCategories.map(cat => {
+                          const cellKey = `${rowIndex}-${cat.key}`;
+                          return (
+                            <td key={cat.key} className="border p-1 text-center">
+                              <Input
+                                type="number"
+                                step="0.001"
+                                value={consumptionValues[cellKey] ?? ''}
+                                onChange={e => handleConsumptionCellChange(rowIndex, cat.key, parseFloat(e.target.value) || 0)}
+                                placeholder="-"
+                                className="w-24 text-center"
+                                disabled={addLoading}
+                              />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Add new consumption column */}
+            <div className="flex items-center gap-2 mt-4">
+              <Input
+                value={newCategoryName}
+                onChange={e => setNewCategoryName(e.target.value)}
+                placeholder="Add consumption column"
+                className="w-64"
+                disabled={addLoading}
+              />
+              <Button type="button" onClick={handleAddCategory} disabled={addLoading || !newCategoryName.trim()} size="sm">
+                <Plus className="w-4 h-4 mr-1" /> Add Column
+              </Button>
+            </div>
+
+            {/* Prints Flags */}
+            <div className="space-y-4 mt-6">
+              <Label>Prints (select applicable positions)</Label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {(
+                  [
+                    ['chest', 'Chest'],
+                    ['back', 'Back'],
+                    ['waist', 'Waist'],
+                    ['right_leg', 'Right Leg'],
+                    ['left_leg', 'Left Leg'],
+                    ['pocket', 'Pocket'],
+                    ['hood', 'Hood'],
+                    ['right_arm', 'Right Arm'],
+                    ['left_arm', 'Left Arm'],
+                  ] as [keyof typeof printsFlags, string][]
+                ).map(([key, label]) => (
+                  <label key={key} className="inline-flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      className="form-checkbox h-5 w-5 text-green-600"
+                      checked={printsFlags[key]}
+                      onChange={() => setPrintsFlags(prev => ({ ...prev, [key]: !prev[key] }))}
+                      disabled={addLoading}
+                    />
+                    <span>{label}</span>
+                  </label>
                 ))}
               </div>
             </div>
@@ -1320,7 +1263,7 @@ const JobOrdersPage: React.FC = () => {
               <div className="flex justify-between items-center">
                 <span className="font-medium text-lg">{t('jobOrders.totalQuantityLabel')}</span>
                 <span className="font-bold text-xl text-green-600">
-                  {newJobOrder.items.reduce((sum, item) => sum + item.quantity, 0).toLocaleString()}
+                  {totalTableQuantity.toLocaleString()}
                 </span>
               </div>
             </div>

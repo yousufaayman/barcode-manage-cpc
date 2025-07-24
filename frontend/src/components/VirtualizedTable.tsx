@@ -19,6 +19,7 @@ interface VirtualizedTableProps {
   showAllColumns?: boolean;
   onSelectAll?: () => void;
   isAllSelected?: boolean;
+  rowClassName?: ((index: number) => string) | string;
 }
 
 const VirtualizedTable: React.FC<VirtualizedTableProps> = ({
@@ -30,7 +31,8 @@ const VirtualizedTable: React.FC<VirtualizedTableProps> = ({
   selectedItems,
   showAllColumns,
   onSelectAll,
-  isAllSelected
+  isAllSelected,
+  rowClassName
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [visibleRange, setVisibleRange] = useState({ start: 0, end: 0 });
@@ -106,12 +108,12 @@ const VirtualizedTable: React.FC<VirtualizedTableProps> = ({
       <div className="min-w-full">
         {/* Header */}
         <div className="sticky top-0 z-10 bg-gray-50">
-          <div className="flex w-full border-b">
+          <div className="flex w-full border-b h-full min-h-full bg-inherit">
             {visibleColumns.map((column, index) => (
               <div
                 key={column.key}
-                style={columnStyles[index]}
-                className="px-4 py-2 font-medium text-sm whitespace-nowrap overflow-hidden text-ellipsis"
+                style={{ ...columnStyles[index], backgroundColor: 'inherit' }}
+                className="px-4 py-2 font-medium text-sm whitespace-nowrap overflow-hidden text-ellipsis h-full min-h-full bg-inherit"
               >
                 {column.key === 'batch_id' && onSelectAll ? (
                   <input
@@ -144,6 +146,7 @@ const VirtualizedTable: React.FC<VirtualizedTableProps> = ({
               <div
                 key={itemKey}
                 className={cn(
+                  typeof rowClassName === 'function' ? rowClassName(actualIndex) : (typeof rowClassName === 'string' ? rowClassName : ''),
                   "flex w-full border-b hover:bg-gray-50",
                   isSelected && "bg-lime bg-opacity-30"
                 )}
@@ -153,8 +156,8 @@ const VirtualizedTable: React.FC<VirtualizedTableProps> = ({
                 {visibleColumns.map((column, colIndex) => (
                   <div
                     key={column.key}
-                    style={columnStyles[colIndex]}
-                    className="px-4 py-2 text-sm whitespace-nowrap overflow-hidden text-ellipsis"
+                    style={{ ...columnStyles[colIndex], backgroundColor: 'inherit' }}
+                    className="px-4 py-2 whitespace-nowrap overflow-hidden text-ellipsis h-full min-h-full bg-inherit"
                   >
                     {column.render ? column.render(item) : (typeof item[column.key] === 'object' ? JSON.stringify(item[column.key]) : item[column.key])}
                   </div>

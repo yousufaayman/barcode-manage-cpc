@@ -29,6 +29,14 @@ ALTER TABLE `batches`
 MODIFY COLUMN `job_order_id` int unsigned NOT NULL;
 
 -- ============================================================================
+-- ADD NOTES COLUMN TO BATCHES TABLE
+-- ============================================================================
+
+-- Add a notes column to store optional comments about a batch
+ALTER TABLE `batches`
+ADD COLUMN `notes` TEXT NULL AFTER `job_order_id`;
+
+-- ============================================================================
 -- UPDATE ARCHIVED BATCHES TABLE AS WELL
 -- ============================================================================
 

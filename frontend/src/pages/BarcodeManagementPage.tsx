@@ -6,7 +6,6 @@ import { useTranslation } from 'react-i18next';
 import api from '../services/api';
 import { cn } from '../lib/utils';
 import { Label } from '../components/ui/label';
-import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/select';
 import VirtualizedTable from '../components/VirtualizedTable';
@@ -18,13 +17,17 @@ interface Barcode {
   job_order_id: number;
   job_order_number?: string;
   barcode: string;
+  brand_id?: number;
   brand_name: string;
+  model_id?: number;
   model_name: string;
+  size_id?: number;
   size_value: string;
+  color_id?: number;
   color_name: string;
   quantity: number;
   layers: number;
-  serial: number;
+  serial: number | string;
   phase_name: string;
   status: 'Pending' | 'In Progress' | 'Completed';
   last_updated_at: string;
@@ -89,13 +92,15 @@ const BarcodeManagementPage: React.FC = () => {
   };
 
   const [filters, setFilters] = useState(getInitialFilters());
-  const [printCount, setPrintCount] = useState<number>(1);
+  // Removed printCount state; printing will always use a count of 1.
   const [isPrinting, setIsPrinting] = useState(false);
   const [printers, setPrinters] = useState<string[]>([]);
   const [selectedPrinter, setSelectedPrinter] = useState<string>("");
   const [totalBarcodes, setTotalBarcodes] = useState(0);
   
-  // Temporary state for edited values
+  // ---
+  // Only phase_name, status, and quantity are editable for a batch. Brand and model are determined by the related JobOrder and cannot be edited here.
+  // ---
   const [editValues, setEditValues] = useState({
     phase_name: '',
     status: '' as 'Pending' | 'In Progress' | 'Completed',
@@ -410,24 +415,23 @@ const BarcodeManagementPage: React.FC = () => {
 
       await api.post('/barcodes/print', {
         barcodes: barcodesToPrint,
-        count: printCount,
+        count: 1,
         printer_name: selectedPrinter
       });
 
       const successMessage = t('barcodeManagement.successfullyPrinted', {
         count: selectedBarcodes.length,
-        times: printCount,
+        times: 1,
         printer: selectedPrinter
       })
       .replace('{count}', String(selectedBarcodes.length))
-      .replace('{times}', String(printCount))
+      .replace('{times}', '1')
       .replace('{printer}', selectedPrinter);
 
       alert(successMessage);
 
-      // Reset selections and print count
+      // Reset selections
       setSelectedBarcodes([]);
-      setPrintCount(1);
     } catch (error) {
       console.error('Error printing barcodes:', error);
       alert(t('barcodeManagement.failedToPrint'));
@@ -452,16 +456,16 @@ const BarcodeManagementPage: React.FC = () => {
         />
       )
     },
-    { key: 'barcode', header: t('barcode.barcode'), width: 150 },
-    { key: 'brand_name', header: t('bulkBarcode.brand'), width: 120 },
-    { key: 'model_name', header: t('bulkBarcode.model'), width: 120 },
-    { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 120 },
-    { key: 'size_value', header: t('bulkBarcode.size'), width: 100, hidden: !showFullView },
-    { key: 'color_name', header: t('bulkBarcode.color'), width: 100, hidden: !showFullView },
+    { key: 'barcode', header: t('barcode.barcode'), width: 110 },
+    { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 150 },
+    { key: 'brand_name', header: t('bulkBarcode.brand'), width: 70 },
+    { key: 'model_name', header: t('bulkBarcode.model'), width: 100 },
+    { key: 'size_value', header: t('bulkBarcode.size'), width: 70, hidden: !showFullView },
+    { key: 'color_name', header: t('bulkBarcode.color'), width: 110, hidden: !showFullView },
     {
       key: 'quantity',
       header: t('barcode.quantity'),
-      width: 100,
+      width: 70,
       hidden: !showFullView,
       render: (item: Barcode) => (
         editingId === item.batch_id ? (
@@ -481,21 +485,21 @@ const BarcodeManagementPage: React.FC = () => {
     {
       key: 'layers',
       header: t('bulkBarcode.layers'),
-      width: 100,
+      width: 60,
       hidden: !showFullView,
       render: (item: Barcode) => item.layers
     },
     {
       key: 'serial',
       header: t('bulkBarcode.serial'),
-      width: 100,
+      width: 80,
       hidden: !showFullView,
       render: (item: Barcode) => item.serial
     },
     {
       key: 'phase_name',
       header: t('barcode.phase'),
-      width: 120,
+      width: 100,
       render: (item: Barcode) => (
         editingId === item.batch_id ? (
           <select
@@ -522,7 +526,7 @@ const BarcodeManagementPage: React.FC = () => {
     {
       key: 'status',
       header: t('common.status'),
-      width: 120,
+      width: 100,
       render: (item: Barcode) => (
         editingId === item.batch_id ? (
           <select
@@ -838,63 +842,52 @@ const BarcodeManagementPage: React.FC = () => {
               .replace('{total}', String(totalBarcodes))}
           </div>
           
-          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
-            {/* Print Controls */}
-            <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
-              <div className="flex items-center space-x-2">
-                <Label htmlFor="printCount">{t('barcodeManagement.printCount')}</Label>
-                <Input
-                  id="printCount"
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={printCount}
-                  onChange={(e) => setPrintCount(Math.max(1, Math.min(100, parseInt(e.target.value) || 1)))}
-                  className="w-20"
-                  disabled={isPrinting}
-                />
-              </div>
-              <div className="flex items-center space-x-2">
-                <Label htmlFor="printer">{t('barcodeManagement.printer')}</Label>
-                <Select
-                  value={selectedPrinter}
-                  onValueChange={setSelectedPrinter}
-                  disabled={isPrinting}
+          {/* Print Controls - Only for Admins */}
+          {user?.role === 'Admin' && (
+            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+              <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+                <div className="flex items-center space-x-2">
+                  <Label htmlFor="printer">{t('barcodeManagement.printer')}</Label>
+                  <Select
+                    value={selectedPrinter}
+                    onValueChange={setSelectedPrinter}
+                    disabled={isPrinting}
+                  >
+                    <SelectTrigger className="w-[200px]">
+                      <SelectValue placeholder={t('barcodeManagement.selectPrinter')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {printers.map((printer) => (
+                        <SelectItem key={printer} value={printer}>
+                          {printer}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  onClick={handlePrintSelected}
+                  disabled={isPrinting || selectedBarcodes.length === 0 || !selectedPrinter}
+                  className={cn(
+                    "bg-blue-600 hover:bg-blue-700 text-white",
+                    isPrinting && "opacity-50 cursor-not-allowed"
+                  )}
                 >
-                  <SelectTrigger className="w-[200px]">
-                    <SelectValue placeholder={t('barcodeManagement.selectPrinter')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {printers.map((printer) => (
-                      <SelectItem key={printer} value={printer}>
-                        {printer}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  {isPrinting ? (
+                    <span className="flex items-center">
+                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      {t('barcodeManagement.printing')}
+                    </span>
+                  ) : (
+                    t('barcodeManagement.print')
+                  )}
+                </Button>
               </div>
-              <Button
-                onClick={handlePrintSelected}
-                disabled={isPrinting || selectedBarcodes.length === 0 || !selectedPrinter}
-                className={cn(
-                  "bg-blue-600 hover:bg-blue-700 text-white",
-                  isPrinting && "opacity-50 cursor-not-allowed"
-                )}
-              >
-                {isPrinting ? (
-                  <span className="flex items-center">
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    {t('barcodeManagement.printing')}
-                  </span>
-                ) : (
-                  t('barcodeManagement.print')
-                )}
-              </Button>
             </div>
-          </div>
+          )}
         </div>
         
         {/* Barcodes Table */}

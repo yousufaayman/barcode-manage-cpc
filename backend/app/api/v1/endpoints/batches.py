@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Dict, Optional
-from app import crud, models, schemas
+from app.crud import *
+from app import models, schemas
 from app.core.deps import get_db, get_current_active_superuser, get_current_user, get_optional_current_user
 from pydantic import BaseModel
 
@@ -19,31 +20,31 @@ class BulkArchiveRequest(BaseModel):
 @router.get("/brands/", response_model=List[schemas.Brand])
 def read_brands(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     """Get all brands"""
-    brands = crud.get_brands(db, skip=skip, limit=limit)
+    brands = get_brands(db, skip=skip, limit=limit)
     return brands
 
 # Model endpoints
 @router.get("/models/", response_model=List[schemas.Model])
 def read_models(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     """Get all models"""
-    models_list = crud.get_models(db, skip=skip, limit=limit)
+    models_list = get_models(db, skip=skip, limit=limit)
     return models_list
 
 # Size endpoints
 @router.get("/sizes/", response_model=List[schemas.Size])
 def read_sizes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     """Get all sizes"""
-    sizes = crud.get_sizes(db, skip=skip, limit=limit)
+    sizes = get_sizes(db, skip=skip, limit=limit)
     return sizes
 
 # Color endpoints
 @router.get("/colors/", response_model=List[schemas.Color])
 def read_colors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     """Get all colors"""
-    colors = crud.get_colors(db, skip=skip, limit=limit)
+    colors = get_colors(db, skip=skip, limit=limit)
     return colors
 
-@router.get("/", response_model=BatchListResponse)
+@router.get("/", response_model=schemas.BatchListResponse)
 def read_batches(
     db: Session = Depends(get_db),
     skip: int = 0,
@@ -73,18 +74,21 @@ def read_batches(
     
     query = db.query(
         base_table,
-        models.Brand.brand_name,
-        models.Model.model_name,
-        models.Size.size_value,
-        models.Color.color_name,
-        models.ProductionPhase.phase_name,
-        models.JobOrder.job_order_number
+        models.Brand.brand_name.label('brand_name'),
+        models.Model.model_name.label('model_name'),
+        models.Size.size_value.label('size_value'),
+        models.Color.color_name.label('color_name'),
+        models.ProductionPhase.phase_name.label('phase_name'),
+        models.JobOrder.job_order_number.label('job_order_number')
     ).join(
+        models.JobOrder,
+        base_table.job_order_id == models.JobOrder.job_order_id
+    ).outerjoin(
         models.Brand,
-        base_table.brand_id == models.Brand.brand_id
-    ).join(
+        models.JobOrder.brand_id == models.Brand.brand_id
+    ).outerjoin(
         models.Model,
-        base_table.model_id == models.Model.model_id
+        models.JobOrder.model_id == models.Model.model_id
     ).join(
         models.Size,
         base_table.size_id == models.Size.size_id
@@ -94,9 +98,6 @@ def read_batches(
     ).join(
         models.ProductionPhase,
         base_table.current_phase == models.ProductionPhase.phase_id
-    ).join(
-        models.JobOrder,
-        base_table.job_order_id == models.JobOrder.job_order_id
     )
 
     # Apply filters if provided
@@ -128,10 +129,10 @@ def read_batches(
             schemas.BatchResponse(
                 batch_id=batch[0].batch_id,
                 job_order_id=batch[0].job_order_id,
-                job_order_number=batch.job_order_number,
+                job_order_number=batch[6],
                 barcode=batch[0].barcode,
-                brand_id=batch[0].brand_id,
-                model_id=batch[0].model_id,
+                brand_id=batch[0].job_order.brand_id if batch[0].job_order else None,
+                model_id=batch[0].job_order.model_id if batch[0].job_order else None,
                 size_id=batch[0].size_id,
                 color_id=batch[0].color_id,
                 quantity=batch[0].quantity,
@@ -139,11 +140,11 @@ def read_batches(
                 serial=str(batch[0].serial),
                 current_phase=batch[0].current_phase,
                 status=batch[0].status,
-                brand_name=batch.brand_name,
-                model_name=batch.model_name,
-                size_value=batch.size_value,
-                color_name=batch.color_name,
-                phase_name=batch.phase_name,
+                brand_name=batch[1],
+                model_name=batch[2],
+                size_value=batch[3],
+                color_name=batch[4],
+                phase_name=batch[5],
                 last_updated_at=batch[0].last_updated_at,
                 archived_at=getattr(batch[0], 'archived_at', None) if archived else None
             )
@@ -238,7 +239,7 @@ def read_batch(
     db: Session = Depends(get_db),
 ):
     """Get a specific batch by ID"""
-    db_batch = crud.get_batch(db, batch_id=batch_id)
+    db_batch = get_batch(db, batch_id=batch_id)
     if db_batch is None:
         raise HTTPException(status_code=404, detail="Batch not found")
     return db_batch
@@ -250,7 +251,7 @@ def create_batch(
     batch_in: schemas.BatchCreate,
 ):
     """Create a new batch"""
-    batch = crud.create_batch(db=db, batch=batch_in)
+    batch = create_batch(db=db, batch=batch_in)
     return batch
 
 @router.put("/{batch_id}", response_model=schemas.BatchResponse)
@@ -259,7 +260,7 @@ def update_batch(
     batch_in: schemas.BatchUpdate,
     db: Session = Depends(get_db)
 ):
-    db_batch = crud.get_batch(db, batch_id)
+    db_batch = get_batch(db, batch_id)
     if not db_batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     
@@ -270,7 +271,7 @@ def update_batch(
     
     try:
         # Update the batch
-        updated_batch = crud.update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
+        updated_batch = batch.update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
         return updated_batch
     except Exception as e:
         # Log the full error for debugging
@@ -286,10 +287,10 @@ def delete_batch(
     batch_id: int,
 ):
     """Delete a batch"""
-    batch = crud.get_batch(db, batch_id=batch_id)
+    batch = get_batch(db, batch_id=batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
-    return crud.delete_batch(db=db, batch_id=batch_id)
+    return delete_batch(db=db, batch_id=batch_id)
 
 @router.delete("/archived/{batch_id}", response_model=schemas.BatchResponse)
 def delete_archived_batch(
@@ -306,7 +307,7 @@ def delete_archived_batch(
             detail="Access denied. Admin privileges required to delete archived batches."
         )
     
-    batch = crud.delete_archived_batch(db, batch_id=batch_id)
+    batch = delete_archived_batch(db, batch_id=batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Archived batch not found")
     return batch
@@ -326,11 +327,11 @@ def archive_batch(
             detail="Access denied. Admin privileges required to archive batches."
         )
     
-    batch = crud.get_batch(db, batch_id=batch_id)
+    batch = get_batch(db, batch_id=batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     
-    return crud.archive_batch(db=db, batch_id=batch_id)
+    return archive_batch(db=db, batch_id=batch_id)
 
 @router.post("/archive/bulk", response_model=List[schemas.BatchResponse])
 def archive_batches_bulk(
@@ -350,7 +351,7 @@ def archive_batches_bulk(
     if not request.batch_ids:
         raise HTTPException(status_code=400, detail="No batch IDs provided")
     
-    return crud.archive_batches_bulk(db=db, batch_ids=request.batch_ids)
+    return archive_batches_bulk(db=db, batch_ids=request.batch_ids)
 
 @router.post("/archived/{batch_id}/recover", response_model=schemas.BatchResponse)
 def recover_archived_batch(
@@ -368,7 +369,7 @@ def recover_archived_batch(
         )
     
     try:
-        recovered_batch = crud.recover_archived_batch(db, batch_id=batch_id)
+        recovered_batch = recover_archived_batch(db, batch_id=batch_id)
         if not recovered_batch:
             raise HTTPException(status_code=404, detail="Archived batch not found")
         return recovered_batch
@@ -396,7 +397,7 @@ def recover_archived_batches_bulk(
         raise HTTPException(status_code=400, detail="No batch IDs provided")
     
     try:
-        return crud.recover_archived_batches_bulk(db=db, batch_ids=request.batch_ids)
+        return recover_archived_batches_bulk(db=db, batch_ids=request.batch_ids)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -408,7 +409,7 @@ def read_batch_by_barcode(
     db: Session = Depends(get_db),
 ):
     """Get a specific batch by barcode"""
-    db_batch = crud.get_batch_by_barcode(db, barcode=barcode)
+    db_batch = get_batch_by_barcode(db, barcode=barcode)
     if db_batch is None:
         raise HTTPException(status_code=404, detail="Batch not found")
     return db_batch
@@ -420,7 +421,7 @@ def update_batch_by_barcode(
     db: Session = Depends(get_db)
 ):
     """Update a batch by barcode"""
-    db_batch = crud.get_batch_by_barcode(db, barcode=barcode)
+    db_batch = get_batch_by_barcode(db, barcode=barcode)
     if db_batch is None:
         raise HTTPException(status_code=404, detail="Batch not found")
     
@@ -430,7 +431,7 @@ def update_batch_by_barcode(
         raise HTTPException(status_code=404, detail="Batch not found")
     
     try:
-        updated_batch = crud.update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
+        updated_batch = update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
         return updated_batch
     except Exception as e:
         # Log the full error for debugging
@@ -442,7 +443,7 @@ def update_batch_by_barcode(
 @router.get("/{batch_id}/timeline", response_model=List[schemas.TimelineEntryResponse])
 def get_batch_timeline(batch_id: int, db: Session = Depends(get_db)):
     """Get the complete timeline history for a batch"""
-    timeline = crud.get_timeline_by_batch(db, batch_id)
+    timeline = get_timeline_by_batch(db, batch_id)
     if not timeline:
         raise HTTPException(status_code=404, detail="No timeline entries found for this batch")
     return timeline
@@ -450,7 +451,7 @@ def get_batch_timeline(batch_id: int, db: Session = Depends(get_db)):
 @router.get("/{batch_id}/timeline/stats", response_model=Dict[str, Dict[str, int]])
 def get_batch_timeline_stats(batch_id: int, db: Session = Depends(get_db)):
     """Get statistics about time spent in each phase for a batch"""
-    stats = crud.get_timeline_stats_by_batch(db, batch_id)
+    stats = get_timeline_stats_by_batch(db, batch_id)
     if not stats:
         raise HTTPException(status_code=404, detail="No timeline statistics found for this batch")
     # Convert to dictionary format
@@ -464,13 +465,13 @@ def get_batch_timeline_stats(batch_id: int, db: Session = Depends(get_db)):
 @router.get("/timeline/current", response_model=List[schemas.TimelineEntryResponse])
 def get_current_timeline_entries(db: Session = Depends(get_db), skip: int = 0, limit: int = 100):
     """Get all current (ongoing) timeline entries"""
-    current_entries = crud.get_current_timeline_entries(db, skip=skip, limit=limit)
+    current_entries = get_current_timeline_entries(db, skip=skip, limit=limit)
     return current_entries
 
 @router.get("/timeline/stats", response_model=Dict[str, Dict[str, float]])
 def get_all_timeline_stats(db: Session = Depends(get_db)):
     """Get average time statistics across all batches"""
-    stats = crud.get_all_timeline_stats(db)
+    stats = get_all_timeline_stats(db)
     result = {}
     for phase_id, status, avg_minutes in stats:
         if phase_id not in result:

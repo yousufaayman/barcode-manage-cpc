@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 import pandas as pd
@@ -13,7 +13,9 @@ from pydantic import BaseModel
 from zebra import Zebra
 
 from app.core.deps import get_db
-from app import crud, schemas
+from app.crud import *
+from app import schemas
+from app.crud.helpers import process_bulk_barcodes as process_bulk_barcodes_helper
 
 router = APIRouter()
 
@@ -65,8 +67,6 @@ async def download_barcode_template():
     try:
         # Create empty DataFrame with required columns
         df_template = pd.DataFrame(columns=[
-            "brand",
-            "model",
             "size",
             "color",
             "quantity",
@@ -87,13 +87,11 @@ async def download_barcode_template():
             
             # Add column descriptions
             descriptions = {
-                'A': 'Brand name (required)',
-                'B': 'Model name (required)',
-                'C': 'Size (required)',
-                'D': 'Color (required)',
-                'E': 'Quantity (required, number)',
-                'F': 'Number of layers (required, number)',
-                'G': 'Serial number (required, number)'
+                'A': 'Size (required)',
+                'B': 'Color (required)',
+                'C': 'Quantity (required, number)',
+                'D': 'Number of layers (required, number)',
+                'E': 'Serial number (required, number)'
             }
             
             # Add descriptions as comments
@@ -117,43 +115,31 @@ async def download_barcode_template():
         raise HTTPException(status_code=500, detail=f"Failed to generate template: {str(e)}")
 
 @router.post("/bulk/process", response_model=schemas.BulkBarcodeResponse)
-async def process_bulk_barcodes(
+async def process_bulk_barcodes_endpoint(
     file: UploadFile = File(...),
+    job_order_id: int = Form(...),
     db: Session = Depends(get_db)
 ):
     """Process bulk barcode data from uploaded file"""
-    # Validate file format
-    if not file.filename.endswith(('.xlsx', '.xls', '.csv')):
+    if not file.filename.endswith((".xlsx", ".xls", ".csv")):
         raise HTTPException(
             status_code=400,
             detail="Invalid file format. Please upload an Excel (.xlsx, .xls) or CSV file."
         )
-    
     try:
-        # Read file content
         contents = await file.read()
-        
-        # Create BytesIO object
         file_obj = BytesIO(contents)
-        
-        # Read file based on format
         if file.filename.endswith('.csv'):
             df = pd.read_csv(file_obj)
         else:
             df = pd.read_excel(file_obj)
-        
-        # Check if file is empty
         if df.empty:
             raise HTTPException(
                 status_code=400,
                 detail="The uploaded file is empty."
             )
-        
-        # Process the data
         try:
-            processed_data, error_rows = crud.process_bulk_barcodes(db, df)
-            
-            # Convert error rows to match schema
+            processed_data, error_rows = process_bulk_barcodes_helper(db, df, job_order_id)
             formatted_error_rows = [
                 schemas.ErrorRow(
                     rowNumber=row["rowNumber"],
@@ -162,7 +148,6 @@ async def process_bulk_barcodes(
                 )
                 for row in error_rows
             ]
-            
             return schemas.BulkBarcodeResponse(
                 processed_data=processed_data,
                 error_rows=formatted_error_rows
@@ -178,7 +163,6 @@ async def process_bulk_barcodes(
                 status_code=500,
                 detail=f"Error processing data: {str(e)}"
             )
-            
     except pd.errors.EmptyDataError:
         raise HTTPException(
             status_code=400,
@@ -209,33 +193,33 @@ async def submit_bulk_barcodes(
     
     for barcode in barcodes:
         # Check if barcode already exists
-        existing_batch = crud.get_batch_by_barcode(db, barcode.barcode)
+        existing_batch = get_batch_by_barcode(db, barcode.barcode)
         if existing_batch:
             duplicate_barcodes.append({
                 "barcode": barcode.barcode,
-                "brand": barcode.brand_id,
-                "model": barcode.model_id,
-                "size": barcode.size_id,
-                "color": barcode.color_id,
+                "brand": existing_batch.brand_name,
+                "model": existing_batch.model_name,
+                "size": existing_batch.size_value,
+                "color": existing_batch.color_name,
                 "quantity": barcode.quantity,
                 "layers": barcode.layers,
                 "serial": barcode.serial
             })
         else:
             # Create the batch
-            db_batch = crud.create_batch(db, barcode)
+            db_batch = create_batch(db, barcode)
             db.refresh(db_batch)  # Ensure all auto fields are loaded
             # Get the batch with all related data using CRUD function
-            batch_response = crud.get_batch(db, db_batch.batch_id)
+            batch_response = get_batch(db, db_batch.batch_id)
             if batch_response:
                 created_batches.append(batch_response)
             else:
                 # Fallback to manual construction if CRUD function fails
-                brand = crud.get_brand(db, db_batch.brand_id)
-                model = crud.get_model(db, db_batch.model_id)
-                size = crud.get_size(db, db_batch.size_id)
-                color = crud.get_color(db, db_batch.color_id)
-                phase = crud.get_phase(db, db_batch.current_phase)
+                brand = get_brand(db, db_batch.brand_id)
+                model = get_model(db, db_batch.model_id)
+                size = get_size(db, db_batch.size_id)
+                color = get_color(db, db_batch.color_id)
+                phase = get_phase(db, db_batch.current_phase)
                 batch_response = schemas.BatchResponse(
                     batch_id=db_batch.batch_id,
                     job_order_id=db_batch.job_order_id,
@@ -322,41 +306,29 @@ async def print_barcodes(
 @router.post("/bulk/validate", response_model=schemas.BulkValidationResponse)
 async def validate_bulk_barcodes(
     file: UploadFile = File(...),
+    job_order_id: int = Form(...),
     db: Session = Depends(get_db)
 ):
     """Validate bulk barcode data from uploaded file without processing"""
-    # Validate file format
-    if not file.filename.endswith(('.xlsx', '.xls', '.csv')):
+    if not file.filename.endswith((".xlsx", ".xls", ".csv")):
         raise HTTPException(
             status_code=400,
             detail="Invalid file format. Please upload an Excel (.xlsx, .xls) or CSV file."
         )
-    
     try:
-        # Read file content
         contents = await file.read()
-        
-        # Create BytesIO object
         file_obj = BytesIO(contents)
-        
-        # Read file based on format
         if file.filename.endswith('.csv'):
             df = pd.read_csv(file_obj)
         else:
             df = pd.read_excel(file_obj)
-        
-        # Check if file is empty
         if df.empty:
             raise HTTPException(
                 status_code=400,
                 detail="The uploaded file is empty."
             )
-        
-        # Use the existing process function which already does validation
         try:
-            valid_rows, error_rows = crud.process_bulk_barcodes(db, df)
-            
-            # Convert error rows to match schema
+            valid_rows, error_rows = process_bulk_barcodes_helper(db, df, job_order_id)
             formatted_error_rows = [
                 schemas.ErrorRow(
                     rowNumber=row["rowNumber"],
@@ -365,7 +337,6 @@ async def validate_bulk_barcodes(
                 )
                 for row in error_rows
             ]
-            
             return schemas.BulkValidationResponse(
                 valid_rows=valid_rows,
                 error_rows=formatted_error_rows
@@ -381,7 +352,6 @@ async def validate_bulk_barcodes(
                 status_code=500,
                 detail=f"Error validating data: {str(e)}"
             )
-            
     except pd.errors.EmptyDataError:
         raise HTTPException(
             status_code=400,

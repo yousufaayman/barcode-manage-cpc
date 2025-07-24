@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.orm import Session
 from typing import List
-from . import crud, schemas
+from .crud import *
+from . import schemas
 from .database import get_db
 import os
 import pandas as pd
@@ -14,109 +15,109 @@ router = APIRouter()
 # Brand routes
 @router.get("/brands/", response_model=List[schemas.Brand])
 def read_brands(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    brands = crud.get_brands(db, skip=skip, limit=limit)
+    brands = get_brands(db, skip=skip, limit=limit)
     return brands
 
 @router.post("/brands/", response_model=schemas.Brand)
 def create_brand(brand: schemas.BrandCreate, db: Session = Depends(get_db)):
-    db_brand = crud.get_brand_by_name(db, brand_name=brand.brand_name)
+    db_brand = get_brand_by_name(db, brand_name=brand.brand_name)
     if db_brand:
         raise HTTPException(status_code=400, detail="Brand already exists")
-    return crud.create_brand(db=db, brand=brand)
+    return create_brand(db=db, brand=brand)
 
 # Model routes
 @router.get("/models/", response_model=List[schemas.Model])
 def read_models(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    models = crud.get_models(db, skip=skip, limit=limit)
+    models = get_models(db, skip=skip, limit=limit)
     return models
 
 @router.post("/models/", response_model=schemas.Model)
 def create_model(model: schemas.ModelCreate, db: Session = Depends(get_db)):
-    db_model = crud.get_model_by_name(db, model_name=model.model_name)
+    db_model = get_model_by_name(db, model_name=model.model_name)
     if db_model:
         raise HTTPException(status_code=400, detail="Model already exists")
-    return crud.create_model(db=db, model=model)
+    return create_model(db=db, model=model)
 
 # Size routes
 @router.get("/sizes/", response_model=List[schemas.Size])
 def read_sizes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    sizes = crud.get_sizes(db, skip=skip, limit=limit)
+    sizes = get_sizes(db, skip=skip, limit=limit)
     return sizes
 
 @router.post("/sizes/", response_model=schemas.Size)
 def create_size(size: schemas.SizeCreate, db: Session = Depends(get_db)):
-    db_size = crud.get_size_by_value(db, size_value=size.size_value)
+    db_size = get_size_by_value(db, size_value=size.size_value)
     if db_size:
         raise HTTPException(status_code=400, detail="Size already exists")
-    return crud.create_size(db=db, size=size)
+    return create_size(db=db, size=size)
 
 # Color routes
 @router.get("/colors/", response_model=List[schemas.Color])
 def read_colors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    colors = crud.get_colors(db, skip=skip, limit=limit)
+    colors = get_colors(db, skip=skip, limit=limit)
     return colors
 
 @router.post("/colors/", response_model=schemas.Color)
 def create_color(color: schemas.ColorCreate, db: Session = Depends(get_db)):
-    db_color = crud.get_color_by_name(db, color_name=color.color_name)
+    db_color = get_color_by_name(db, color_name=color.color_name)
     if db_color:
         raise HTTPException(status_code=400, detail="Color already exists")
-    return crud.create_color(db=db, color=color)
+    return create_color(db=db, color=color)
 
 # Production Phase routes
 @router.get("/phases/", response_model=List[schemas.ProductionPhase])
 def read_phases(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    phases = crud.get_phases(db, skip=skip, limit=limit)
+    phases = get_phases(db, skip=skip, limit=limit)
     return phases
 
 @router.post("/phases/", response_model=schemas.ProductionPhase)
 def create_phase(phase: schemas.ProductionPhaseCreate, db: Session = Depends(get_db)):
-    return crud.create_phase(db=db, phase=phase)
+    return create_phase(db=db, phase=phase)
 
 # Batch routes
 @router.get("/batches/", response_model=List[schemas.BatchResponse])
 def read_batches(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    batches = crud.get_batches(db, skip=skip, limit=limit)
+    batches = get_batches(db, skip=skip, limit=limit)
     return batches
 
 @router.post("/batches/", response_model=schemas.Batch)
 def create_batch(batch: schemas.BatchCreate, db: Session = Depends(get_db)):
-    db_batch = crud.get_batch_by_barcode(db, barcode=batch.barcode)
+    db_batch = get_batch_by_barcode(db, barcode=batch.barcode)
     if db_batch:
         raise HTTPException(status_code=400, detail="Batch with this barcode already exists")
-    return crud.create_batch(db=db, batch=batch)
+    return create_batch(db=db, batch=batch)
 
 @router.get("/batches/{batch_id}", response_model=schemas.BatchResponse)
 def read_batch(batch_id: int, db: Session = Depends(get_db)):
-    db_batch = crud.get_batch(db, batch_id=batch_id)
+    db_batch = get_batch(db, batch_id=batch_id)
     if db_batch is None:
         raise HTTPException(status_code=404, detail="Batch not found")
     return db_batch
 
 @router.get("/batches/barcode/{barcode}", response_model=schemas.BatchResponse)
 def read_batch_by_barcode(barcode: str, db: Session = Depends(get_db)):
-    db_batch = crud.get_batch_by_barcode(db, barcode=barcode)
+    db_batch = get_batch_by_barcode(db, barcode=barcode)
     if db_batch is None:
         raise HTTPException(status_code=404, detail="Batch not found")
     return db_batch
 
 @router.put("/batches/{batch_id}/status")
 def update_batch_status(batch_id: int, status: str, db: Session = Depends(get_db)):
-    db_batch = crud.update_batch_status(db, batch_id=batch_id, status=status)
+    db_batch = update_batch_status(db, batch_id=batch_id, status=status)
     if db_batch is None:
         raise HTTPException(status_code=404, detail="Batch not found")
     return {"message": "Status updated successfully"}
 
 @router.put("/batches/{batch_id}/phase")
 def update_batch_phase(batch_id: int, phase_id: int, db: Session = Depends(get_db)):
-    db_batch = crud.update_batch_phase(db, batch_id=batch_id, phase_id=phase_id)
+    db_batch = update_batch_phase(db, batch_id=batch_id, phase_id=phase_id)
     if db_batch is None:
         raise HTTPException(status_code=404, detail="Batch not found")
     return {"message": "Phase updated successfully"}
 
 @router.delete("/batches/{batch_id}")
 def delete_batch(batch_id: int, db: Session = Depends(get_db)):
-    db_batch = crud.delete_batch(db, batch_id=batch_id)
+    db_batch = delete_batch(db, batch_id=batch_id)
     if db_batch is None:
         raise HTTPException(status_code=404, detail="Batch not found")
     return {"message": "Batch deleted successfully"}
@@ -127,7 +128,7 @@ async def create_bulk_batches(batches: List[schemas.BatchCreate], db: Session = 
     """Create multiple batches from pre-processed data"""
     created_batches = []
     for batch in batches:
-        db_batch = crud.create_batch(db=db, batch=batch)
+        db_batch = create_batch(db=db, batch=batch)
         created_batches.append(db_batch)
     return created_batches
 
@@ -217,7 +218,7 @@ async def process_bulk_barcodes(
             df = pd.read_excel(file.file)
         
         # Process the data
-        processed_data, error_rows = crud.process_bulk_barcodes(db, df)
+        processed_data, error_rows = process_bulk_barcodes(db, df)
         
         return {
             "processed_data": processed_data,
@@ -235,12 +236,12 @@ async def submit_bulk_barcodes(
     created_batches = []
     for barcode in barcodes:
         # Check if barcode already exists
-        existing_batch = crud.get_batch_by_barcode(db, barcode.barcode)
+        existing_batch = get_batch_by_barcode(db, barcode.barcode)
         if existing_batch:
             raise HTTPException(
                 status_code=400,
                 detail=f"Barcode {barcode.barcode} already exists"
             )
-        created_batch = crud.create_batch(db, barcode)
+        created_batch = create_batch(db, barcode)
         created_batches.append(created_batch)
     return created_batches 

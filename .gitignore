@@ -122,3 +122,7 @@ db.sqlite3-journal
 instance/
 .webassets-cache
 *.pyc
+/backend/scripts
+/backend/app/__pycache__
+/static
+JOB_ORDER_MODIFICATIONS_SUMMARY.md

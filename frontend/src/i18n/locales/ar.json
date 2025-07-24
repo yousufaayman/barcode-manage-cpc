@@ -26,7 +26,9 @@
     "date": "التاريخ",
     "time": "الوقت",
     "created": "تم الإنشاء",
-    "updated": "تم التحديث"
+    "updated": "تم التحديث",
+    "print": "طباعة",
+    "copies": "عدد النسخ"
   },
   "auth": {
     "signIn": "تسجيل الدخول",
@@ -126,7 +128,9 @@
     "scanSuccess": "تم مسح الباركود بنجاح",
     "scanUpdateSuccess": "تم تحديث الباركود بنجاح",
     "barcodeScannedSuccessfully": "تم مسح الباركود واسترجاع المعلومات بنجاح.",
-    "barcodeUpdatedSuccessfully": "تم مسح الباركود وتحديثه بنجاح."
+    "barcodeUpdatedSuccessfully": "تم مسح الباركود وتحديثه بنجاح.",
+    "referencedColors": "الألوان المشار إليها",
+    "referencedSizes": "المقاسات المشار إليها"
   },
   "barcodeManagement": {
     "title": "إدارة الباركود",
@@ -251,15 +255,47 @@
     "networkError": "حدث خطأ في الشبكة. يرجى التحقق من اتصالك والمحاولة مرة أخرى.",
     "successfullySubmitted": "تم إرسال {count} صفوف بنجاح. تم العثور على {duplicates} مكررة. تم تخطي {errors} صفوف بسبب الأخطاء.",
     "printedBarcodes": "تم طباعة {count} باركود {times} مرات لكل منها على {printer}.",
-    "rowNumber": "رقم الصف",
-    "brand": "العميل",
-    "model": "الموديل",
-    "size": "المقاس",
-    "color": "اللون",
-    "layers": "الطبقات",
-    "serial": "الرقم التسلسلي",
+    "rowNumber": "Row #",
+    "brand": "Brand",
+    "model": "Model",
+    "size": "Size",
+    "color": "Color",
+    "layers": "Layers",
+    "serial": "Serial",
     "markAsDefective": "تحديد كمعيب",
-    "defectiveDescription": "حدد هذا المربع لتحديد جميع الباركود في هذه الدفعة كمعيبة (درجة ثانية). سيتم إضافة علامة 'معيب' عند الطباعة."
+    "defectiveDescription": "حدد هذا المربع لتحديد جميع الباركود في هذه الدفعة كمعيبة (درجة ثانية). سيتم إضافة علامة 'معيب' عند الطباعة.",
+    "selectJobOrder": "اختر أمر العمل",
+    "selectJobOrderPlaceholder": "اختر أمر عمل...",
+    "noModel": "لا يوجد موديل",
+    "noBrand": "لا توجد علامة تجارية",
+    "colors": "Colors",
+    "sizes": "Sizes",
+    "referencedColors": "Referenced Colors",
+    "referencedSizes": "Referenced Sizes",
+    "errors": {
+      "sizeNotAllowed": "المقاس غير مسموح به لأمر العمل هذا",
+      "colorNotAllowed": "اللون غير مسموح به لأمر العمل هذا",
+      "sizeColorNotAllowed": "المقاس/اللون غير مسموح به لأمر العمل هذا",
+      "missingRequiredField": "الحقل المطلوب مفقود",
+      "missingRequiredFields": "الحقول المطلوبة مفقودة",
+      "quantityPositive": "يجب أن تكون الكمية رقماً موجباً",
+      "layersPositive": "يجب أن تكون الطبقات رقماً موجباً",
+      "serialPositive": "يجب أن يكون الرقم التسلسلي رقماً موجباً",
+      "quantityValid": "يجب أن تكون الكمية رقماً صحيحاً",
+      "layersValid": "يجب أن تكون الطبقات رقماً صحيحاً",
+      "serialValid": "يجب أن يكون الرقم التسلسلي رقماً صحيحاً",
+      "allNumericValid": "يجب أن تكون الكمية والطبقات والرقم التسلسلي أرقاماً صحيحة",
+      "serialNotEmpty": "يجب ألا يكون الرقم التسلسلي فارغاً",
+      "serialMin": "يجب أن يكون الرقم التسلسلي 0 أو أكبر",
+      "serialMax": "يجب أن يكون الرقم التسلسلي 999 أو أقل",
+      "serialValidNumber": "يجب أن يكون الرقم التسلسلي رقماً صحيحاً",
+      "serialMaxDigits": "لا يمكن أن يتجاوز الرقم التسلسلي 3 أرقام بعد التنسيق",
+      "missingRequiredColumns": "الأعمدة المطلوبة مفقودة",
+      "jobOrderNotFound": "لم يتم العثور على أمر العمل",
+      "emptyFile": "الملف المرفوع فارغ",
+      "invalidFileFormat": "تنسيق ملف غير صحيح. يرجى رفع ملف إكسل (.xlsx, .xls) أو CSV",
+      "fileEmptyOrNoData": "الملف فارغ أو لا يحتوي على بيانات"
+    }
   },
   "jobOrders": {
     "title": "أوامر العمل",
@@ -300,7 +336,8 @@
       "modelNameRequired": "اسم الموديل مطلوب",
       "colorRequired": "اللون مطلوب للعنصر {itemNumber}",
       "sizeRequired": "المقاس مطلوب للعنصر {itemNumber}",
-      "quantityRequired": "يجب أن تكون الكمية أكبر من 0 للعنصر {itemNumber}"
+      "quantityRequired": "يجب أن تكون الكمية أكبر من 0 للعنصر {itemNumber}",
+      "brandNameRequired": "اسم العلامة التجارية مطلوب."
     },
     "filters": {
       "jobOrderNumber": "رقم أمر العمل",
@@ -318,6 +355,42 @@
     "dropdown": {
       "addNew": "إضافة \"{value}\"",
       "noOptionsFound": "لم يتم العثور على خيارات."
-    }
+    },
+    "brandName": "اسم العميل"
+  },
+  "jobOrderDetails": {
+    "printingDetails": "تفاصيل الطباعة",
+    "chest": "الصدر",
+    "back": "الظهر",
+    "waist": "الخصر",
+    "right_leg": "الساق اليمنى",
+    "left_leg": "الساق اليسرى",
+    "rightArm": "الذراع اليمنى",
+    "leftArm": "الذراع اليسرى",
+    "rightLeg": "الساق اليمنى",
+    "leftLeg": "الساق اليسرى",
+    "pocket": "الجيب",
+    "hood": "القبعة",
+    "materialConsumption": "استهلاك المواد",
+    "materialName": "اسم المادة",
+    "consumptionCategory": "فئة الاستهلاك",
+    "productionDetailsWithNumber": "تفاصيل الإنتاج: {{jobOrderNumber}}",
+    "subtitle": "عرض تفصيلي لأمر العمل وتتبع الإنتاج",
+    "loadingProductionTracking": "جاري تحميل تتبع الإنتاج...",
+    "notes": "ملاحظات:",
+    "quantityWarning": "تحذير: يوجد عنصر أو أكثر تجاوزت الكمية المنتجة الكمية المتوقعة!",
+    "expected": "المتوقع",
+    "produced": "المنتج",
+    "remaining": "المتبقي",
+    "diff": "الفرق",
+    "completedQuantity": "الكمية المكتملة",
+    "requiredMaterials": "المواد المطلوبة",
+    "material": "المادة",
+    "notFound": "لم يتم العثور على أمر العمل.",
+    "saveChanges": "حفظ التغييرات",
+    "reopen": "إعادة فتح",
+    "confirmClose": "هل أنت متأكد أنك تريد إغلاق أمر العمل هذا؟ سيؤدي ذلك إلى تحديده كمكتمل.",
+    "confirmReopen": "هل أنت متأكد أنك تريد إعادة فتح أمر العمل هذا؟ سيؤدي ذلك إلى تحديده كنشط مرة أخرى.",
+    "dateCreated": "تاريخ الإنشاء"
   }
 } 

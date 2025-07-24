@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
+    # Image upload directory
+    JOB_ORDER_IMAGE_UPLOAD_DIR: str = "job_order_images"
+    
     model_config = SettingsConfigDict(case_sensitive=True, env_file=".env")
     
     @property

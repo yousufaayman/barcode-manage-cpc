@@ -110,8 +110,6 @@ class ProductionPhase(ProductionPhaseBase):
 class BatchBase(BaseModel):
     job_order_id: int
     barcode: str
-    brand_id: int
-    model_id: int
     size_id: int
     color_id: int
     quantity: int
@@ -126,8 +124,6 @@ class BatchCreate(BatchBase):
 class BatchUpdate(BaseModel):
     job_order_id: Optional[int] = None
     barcode: Optional[str] = None
-    brand_id: Optional[int] = None
-    model_id: Optional[int] = None
     size_id: Optional[int] = None
     color_id: Optional[int] = None
     quantity: Optional[int] = None
@@ -139,16 +135,20 @@ class BatchUpdate(BaseModel):
 class BatchResponse(BatchBase):
     batch_id: int
     job_order_number: Optional[str] = None
-    brand_name: str
-    model_name: str
     size_value: str
     color_name: str
     phase_name: str
     last_updated_at: Optional[datetime] = None
     archived_at: Optional[datetime] = None
+    brand_name: Optional[str] = None
+    model_name: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+class BatchListResponse(BaseModel):
+    items: List[BatchResponse]
+    total: int
 
 class BulkBarcodeProcess(BaseModel):
     brand: str
@@ -410,11 +410,33 @@ class AdvancedStatisticsResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class JobOrderMaterialCreateWithName(BaseModel):
+    material_name: str
+    quantity: float
+    color_name: Optional[str] = None
+    notes: Optional[str] = None
+    consumption: Optional[float] = None
+
+class JobOrderPrint(BaseModel):
+    chest: bool = False
+    back: bool = False
+    waist: bool = False
+    right_leg: bool = False
+    left_leg: bool = False
+    pocket: bool = False
+    hood: bool = False
+    right_arm: bool = False
+    left_arm: bool = False
+
+    class Config:
+        from_attributes = True
+
 # Job Order schemas
 class JobOrderItemBase(BaseModel):
     color_id: int
     size_id: int
     quantity: int
+    weight: Optional[float] = None
 
 class JobOrderItem(JobOrderItemBase):
     item_id: int
@@ -432,40 +454,60 @@ class JobOrderItemCreateWithNames(BaseModel):
     color_name: str
     size_value: str
     quantity: int
+    weight: Optional[float] = None
 
 class JobOrderItemUpdate(BaseModel):
     color_id: Optional[int] = None
     size_id: Optional[int] = None
     quantity: Optional[int] = None
+    weight: Optional[float] = None
 
 class JobOrderBase(BaseModel):
     model_id: int
     job_order_number: str
+    brand_id: Optional[int] = None
+    image_url: Optional[str] = None
+    notes: Optional[str] = None
 
 class JobOrderCreate(BaseModel):
     model_id: int
     job_order_number: str
     items: List[JobOrderItemCreate]
-    closed: bool = False
+    brand_id: Optional[int] = None
+    image_url: Optional[str] = None
+    prints: Optional[JobOrderPrint] = None
 
 class JobOrderCreateWithNames(BaseModel):
     model_name: str
     job_order_number: str
+    brand_name: str
     items: List[JobOrderItemCreateWithNames]
-    closed: bool = False
+    brand_id: Optional[int] = None
+    image_url: Optional[str] = None
+    materials: Optional[List[JobOrderMaterialCreateWithName]] = None
+    prints: Optional[JobOrderPrint] = None
+    notes: Optional[str] = None
 
 class JobOrderUpdate(BaseModel):
     model_id: Optional[int] = None
     job_order_number: Optional[str] = None
     items: Optional[List[Dict[str, int]]] = None  # List of {item_id: int, quantity: int}
-    closed: Optional[bool] = None
+    brand_id: Optional[int] = None
+    image_url: Optional[str] = None
+    prints: Optional[JobOrderPrint] = None
+    notes: Optional[str] = None
+    materials: Optional[List[JobOrderMaterialCreateWithName]] = None
 
 class JobOrder(JobOrderBase):
     job_order_id: int
     model_name: Optional[str] = None
+    brand_name: Optional[str] = None
     items: List[JobOrderItem] = []
     total_working_quantity: Optional[int] = None
-    closed: bool = False
+    prints: Optional[JobOrderPrint] = None
+    batches: Optional[List[Dict[str, str]]] = None
+    image_url: Optional[str] = None
+    date_created: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -473,9 +515,46 @@ class JobOrder(JobOrderBase):
 class JobOrderSummary(BaseModel):
     job_order_id: int
     job_order_number: str
-    model_name: str
-    total_colors: int
-    total_quantity: int
+    model_name: Optional[str] = None
+    brand_name: Optional[str] = None
+    total_items: int
+    total_expected_quantity: int
+    total_produced_quantity: int
+    total_batches: int
+    has_issues: bool
+    completion_percentage: float
+    overproduction_quantity: int
+    last_calculated_at: Optional[datetime] = None
+    last_quantity_change: Optional[datetime] = None
+    last_completion_change: Optional[datetime] = None
+    last_new_batch: Optional[datetime] = None
+    last_batch_update: Optional[datetime] = None
+    image_url: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class ArchivedBatchBase(BaseModel):
+    job_order_id: int
+    barcode: str
+    size_id: int
+    color_id: int
+    quantity: int
+    layers: int
+    serial: str
+    current_phase: int
+    status: str
+    last_updated_at: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
+
+class ArchivedBatchCreate(ArchivedBatchBase):
+    pass
+
+class ArchivedBatchResponse(ArchivedBatchBase):
+    batch_id: int
+    size_value: Optional[str] = None
+    color_name: Optional[str] = None
+    phase_name: Optional[str] = None
 
     class Config:
         from_attributes = True 

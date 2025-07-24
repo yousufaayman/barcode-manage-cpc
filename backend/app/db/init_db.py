@@ -3,7 +3,8 @@ from app.db.session import engine
 from app.models import Base, User
 from app.core.security import get_password_hash
 from sqlalchemy.orm import Session
-from app import crud, schemas
+from app.crud import *
+from app import schemas
 from app.core.config import settings
 from app.models import UserRole
 
@@ -26,7 +27,7 @@ def create_initial_admin() -> None:
                 password="admin123",
                 role=UserRole.ADMIN
             )
-            crud.create_user(db, obj_in=admin_in)
+            create_user(db, obj_in=admin_in)
             print("Admin user created successfully!")
         else:
             print("Admin user already exists!")

@@ -7,6 +7,8 @@ from .db.init_db import init_db, create_initial_admin
 from .core.config import settings
 import logging
 import uvicorn
+import os
+from fastapi.staticfiles import StaticFiles
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +35,11 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+# Mount static files for job order images
+image_dir = os.path.abspath(settings.JOB_ORDER_IMAGE_UPLOAD_DIR)
+os.makedirs(image_dir, exist_ok=True)
+app.mount('/static', StaticFiles(directory=image_dir), name='static')
 
 @app.on_event("startup")
 async def startup_event():
