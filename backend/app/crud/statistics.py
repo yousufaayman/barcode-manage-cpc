@@ -2,250 +2,345 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 from .. import models, schemas
 from datetime import datetime, timedelta
-from sqlalchemy import func as sa_func, case
+from sqlalchemy import func as sa_func, case, desc, asc
 
-# Statistics and analytics functions will be moved here from crud.py 
-
-# get_advanced_statistics from crud.py should be moved here with its full implementation. 
-
-# --- Statistics and analytics functions ---
-
-def get_advanced_statistics(db: Session):
-    timeline_query = db.query(
-        models.BarcodeStatusTimeline.batch_id,
-        models.BarcodeStatusTimeline.phase_id,
-        models.ProductionPhase.phase_name,
-        models.BarcodeStatusTimeline.status,
-        models.BarcodeStatusTimeline.duration_minutes
-    ).join(
-        models.ProductionPhase,
-        models.BarcodeStatusTimeline.phase_id == models.ProductionPhase.phase_id
-    ).filter(
-        models.BarcodeStatusTimeline.duration_minutes.isnot(None)
-    )
-
-    batch_phase_totals_query = db.query(
-        models.BarcodeStatusTimeline.batch_id,
-        models.BarcodeStatusTimeline.phase_id,
-        models.ProductionPhase.phase_name,
-        sa_func.sum(models.BarcodeStatusTimeline.duration_minutes).label("total_duration_per_batch")
-    ).join(
-        models.ProductionPhase,
-        models.BarcodeStatusTimeline.phase_id == models.ProductionPhase.phase_id
-    ).filter(
-        models.BarcodeStatusTimeline.duration_minutes.isnot(None)
-    ).group_by(
-        models.BarcodeStatusTimeline.batch_id,
-        models.BarcodeStatusTimeline.phase_id,
-        models.ProductionPhase.phase_name
-    ).subquery()
-
-    turnover_rate_by_phase_query = db.query(
-        batch_phase_totals_query.c.phase_id,
-        batch_phase_totals_query.c.phase_name,
-        sa_func.avg(batch_phase_totals_query.c.total_duration_per_batch).label("average_minutes")
-    ).group_by(
-        batch_phase_totals_query.c.phase_id,
-        batch_phase_totals_query.c.phase_name
-    )
+def get_production_statistics(db: Session):
+    """Get comprehensive production statistics"""
     
-    turnover_rate_results = turnover_rate_by_phase_query.all()
-    turnover_rate_by_phase = [schemas.TurnoverRateByPhase.model_validate(r._asdict()) for r in turnover_rate_results]
-
-    if turnover_rate_by_phase:
-        slowest_turnover = max(turnover_rate_by_phase, key=lambda x: x.average_minutes)
-        fastest_turnover = min(turnover_rate_by_phase, key=lambda x: x.average_minutes)
-        bottleneck_phase = slowest_turnover
-    else:
-        slowest_turnover = None
-        fastest_turnover = None
-        bottleneck_phase = None
-
-    bottleneck_phase = max(turnover_rate_by_phase, key=lambda x: x.average_minutes, default=None)
-
-    pending_times_query = db.query(
-        models.BarcodeStatusTimeline.batch_id,
-        models.BarcodeStatusTimeline.phase_id,
-        models.ProductionPhase.phase_name,
-        sa_func.sum(models.BarcodeStatusTimeline.duration_minutes).label("total_minutes")
-    ).join(
-        models.ProductionPhase,
-        models.BarcodeStatusTimeline.phase_id == models.ProductionPhase.phase_id
-    ).filter(
-        models.BarcodeStatusTimeline.status == 'Pending',
-        models.BarcodeStatusTimeline.duration_minutes.isnot(None)
-    ).group_by(
-        models.BarcodeStatusTimeline.batch_id,
-        models.BarcodeStatusTimeline.phase_id,
-        models.ProductionPhase.phase_name
-    ).order_by(sa_func.sum(models.BarcodeStatusTimeline.duration_minutes).desc())
-    
-    pending_times = pending_times_query.all()
-    most_time_spent_pending = schemas.TimeSpentStatusStat.model_validate(pending_times[0]._asdict()) if pending_times else None
-    fastest_pending_entry = pending_times_query.order_by(sa_func.sum(models.BarcodeStatusTimeline.duration_minutes).asc()).first()
-    fastest_pending = schemas.TimeSpentStatusStat.model_validate(fastest_pending_entry._asdict()) if fastest_pending_entry else None
-
-    in_progress_times_query = db.query(
-        models.BarcodeStatusTimeline.batch_id,
-        models.BarcodeStatusTimeline.phase_id,
-        models.ProductionPhase.phase_name,
-        sa_func.sum(models.BarcodeStatusTimeline.duration_minutes).label("total_minutes")
-    ).join(
-        models.ProductionPhase,
-        models.BarcodeStatusTimeline.phase_id == models.ProductionPhase.phase_id
-    ).filter(
-        models.BarcodeStatusTimeline.status == 'In Progress',
-        models.BarcodeStatusTimeline.duration_minutes.isnot(None)
-    ).group_by(
-        models.BarcodeStatusTimeline.batch_id,
-        models.BarcodeStatusTimeline.phase_id,
-        models.ProductionPhase.phase_name
-    ).order_by(sa_func.sum(models.BarcodeStatusTimeline.duration_minutes).asc())
-    
-    in_progress_times = in_progress_times_query.all()
-    fastest_in_progress = schemas.TimeSpentStatusStat.model_validate(in_progress_times[0]._asdict()) if in_progress_times else None
-    
-    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-    throughput_query = db.query(
-        sa_func.date(models.Batch.last_updated_at).label("period"),
-        sa_func.count(models.Batch.batch_id).label("completed_batches")
-    ).filter(
-        models.Batch.status == 'Completed',
-        models.Batch.last_updated_at >= thirty_days_ago
-    ).group_by(sa_func.date(models.Batch.last_updated_at)).all()
-    
-    batch_throughput = [schemas.ThroughputStat.model_validate(r._asdict()) for r in throughput_query]
-
-    avg_quantity = db.query(sa_func.avg(models.Batch.quantity)).scalar() or 0
-    average_batch_size = round(avg_quantity, 2)
-
-    status_dist_query = db.query(
-        models.Batch.status,
-        sa_func.count(models.Batch.batch_id).label("count")
-    ).group_by(models.Batch.status).all()
-    status_distribution = [schemas.StatusDistributionStat.model_validate(r._asdict()) for r in status_dist_query]
-
-    wip_query = db.query(
-        models.Batch.current_phase.label('phase_id'),
+    # Current WIP by Phase
+    wip_by_phase = db.query(
+        models.Batch.current_phase,
         models.ProductionPhase.phase_name,
         sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending'),
         sa_func.sum(case((models.Batch.status == 'In Progress', 1), else_=0)).label('in_progress'),
-        sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed')
+        sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed'),
+        sa_func.count(models.Batch.batch_id).label('total')
     ).join(
         models.ProductionPhase,
         models.Batch.current_phase == models.ProductionPhase.phase_id
     ).group_by(
         models.Batch.current_phase,
         models.ProductionPhase.phase_name
+    ).order_by(
+        models.ProductionPhase.phase_id
     ).all()
-    current_wip = [schemas.WIPStat.model_validate(r._asdict()) for r in wip_query]
-
-    subquery = db.query(
-        models.BarcodeStatusTimeline.batch_id,
-        sa_func.count(models.BarcodeStatusTimeline.phase_id.distinct()).label('phase_count')
-    ).group_by(models.BarcodeStatusTimeline.batch_id).subquery()
     
-    avg_phases_query = db.query(sa_func.avg(subquery.c.phase_count)).scalar()
-    average_phases_per_batch = round(avg_phases_query, 2) if avg_phases_query else 0
-
-    phase_counts_query = db.query(
-        models.BarcodeStatusTimeline.phase_id,
+    # Production by Brand
+    production_by_brand = db.query(
+        models.Brand.brand_id,
+        models.Brand.brand_name,
+        sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending'),
+        sa_func.sum(case((models.Batch.status == 'In Progress', 1), else_=0)).label('in_progress'),
+        sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed'),
+        sa_func.count(models.Batch.batch_id).label('total'),
+        sa_func.sum(models.Batch.quantity).label('total_quantity')
+    ).join(
+        models.JobOrder,
+        models.Batch.job_order_id == models.JobOrder.job_order_id
+    ).join(
+        models.Brand,
+        models.JobOrder.brand_id == models.Brand.brand_id
+    ).group_by(
+        models.Brand.brand_id,
+        models.Brand.brand_name
+    ).all()
+    
+    # Production by Model
+    production_by_model = db.query(
+        models.Model.model_id,
+        models.Model.model_name,
+        models.Brand.brand_name,
+        sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending'),
+        sa_func.sum(case((models.Batch.status == 'In Progress', 1), else_=0)).label('in_progress'),
+        sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed'),
+        sa_func.count(models.Batch.batch_id).label('total'),
+        sa_func.sum(models.Batch.quantity).label('total_quantity')
+    ).join(
+        models.JobOrder,
+        models.Batch.job_order_id == models.JobOrder.job_order_id
+    ).join(
+        models.Model,
+        models.JobOrder.model_id == models.Model.model_id
+    ).join(
+        models.Brand,
+        models.JobOrder.brand_id == models.Brand.brand_id
+    ).group_by(
+        models.Model.model_id,
+        models.Model.model_name,
+        models.Brand.brand_name
+    ).all()
+    
+    # Recent Activity (last 7 days)
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    recent_activity = db.query(
+        sa_func.date(models.BarcodeScanEvent.scanned_at).label('date'),
+        sa_func.count(models.BarcodeScanEvent.id).label('total_events'),
+        sa_func.count(models.BarcodeScanEvent.batch_id.distinct()).label('unique_batches')
+    ).filter(
+        models.BarcodeScanEvent.scanned_at >= seven_days_ago
+    ).group_by(
+        sa_func.date(models.BarcodeScanEvent.scanned_at)
+    ).order_by(
+        sa_func.date(models.BarcodeScanEvent.scanned_at)
+    ).all()
+    
+    # Bottleneck Analysis - Most Pending by Phase
+    bottlenecks = db.query(
         models.ProductionPhase.phase_name,
-        sa_func.count(models.BarcodeStatusTimeline.id).label('entries'),
-        sa_func.sum(case((models.BarcodeStatusTimeline.status == 'Completed', 1), else_=0)).label('exits')
+        models.Brand.brand_name,
+        models.Model.model_name,
+        sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending_count'),
+        sa_func.sum(models.Batch.quantity).label('total_quantity')
+    ).join(
+        models.JobOrder,
+        models.Batch.job_order_id == models.JobOrder.job_order_id
+    ).join(
+        models.Model,
+        models.JobOrder.model_id == models.Model.model_id
+    ).join(
+        models.Brand,
+        models.JobOrder.brand_id == models.Brand.brand_id
     ).join(
         models.ProductionPhase,
-        models.BarcodeStatusTimeline.phase_id == models.ProductionPhase.phase_id
+        models.Batch.current_phase == models.ProductionPhase.phase_id
+    ).filter(
+        models.Batch.status == 'Pending'
     ).group_by(
-        models.BarcodeStatusTimeline.phase_id,
-        models.ProductionPhase.phase_name
-    ).all()
-    phase_entry_exit_counts = [schemas.PhaseEntryExitStat.model_validate(r._asdict()) for r in phase_counts_query]
-
-    all_brands = db.query(models.Brand.brand_id, models.Brand.brand_name).all()
-    all_phases = db.query(models.ProductionPhase.phase_id, models.ProductionPhase.phase_name).all()
-    working_phase_by_brand = []
-    for brand in all_brands:
-        for phase in all_phases:
-            phase_stats = db.query(
-                sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending'),
-                sa_func.sum(case((models.Batch.status == 'In Progress', 1), else_=0)).label('in_progress'),
-                sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed'),
-                sa_func.count(models.Batch.batch_id).label('total')
-            ).filter(
-                models.Batch.brand_id == brand.brand_id,
-                models.Batch.current_phase == phase.phase_id
-            ).first()
-            working_phase_by_brand.append(schemas.WorkingPhaseByBrandStat(
-                brand_id=brand.brand_id,
-                brand_name=brand.brand_name,
-                phase_id=phase.phase_id,
-                phase_name=phase.phase_name,
-                pending=phase_stats.pending or 0,
-                in_progress=phase_stats.in_progress or 0,
-                completed=phase_stats.completed or 0,
-                total=phase_stats.total or 0
-            ))
-    all_models = db.query(models.Model.model_id, models.Model.model_name).all()
-    all_phases = db.query(models.ProductionPhase.phase_id, models.ProductionPhase.phase_name).all()
-    working_phase_by_model = []
-    for model in all_models:
-        for phase in all_phases:
-            phase_stats = db.query(
-                sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending'),
-                sa_func.sum(case((models.Batch.status == 'In Progress', 1), else_=0)).label('in_progress'),
-                sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed'),
-                sa_func.count(models.Batch.batch_id).label('total')
-            ).join(
-                models.Model,
-                models.Batch.model_id == models.Model.model_id
-            ).filter(
-                models.Batch.model_id == model.model_id,
-                models.Batch.current_phase == phase.phase_id
-            ).first()
-            brand_info = db.query(
-                models.Brand.brand_id,
-                models.Brand.brand_name
-            ).join(
-                models.Batch,
-                models.Batch.brand_id == models.Brand.brand_id
-            ).filter(
-                models.Batch.model_id == model.model_id
-            ).first()
-            working_phase_by_model.append(schemas.WorkingPhaseByModelStat(
-                model_id=model.model_id,
-                model_name=model.model_name,
-                brand_id=brand_info.brand_id if brand_info else 0,
-                brand_name=brand_info.brand_name if brand_info else 'Unknown Brand',
-                phase_id=phase.phase_id,
-                phase_name=phase.phase_name,
-                pending=phase_stats.pending or 0,
-                in_progress=phase_stats.in_progress or 0,
-                completed=phase_stats.completed or 0,
-                total=phase_stats.total or 0
-            ))
+        models.ProductionPhase.phase_name,
+        models.Brand.brand_name,
+        models.Model.model_name
+    ).order_by(
+        desc(sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)))
+    ).limit(10).all()
+    
+    # Overall Statistics
+    total_batches = db.query(sa_func.count(models.Batch.batch_id)).scalar() or 0
+    total_pending = db.query(sa_func.count(models.Batch.batch_id)).filter(models.Batch.status == 'Pending').scalar() or 0
+    total_in_progress = db.query(sa_func.count(models.Batch.batch_id)).filter(models.Batch.status == 'In Progress').scalar() or 0
+    total_completed = db.query(sa_func.count(models.Batch.batch_id)).filter(models.Batch.status == 'Completed').scalar() or 0
+    total_quantity = db.query(sa_func.sum(models.Batch.quantity)).scalar() or 0
+    
+    # Second Degree Analysis
+    second_degree_batches = db.query(sa_func.count(models.Batch.batch_id)).filter(models.Batch.is_second_degree == True).scalar() or 0
+    second_degree_quantity = db.query(sa_func.sum(models.Batch.quantity)).filter(models.Batch.is_second_degree == True).scalar() or 0
+    
     return {
-        "turnover_rate_by_phase": turnover_rate_by_phase,
-        "slowest_turnover": slowest_turnover,
-        "fastest_turnover": fastest_turnover,
-        "bottleneck_phase": bottleneck_phase,
-        "most_time_spent_pending": most_time_spent_pending,
-        "fastest_pending": fastest_pending,
-        "fastest_in_progress": fastest_in_progress,
-        "batch_throughput": batch_throughput,
-        "average_batch_size": average_batch_size,
-        "phase_entry_exit_counts": phase_entry_exit_counts,
-        "average_phases_per_batch": average_phases_per_batch,
-        "longest_time_in_single_phase": slowest_turnover,
-        "shortest_time_in_single_phase": fastest_turnover,
-        "current_wip": current_wip,
-        "working_phase_by_brand": working_phase_by_brand,
-        "working_phase_by_model": working_phase_by_model,
-        "avg_time_to_completion_by_attribute": [],
-        "stuck_batches": [],
-        "phase_reentries": [],
-        "pending_in_progress_ratio": [],
-        "batch_ages": [],
-        "status_distribution": status_distribution,
-        "most_common_batch_attributes": []
+        "wip_by_phase": [
+            {
+                "phase_id": item.current_phase,
+                "phase_name": item.phase_name,
+                "pending": item.pending,
+                "in_progress": item.in_progress,
+                "completed": item.completed,
+                "total": item.total
+            } for item in wip_by_phase
+        ],
+        "production_by_brand": [
+            {
+                "brand_id": item.brand_id,
+                "brand_name": item.brand_name,
+                "pending": item.pending,
+                "in_progress": item.in_progress,
+                "completed": item.completed,
+                "total": item.total,
+                "total_quantity": item.total_quantity
+            } for item in production_by_brand
+        ],
+        "production_by_model": [
+            {
+                "model_id": item.model_id,
+                "model_name": item.model_name,
+                "brand_name": item.brand_name,
+                "pending": item.pending,
+                "in_progress": item.in_progress,
+                "completed": item.completed,
+                "total": item.total,
+                "total_quantity": item.total_quantity
+            } for item in production_by_model
+        ],
+        "recent_activity": [
+            {
+                "date": item.date.strftime("%Y-%m-%d"),
+                "total_events": item.total_events,
+                "unique_batches": item.unique_batches
+            } for item in recent_activity
+        ],
+        "bottlenecks": [
+            {
+                "phase_name": item.phase_name,
+                "brand_name": item.brand_name,
+                "model_name": item.model_name,
+                "pending_count": item.pending_count,
+                "total_quantity": item.total_quantity
+            } for item in bottlenecks
+        ],
+        "overall_stats": {
+            "total_batches": total_batches,
+            "total_pending": total_pending,
+            "total_in_progress": total_in_progress,
+            "total_completed": total_completed,
+            "total_quantity": total_quantity,
+            "completion_rate": round((total_completed / total_batches * 100) if total_batches > 0 else 0, 2)
+        },
+        "second_degree_stats": {
+            "second_degree_batches": second_degree_batches,
+            "second_degree_quantity": second_degree_quantity,
+            "second_degree_percentage": round((second_degree_batches / total_batches * 100) if total_batches > 0 else 0, 2)
+        }
+    }
+
+def get_brand_statistics(db: Session, brand_id: int):
+    """Get detailed statistics for a specific brand"""
+    
+    brand_data = db.query(
+        models.Brand.brand_id,
+        models.Brand.brand_name
+    ).filter(models.Brand.brand_id == brand_id).first()
+    
+    if not brand_data:
+        return None
+    
+    # Brand production by phase
+    brand_phases = db.query(
+        models.Batch.current_phase,
+        models.ProductionPhase.phase_name,
+        sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending'),
+        sa_func.sum(case((models.Batch.status == 'In Progress', 1), else_=0)).label('in_progress'),
+        sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed'),
+        sa_func.count(models.Batch.batch_id).label('total'),
+        sa_func.sum(models.Batch.quantity).label('total_quantity')
+    ).join(
+        models.JobOrder,
+        models.Batch.job_order_id == models.JobOrder.job_order_id
+    ).join(
+        models.Brand,
+        models.JobOrder.brand_id == models.Brand.brand_id
+    ).join(
+        models.ProductionPhase,
+        models.Batch.current_phase == models.ProductionPhase.phase_id
+    ).filter(
+        models.Brand.brand_id == brand_id
+    ).group_by(
+        models.Batch.current_phase,
+        models.ProductionPhase.phase_name
+    ).order_by(
+        models.ProductionPhase.phase_id
+    ).all()
+    
+    # Brand models
+    brand_models = db.query(
+        models.Model.model_id,
+        models.Model.model_name,
+        sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending'),
+        sa_func.sum(case((models.Batch.status == 'In Progress', 1), else_=0)).label('in_progress'),
+        sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed'),
+        sa_func.count(models.Batch.batch_id).label('total'),
+        sa_func.sum(models.Batch.quantity).label('total_quantity')
+    ).join(
+        models.JobOrder,
+        models.Batch.job_order_id == models.JobOrder.job_order_id
+    ).join(
+        models.Model,
+        models.JobOrder.model_id == models.Model.model_id
+    ).join(
+        models.Brand,
+        models.JobOrder.brand_id == models.Brand.brand_id
+    ).filter(
+        models.Brand.brand_id == brand_id
+    ).group_by(
+        models.Model.model_id,
+        models.Model.model_name
+    ).all()
+    
+    return {
+        "brand_info": {
+            "brand_id": brand_data.brand_id,
+            "brand_name": brand_data.brand_name
+        },
+        "phases": [
+            {
+                "phase_id": item.current_phase,
+                "phase_name": item.phase_name,
+                "pending": item.pending,
+                "in_progress": item.in_progress,
+                "completed": item.completed,
+                "total": item.total,
+                "total_quantity": item.total_quantity
+            } for item in brand_phases
+        ],
+        "models": [
+            {
+                "model_id": item.model_id,
+                "model_name": item.model_name,
+                "pending": item.pending,
+                "in_progress": item.in_progress,
+                "completed": item.completed,
+                "total": item.total,
+                "total_quantity": item.total_quantity
+            } for item in brand_models
+        ]
+    }
+
+def get_model_statistics(db: Session, model_id: int):
+    """Get detailed statistics for a specific model"""
+    
+    model_data = db.query(
+        models.Model.model_id,
+        models.Model.model_name,
+        models.Brand.brand_name
+    ).join(
+        models.JobOrder,
+        models.Model.model_id == models.JobOrder.model_id
+    ).join(
+        models.Brand,
+        models.JobOrder.brand_id == models.Brand.brand_id
+    ).filter(models.Model.model_id == model_id).first()
+    
+    if not model_data:
+        return None
+    
+    # Model production by phase
+    model_phases = db.query(
+        models.Batch.current_phase,
+        models.ProductionPhase.phase_name,
+        sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending'),
+        sa_func.sum(case((models.Batch.status == 'In Progress', 1), else_=0)).label('in_progress'),
+        sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed'),
+        sa_func.count(models.Batch.batch_id).label('total'),
+        sa_func.sum(models.Batch.quantity).label('total_quantity')
+    ).join(
+        models.JobOrder,
+        models.Batch.job_order_id == models.JobOrder.job_order_id
+    ).join(
+        models.Model,
+        models.JobOrder.model_id == models.Model.model_id
+    ).join(
+        models.ProductionPhase,
+        models.Batch.current_phase == models.ProductionPhase.phase_id
+    ).filter(
+        models.Model.model_id == model_id
+    ).group_by(
+        models.Batch.current_phase,
+        models.ProductionPhase.phase_name
+    ).order_by(
+        models.ProductionPhase.phase_id
+    ).all()
+    
+    return {
+        "model_info": {
+            "model_id": model_data.model_id,
+            "model_name": model_data.model_name,
+            "brand_name": model_data.brand_name
+        },
+        "phases": [
+            {
+                "phase_id": item.current_phase,
+                "phase_name": item.phase_name,
+                "pending": item.pending,
+                "in_progress": item.in_progress,
+                "completed": item.completed,
+                "total": item.total,
+                "total_quantity": item.total_quantity
+            } for item in model_phases
+        ]
     }

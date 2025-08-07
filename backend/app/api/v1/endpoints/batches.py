@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from app.crud import *
 from app import models, schemas
 from app.core.deps import get_db, get_current_active_superuser, get_current_user, get_optional_current_user
@@ -57,7 +57,10 @@ def read_batches(
     phase: str = None,
     status: str = None,
     job_order_number: str = None,
+    job_order_id: Optional[int] = None,
+    color_id: Optional[int] = None,
     archived: bool = False,
+    is_second_degree: Optional[bool] = None,
     current_user: Optional[schemas.User] = Depends(get_optional_current_user)
 ):
     """Get all batches with optional filtering"""
@@ -117,6 +120,12 @@ def read_batches(
         query = query.filter(base_table.status == status)
     if job_order_number:
         query = query.filter(models.JobOrder.job_order_number.ilike(f"%{job_order_number}%"))
+    if job_order_id is not None:
+        query = query.filter(base_table.job_order_id == job_order_id)
+    if color_id is not None:
+        query = query.filter(base_table.color_id == color_id)
+    if is_second_degree is not None:
+        query = query.filter(base_table.is_second_degree == is_second_degree)
 
     # Get total count before pagination
     total_count = query.count()
@@ -146,7 +155,8 @@ def read_batches(
                 color_name=batch[4],
                 phase_name=batch[5],
                 last_updated_at=batch[0].last_updated_at,
-                archived_at=getattr(batch[0], 'archived_at', None) if archived else None
+                archived_at=getattr(batch[0], 'archived_at', None) if archived else None,
+                is_second_degree=bool(batch[0].is_second_degree)
             )
             for batch in batches
         ],
@@ -173,65 +183,61 @@ def get_batch_stats(db: Session = Depends(get_db)):
 @router.get("/phase-stats", response_model=schemas.PhaseStats)
 def get_phase_stats(db: Session = Depends(get_db)):
     """Get batch statistics by phase"""
-    # Get counts for cutting phase by status
-    cutting_stats = db.query(
+    # Get all phase statistics ordered by phase_id to maintain correct order
+    phase_stats = db.query(
+        models.ProductionPhase.phase_id,
+        models.ProductionPhase.phase_name,
         models.Batch.status,
         func.count(models.Batch.batch_id).label('count')
     ).join(
         models.ProductionPhase,
         models.Batch.current_phase == models.ProductionPhase.phase_id
-    ).filter(
-        models.ProductionPhase.phase_name == 'Cutting'
     ).group_by(
+        models.ProductionPhase.phase_id,
+        models.ProductionPhase.phase_name,
         models.Batch.status
+    ).order_by(
+        models.ProductionPhase.phase_id
     ).all()
     
-    # Get counts for sewing phase by status
-    sewing_stats = db.query(
-        models.Batch.status,
-        func.count(models.Batch.batch_id).label('count')
-    ).join(
-        models.ProductionPhase,
-        models.Batch.current_phase == models.ProductionPhase.phase_id
-    ).filter(
-        models.ProductionPhase.phase_name == 'Sewing'
-    ).group_by(
-        models.Batch.status
-    ).all()
-    
-    # Get counts for packaging phase by status
-    packaging_stats = db.query(
-        models.Batch.status,
-        func.count(models.Batch.batch_id).label('count')
-    ).join(
-        models.ProductionPhase,
-        models.Batch.current_phase == models.ProductionPhase.phase_id
-    ).filter(
-        models.ProductionPhase.phase_name == 'Packaging'
-    ).group_by(
-        models.Batch.status
-    ).all()
-    
-    # Convert to dictionary format
-    cutting_counts = {status: count for status, count in cutting_stats}
-    sewing_counts = {status: count for status, count in sewing_stats}
-    packaging_counts = {status: count for status, count in packaging_stats}
-    
-    return {
-        "cutting": {
-            "pending": cutting_counts.get('Pending', 0),
-            "in_progress": cutting_counts.get('In Progress', 0)
-        },
-        "sewing": {
-            "pending": sewing_counts.get('Pending', 0),
-            "in_progress": sewing_counts.get('In Progress', 0)
-        },
-        "packaging": {
-            "completed": packaging_counts.get('Completed', 0),
-            "pending": packaging_counts.get('Pending', 0),
-            "in_progress": packaging_counts.get('In Progress', 0)
-        }
+    # Initialize phase counts
+    phase_counts = {
+        'Cutting': {'pending': 0, 'in_progress': 0},
+        'Sewing': {'pending': 0, 'in_progress': 0},
+        'Packaging': {'completed': 0, 'pending': 0, 'in_progress': 0}
     }
+    
+    # Process the results
+    for phase_id, phase_name, status, count in phase_stats:
+        if phase_name == 'Cutting':
+            if status == 'Pending':
+                phase_counts['Cutting']['pending'] = count
+            elif status == 'In Progress':
+                phase_counts['Cutting']['in_progress'] = count
+        elif phase_name.startswith('Sewing'):  # Handle all sewing phases (Sewing - 1, Sewing - 2, etc.)
+            if status == 'Pending':
+                phase_counts['Sewing']['pending'] += count
+            elif status == 'In Progress':
+                phase_counts['Sewing']['in_progress'] += count
+        elif phase_name == 'Packaging':
+            if status == 'Completed':
+                phase_counts['Packaging']['completed'] = count
+            elif status == 'Pending':
+                phase_counts['Packaging']['pending'] = count
+            elif status == 'In Progress':
+                phase_counts['Packaging']['in_progress'] = count
+    
+    result = {
+        "cutting": phase_counts['Cutting'],
+        "sewing": phase_counts['Sewing'],
+        "packaging": phase_counts['Packaging']
+    }
+    
+    # Debug logging
+    print("Phase stats result:", result)
+    print("Raw phase_stats query result:", phase_stats)
+    
+    return result
 
 @router.get("/{batch_id}", response_model=schemas.BatchResponse)
 def read_batch(
@@ -255,7 +261,7 @@ def create_batch(
     return batch
 
 @router.put("/{batch_id}", response_model=schemas.BatchResponse)
-def update_batch(
+def update_batch_endpoint(
     batch_id: int,
     batch_in: schemas.BatchUpdate,
     db: Session = Depends(get_db)
@@ -271,7 +277,7 @@ def update_batch(
     
     try:
         # Update the batch
-        updated_batch = batch.update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
+        updated_batch = update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
         return updated_batch
     except Exception as e:
         # Log the full error for debugging
@@ -418,7 +424,8 @@ def read_batch_by_barcode(
 def update_batch_by_barcode(
     barcode: str,
     batch_in: schemas.BatchUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
 ):
     """Update a batch by barcode"""
     db_batch = get_batch_by_barcode(db, barcode=barcode)
@@ -431,7 +438,8 @@ def update_batch_by_barcode(
         raise HTTPException(status_code=404, detail="Batch not found")
     
     try:
-        updated_batch = update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
+        user_id = current_user.user_id if current_user else None
+        updated_batch = update_batch(db=db, db_batch=db_batch_model, batch=batch_in, user_id=user_id)
         return updated_batch
     except Exception as e:
         # Log the full error for debugging
@@ -440,41 +448,398 @@ def update_batch_by_barcode(
         print(f"Error updating batch by barcode {barcode}: {error_details}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.get("/{batch_id}/timeline", response_model=List[schemas.TimelineEntryResponse])
-def get_batch_timeline(batch_id: int, db: Session = Depends(get_db)):
-    """Get the complete timeline history for a batch"""
-    timeline = get_timeline_by_batch(db, batch_id)
-    if not timeline:
-        raise HTTPException(status_code=404, detail="No timeline entries found for this batch")
-    return timeline
+ 
 
-@router.get("/{batch_id}/timeline/stats", response_model=Dict[str, Dict[str, int]])
-def get_batch_timeline_stats(batch_id: int, db: Session = Depends(get_db)):
-    """Get statistics about time spent in each phase for a batch"""
-    stats = get_timeline_stats_by_batch(db, batch_id)
-    if not stats:
-        raise HTTPException(status_code=404, detail="No timeline statistics found for this batch")
-    # Convert to dictionary format
-    result = {}
-    for phase_id, status, minutes in stats:
-        if phase_id not in result:
-            result[phase_id] = {}
-        result[phase_id][status] = minutes
-    return result
+@router.post("/transition-completed-phases", response_model=Dict[str, int])
+def transition_completed_phases(
+    db: Session = Depends(get_db),
+    current_user: Optional[schemas.User] = Depends(get_current_user)
+):
+    """Manually transition all existing batches from completed phases to next phases:
+    - Cutting (Completed) → Sewing - 1 (Pending)
+    - Any Sewing (Completed) → Packaging (Pending)
+    
+    Note: Automatic transitions are handled by the database trigger 'handle_phase_transitions'
+    for new status changes. This endpoint is for bulk transitions of existing batches.
+    """
+    if not current_user or current_user.role != "Admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required."
+        )
+    
+    from app.crud.batch import transition_all_completed_phases
+    transitioned_count = transition_all_completed_phases(db)
+    
+    return {"transitioned_count": transitioned_count} 
 
-@router.get("/timeline/current", response_model=List[schemas.TimelineEntryResponse])
-def get_current_timeline_entries(db: Session = Depends(get_db), skip: int = 0, limit: int = 100):
-    """Get all current (ongoing) timeline entries"""
-    current_entries = get_current_timeline_entries(db, skip=skip, limit=limit)
-    return current_entries
+@router.get("/{batch_id}/events", response_model=List[schemas.BarcodeScanEventResponse])
+def get_batch_scan_events(batch_id: int, limit: int = 100, db: Session = Depends(get_db)):
+    """Get all scan events for a batch (detailed audit trail)"""
+    events = get_detailed_events_by_batch(db, batch_id, limit)
+    if not events:
+        raise HTTPException(status_code=404, detail="No scan events found for this batch")
+    
+    # Convert to response format
+    event_responses = []
+    for event, phase_name, user_name in events:
+        event_responses.append(schemas.BarcodeScanEventResponse(
+            id=event.id,
+            batch_id=event.batch_id,
+            action_type=event.action_type,
+            phase_id=event.phase_id,
+            old_status=event.old_status,
+            new_status=event.new_status,
+            old_quantity=event.old_quantity,
+            new_quantity=event.new_quantity,
+            old_phase=event.old_phase,
+            new_phase=event.new_phase,
+            scanned_at=event.scanned_at,
+            user_id=event.user_id,
+            notes=event.notes,
+            phase_name=phase_name,
+            user_name=user_name
+        ))
+    
+    return event_responses
 
-@router.get("/timeline/stats", response_model=Dict[str, Dict[str, float]])
-def get_all_timeline_stats(db: Session = Depends(get_db)):
-    """Get average time statistics across all batches"""
-    stats = get_all_timeline_stats(db)
-    result = {}
-    for phase_id, status, avg_minutes in stats:
-        if phase_id not in result:
-            result[phase_id] = {}
-        result[phase_id][status] = round(avg_minutes, 2) if avg_minutes else 0
-    return result 
+@router.get("/{batch_id}/timeline/summary", response_model=schemas.TimelineSummaryResponse)
+def get_batch_timeline_summary(batch_id: int, db: Session = Depends(get_db)):
+    """Get aggregated timeline summary for a batch (optimized for display)"""
+    summary = get_timeline_summary_by_batch(db, batch_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="No timeline data found for this batch")
+    
+    # Convert to response format
+    timeline_entries = []
+    for entry in summary['timeline_entries']:
+        timeline_entries.append(schemas.TimelineSummaryEntry(
+            phase_id=entry['phase_id'],
+            phase_name=entry['phase_name'],
+            start_time=entry['start_time'],
+            end_time=entry['end_time'],
+            duration_minutes=entry['duration_minutes'],
+            status=entry['status'],
+            quantity_at_start=entry['quantity_at_start'],
+            quantity_at_end=entry['quantity_at_end'],
+            event_count=entry['event_count']
+        ))
+    
+    return schemas.TimelineSummaryResponse(
+        barcode=summary['barcode'],
+        timeline_entries=timeline_entries,
+        total_entries=summary['total_entries'],
+        total_events=summary['total_events']
+    ) 
+
+@router.get("/barcode/{barcode}/job-order-item")
+def get_job_order_item_by_barcode(
+    barcode: str,
+    db: Session = Depends(get_db),
+):
+    """Get job order item information for a batch by barcode"""
+    # First get the batch
+    batch = get_batch_by_barcode(db, barcode=barcode)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    
+    # Find the corresponding job order item
+    job_order_item = db.query(models.JobOrderItem).filter(
+        models.JobOrderItem.job_order_id == batch.job_order_id,
+        models.JobOrderItem.color_id == batch.color_id,
+        models.JobOrderItem.size_id == batch.size_id
+    ).first()
+    
+    if not job_order_item:
+        raise HTTPException(status_code=404, detail="Job order item not found")
+    
+    return {
+        "item_id": job_order_item.item_id,
+        "job_order_id": job_order_item.job_order_id,
+        "color_id": job_order_item.color_id,
+        "size_id": job_order_item.size_id,
+        "expected_quantity": job_order_item.quantity,
+        "notes": job_order_item.notes
+    }
+
+@router.get("/by-phase/current", response_model=Dict[str, Dict[str, Any]])
+def get_current_batches_by_phase(db: Session = Depends(get_db)):
+    """Get current batches grouped by production phases with model/color grouping"""
+    
+    # Get all current batches with their related information
+    batches = db.query(
+        models.Batch,
+        models.JobOrder.job_order_number,
+        models.Model.model_name,
+        models.Color.color_name,
+        models.Size.size_value,
+        models.ProductionPhase.phase_name,
+        models.ProductionPhase.phase_id
+    ).join(
+        models.JobOrder,
+        models.Batch.job_order_id == models.JobOrder.job_order_id
+    ).join(
+        models.Model,
+        models.JobOrder.model_id == models.Model.model_id
+    ).join(
+        models.Color,
+        models.Batch.color_id == models.Color.color_id
+    ).join(
+        models.Size,
+        models.Batch.size_id == models.Size.size_id
+    ).join(
+        models.ProductionPhase,
+        models.Batch.current_phase == models.ProductionPhase.phase_id
+    ).filter(
+        models.Batch.status.in_(['Pending', 'In Progress', 'Completed'])
+    ).order_by(
+        models.ProductionPhase.phase_id,
+        models.JobOrder.job_order_number,
+        models.Model.model_name,
+        models.Color.color_name,
+        models.Size.size_value
+    ).all()
+    
+    # Group batches by phase and model/color combinations
+    phases_data = {}
+    
+    for batch, job_order_number, model_name, color_name, size_value, phase_name, phase_id in batches:
+        if phase_name not in phases_data:
+            phases_data[phase_name] = {}
+        
+        # Clean model_name and color_name (preserve trailing zeros)
+        cleaned_model_name = model_name.strip() if model_name else ''
+        cleaned_color_name = color_name.strip() if color_name else ''
+        
+        # Create model-color key (grouping by model + color only, second degree will be handled separately)
+        model_color_key = f"{cleaned_model_name}_{cleaned_color_name}"
+        
+        if model_color_key not in phases_data[phase_name]:
+            # Get expected quantity from job order items for this model and color
+            job_order_items = db.query(models.JobOrderItem).filter(
+                models.JobOrderItem.job_order_id == batch.job_order_id,
+                models.JobOrderItem.color_id == batch.color_id
+            ).all()
+            
+            expected_quantity = sum(item.quantity for item in job_order_items) if job_order_items else 0
+            
+            # Calculate time in phase based on oldest batch in this model-color combination
+            time_in_phase = "N/A"
+            oldest_scan_time = None
+            
+            try:
+                # Get all batches for this model-color combination in this phase (both second degree and regular)
+                model_color_batches = db.query(models.Batch).join(
+                    models.JobOrder, models.Batch.job_order_id == models.JobOrder.job_order_id
+                ).join(
+                    models.Model, models.JobOrder.model_id == models.Model.model_id
+                ).join(
+                    models.Color, models.Batch.color_id == models.Color.color_id
+                ).filter(
+                    models.Batch.current_phase == phase_id,
+                    models.Batch.status.in_(['Pending', 'In Progress', 'Completed']),
+                    models.Model.model_name == model_name,
+                    models.Color.color_name == color_name
+                ).all()
+                
+                # Find the oldest scan event among all batches in this model-color combination
+                for mc_batch in model_color_batches:
+                    first_scan = db.query(models.BarcodeScanEvent).filter(
+                        models.BarcodeScanEvent.batch_id == mc_batch.batch_id,
+                        models.BarcodeScanEvent.phase_id == phase_id
+                    ).order_by(models.BarcodeScanEvent.scanned_at).first()
+                    
+                    if first_scan and (oldest_scan_time is None or first_scan.scanned_at < oldest_scan_time):
+                        oldest_scan_time = first_scan.scanned_at
+                
+                if oldest_scan_time:
+                    from datetime import datetime
+                    from sqlalchemy import func
+                    
+                    # Get current database timestamp to ensure timezone consistency
+                    current_db_time = db.query(func.now()).scalar()
+                    time_diff = current_db_time - oldest_scan_time
+                    total_seconds = time_diff.total_seconds()
+                    
+                    if total_seconds < 0:
+                        # If still negative, use absolute value (edge case)
+                        total_seconds = abs(total_seconds)
+                    
+                    hours = int(total_seconds // 3600)
+                    minutes = int((total_seconds % 3600) // 60)
+                    if hours > 24:
+                        days = hours // 24
+                        hours = hours % 24
+                        time_in_phase = f"{days}d {hours}h {minutes}m"
+                    elif hours > 0:
+                        time_in_phase = f"{hours}h {minutes}m"
+                    else:
+                        time_in_phase = f"{minutes}m"
+            except:
+                time_in_phase = "N/A"
+            
+            # Calculate total expected quantity for this model-color combination
+            total_expected_quantity = 0
+            try:
+                # Get job order items for this specific batch's job order and model-color combination
+                job_order_items = db.query(models.JobOrderItem).filter(
+                    models.JobOrderItem.job_order_id == batch.job_order_id,
+                    models.JobOrderItem.color_id == batch.color_id
+                ).all()
+                
+                total_expected_quantity = sum(item.quantity for item in job_order_items)
+            except Exception as e:
+                total_expected_quantity = 0
+            
+            # Initialize model-color group with separate tracking for second degree
+            phases_data[phase_name][model_color_key] = {
+                'model_name': cleaned_model_name,
+                'color_name': cleaned_color_name,
+                'total_quantity': 0,
+                'expected_quantity': total_expected_quantity,
+                'batch_count': 0,
+                'time_in_phase': time_in_phase,
+                'sizes': [],
+                'second_degree_sizes': []
+            }
+        
+        # Get expected quantity for this specific model/color/size combination
+        size_expected_quantity = 0
+        try:
+            job_order_item = db.query(models.JobOrderItem).filter(
+                models.JobOrderItem.job_order_id == batch.job_order_id,
+                models.JobOrderItem.color_id == batch.color_id,
+                models.JobOrderItem.size_id == batch.size_id
+            ).first()
+            
+            size_expected_quantity = job_order_item.quantity if job_order_item else 0
+        except:
+            size_expected_quantity = 0
+        
+        # Add size data to the model-color group
+        size_data = {
+            'size_value': size_value,
+            'quantity': batch.quantity,
+            'expected_quantity': size_expected_quantity,
+            'batch_count': 1,
+            'time_in_phase': "N/A"  # Will be calculated individually for each size
+        }
+        
+        # Calculate individual time in phase for this size
+        try:
+            first_scan = db.query(models.BarcodeScanEvent).filter(
+                models.BarcodeScanEvent.batch_id == batch.batch_id,
+                models.BarcodeScanEvent.phase_id == phase_id
+            ).order_by(models.BarcodeScanEvent.scanned_at).first()
+            
+            if first_scan:
+                from datetime import datetime
+                from sqlalchemy import func
+                
+                current_db_time = db.query(func.now()).scalar()
+                time_diff = current_db_time - first_scan.scanned_at
+                total_seconds = time_diff.total_seconds()
+                
+                if total_seconds < 0:
+                    total_seconds = abs(total_seconds)
+                
+                hours = int(total_seconds // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+                if hours > 24:
+                    days = hours // 24
+                    hours = hours % 24
+                    size_data['time_in_phase'] = f"{days}d {hours}h {minutes}m"
+                elif hours > 0:
+                    size_data['time_in_phase'] = f"{hours}h {minutes}m"
+                else:
+                    size_data['time_in_phase'] = f"{minutes}m"
+        except:
+            pass
+        
+        # Check if this size already exists in the appropriate array
+        size_arrays = phases_data[phase_name][model_color_key]['second_degree_sizes'] if batch.is_second_degree else phases_data[phase_name][model_color_key]['sizes']
+        existing_size = next((size for size in size_arrays if size['size_value'] == size_value), None)
+        
+        if existing_size:
+            # Update existing size entry
+            existing_size['quantity'] += batch.quantity
+            existing_size['batch_count'] += 1
+            
+            # Update time if this batch is older (keep the oldest time)
+            if size_data['time_in_phase'] != "N/A":
+                if existing_size['time_in_phase'] == "N/A":
+                    existing_size['time_in_phase'] = size_data['time_in_phase']
+                else:
+                    # Compare time strings (this is a simplified approach - ideally we'd parse the times)
+                    # For now, we'll keep the existing time and let the frontend handle display
+                    pass
+        else:
+            # Add new size entry
+            if batch.is_second_degree:
+                phases_data[phase_name][model_color_key]['second_degree_sizes'].append(size_data)
+            else:
+                phases_data[phase_name][model_color_key]['sizes'].append(size_data)
+        
+        phases_data[phase_name][model_color_key]['total_quantity'] += batch.quantity
+        phases_data[phase_name][model_color_key]['batch_count'] += 1
+    
+    # Calculate phase-level daily throughput for each phase
+    for phase_name in phases_data:
+        try:
+            from datetime import datetime
+            from sqlalchemy import func
+            
+            # Get current database date to ensure timezone consistency
+            current_db_date = db.query(func.date(func.now())).scalar()
+            
+            # Get today's scan events for this phase
+            today_scans = db.query(models.BarcodeScanEvent).filter(
+                models.BarcodeScanEvent.phase_id == db.query(models.ProductionPhase.phase_id).filter(
+                    models.ProductionPhase.phase_name == phase_name
+                ).scalar(),
+                models.BarcodeScanEvent.scanned_at >= current_db_date
+            ).all()
+            
+            # Count items scanned in but not scanned out (In Progress)
+            scanned_in_not_out = sum(1 for scan in today_scans if scan.new_status == 'In Progress')
+            # Count completed items
+            completed_items = sum(1 for scan in today_scans if scan.new_status == 'Completed')
+            
+            # Calculate efficiency ratio
+            if completed_items > 0:
+                efficiency_ratio = scanned_in_not_out / completed_items
+                phases_data[phase_name] = {
+                    'model_color_groups': phases_data[phase_name],
+                    'daily_throughput': {
+                        'scanned_in_not_out': scanned_in_not_out,
+                        'completed': completed_items,
+                        'efficiency_ratio': round(efficiency_ratio, 2)
+                    }
+                }
+            else:
+                phases_data[phase_name] = {
+                    'model_color_groups': phases_data[phase_name],
+                    'daily_throughput': {
+                        'scanned_in_not_out': scanned_in_not_out,
+                        'completed': completed_items,
+                        'efficiency_ratio': 0
+                    }
+                }
+        except:
+            phases_data[phase_name] = {
+                'model_color_groups': phases_data[phase_name],
+                'daily_throughput': {
+                    'scanned_in_not_out': 0,
+                    'completed': 0,
+                    'efficiency_ratio': 0
+                }
+            }
+    
+    # Sort model-color groups within each phase by model name, then color name
+    for phase_name in phases_data:
+        phases_data[phase_name]['model_color_groups'] = dict(
+            sorted(phases_data[phase_name]['model_color_groups'].items(), 
+                   key=lambda x: (x[1]['model_name'], x[1]['color_name']))
+        )
+    
+    return phases_data

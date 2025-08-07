@@ -1,811 +1,656 @@
 import React, { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, Legend, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, Legend, LineChart, Line } from 'recharts';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { AdvancedStatisticsResponse } from '@/services/api';
-import api from '@/services/api';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { ChevronLeft, ChevronRight, Search, ChevronDown, X } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { statisticsApi, ProductionStatisticsResponse, BrandStatisticsResponse, ModelStatisticsResponse, jobOrderApi, barcodeApi, BarcodeData, JobOrderItemSummary } from '../services/api';
+import { useTranslation } from 'react-i18next';
+import { TrendingUp, TrendingDown, Package, Users, Clock, AlertTriangle, CheckCircle, Activity, Search } from 'lucide-react';
+import ProductionPhasesOverview from './AdvancedStatisticsProductionPhasesOverview';
+import JobOrderStatusSearch from './AdvancedStatisticsJobOrderStatusSearch';
 
 const AdvancedStatisticsPage: React.FC = () => {
-  const [data, setData] = useState<AdvancedStatisticsResponse | null>(null);
+  const { t } = useTranslation();
+  const [data, setData] = useState<ProductionStatisticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [currentBrandIndex, setCurrentBrandIndex] = useState(0);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [currentModelIndex, setCurrentModelIndex] = useState(0);
-  const [modelSearchTerm, setModelSearchTerm] = useState('');
-  const [selectedBrand, setSelectedBrand] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
-  const [showBrandDropdown, setShowBrandDropdown] = useState(false);
-  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [selectedBrand, setSelectedBrand] = useState<BrandStatisticsResponse | null>(null);
+  const [selectedModel, setSelectedModel] = useState<ModelStatisticsResponse | null>(null);
+  const [jobOrderSearch, setJobOrderSearch] = useState<string>('');
+  const [jobOrderItems, setJobOrderItems] = useState<JobOrderItemSummary[]>([]);
+  const [jobOrderBatches, setJobOrderBatches] = useState<{[itemId: number]: BarcodeData[]}>({});
+  const [jobOrderLoading, setJobOrderLoading] = useState(false);
+  const [showDetailedBreakdown, setShowDetailedBreakdown] = useState(false);
+  const [selectedItemForModal, setSelectedItemForModal] = useState<JobOrderItemSummary | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [phasesData, setPhasesData] = useState<{[phaseName: string]: {
+    model_color_groups: {[modelColorKey: string]: {
+      model_name: string;
+      color_name: string;
+      total_quantity: number;
+      expected_quantity: number;
+      batch_count: number;
+      time_in_phase: string;
+      sizes: Array<{
+        size_value: string;
+        quantity: number;
+        expected_quantity: number;
+        batch_count: number;
+        time_in_phase: string;
+      }>;
+      second_degree_sizes: Array<{
+        size_value: string;
+        quantity: number;
+        expected_quantity: number;
+        batch_count: number;
+        time_in_phase: string;
+      }>;
+    }};
+    daily_throughput: {scanned_in_not_out: number; completed: number; efficiency_ratio: number};
+  }}>({});
+  const [phasesLoading, setPhasesLoading] = useState(false);
+  const [phasesModelSearch, setPhasesModelSearch] = useState('');
+  const [phasesColorSearch, setPhasesColorSearch] = useState('');
+  const [jobOrderOptions, setJobOrderOptions] = useState<{ job_order_number: string; model_name: string | null }[]>([]);
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
-    // Use the API service instead of direct fetch
-    api.get('/statistics/advanced')
-      .then((response) => {
-        setData(response.data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        setError(err.message);
-        setLoading(false);
+    loadProductionStatistics();
+    loadPhasesData();
+    jobOrderApi.getAllSimple().then(setJobOrderOptions);
+  }, []);
+
+  const loadProductionStatistics = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const stats = await statisticsApi.getProductionStatistics();
+      setData(stats);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load statistics');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadPhasesData = async () => {
+    try {
+      setPhasesLoading(true);
+      const data = await barcodeApi.getCurrentBatchesByPhase();
+      setPhasesData(data);
+    } catch (err: any) {
+      console.error('Failed to load phases data:', err);
+    } finally {
+      setPhasesLoading(false);
+    }
+  };
+
+  const loadBrandStatistics = async (brandId: number) => {
+    try {
+      const brandStats = await statisticsApi.getBrandStatistics(brandId);
+      setSelectedBrand(brandStats);
+      setSelectedModel(null);
+    } catch (err: any) {
+      console.error('Failed to load brand statistics:', err);
+    }
+  };
+
+  const loadModelStatistics = async (modelId: number) => {
+    try {
+      const modelStats = await statisticsApi.getModelStatistics(modelId);
+      setSelectedModel(modelStats);
+      setSelectedBrand(null);
+    } catch (err: any) {
+      console.error('Failed to load model statistics:', err);
+    }
+  };
+
+  const searchJobOrder = async () => {
+    if (!jobOrderSearch.trim()) return;
+    
+    try {
+      setJobOrderLoading(true);
+      const jobOrderNumber = jobOrderSearch.trim();
+      
+      // Get job order by number
+      const jobOrder = await jobOrderApi.getByNumber(jobOrderNumber);
+      
+      // Get item summaries for this job order
+      const itemSummaries = await jobOrderApi.getItemSummaries({
+        job_order_id: jobOrder.job_order_id
       });
-  }, []);
-
-  // Reset current brand index when search term changes
-  useEffect(() => {
-    setCurrentBrandIndex(0);
-  }, [searchTerm]);
-
-  // Reset current model index when model search term changes
-  useEffect(() => {
-    setCurrentModelIndex(0);
-  }, [modelSearchTerm]);
-
-  // Close dropdowns when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Element;
-      if (!target.closest('.dropdown-container')) {
-        setShowBrandDropdown(false);
-        setShowModelDropdown(false);
+      
+      setJobOrderItems(itemSummaries.items);
+      
+      // Get all batches for the job order and then filter by item
+      const allBatches = await barcodeApi.getBarcodes({
+        job_order_id: jobOrder.job_order_id
+      });
+      
+      const batchesData: {[itemId: number]: BarcodeData[]} = {};
+      
+      for (const item of itemSummaries.items) {
+        // Filter batches for this specific item (color + size combination)
+        const itemBatches = allBatches.items.filter(batch => 
+          batch.color_id === item.color_id && batch.size_id === item.size_id
+        );
+        batchesData[item.item_id] = itemBatches;
       }
-    };
+      
+      setJobOrderBatches(batchesData);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load job order items');
+      setJobOrderItems([]);
+      setJobOrderBatches({});
+    } finally {
+      setJobOrderLoading(false);
+    }
+  };
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
+  // Filter phases data by model and color search
+  const getFilteredPhasesData = () => {
+    if (!phasesModelSearch.trim() && !phasesColorSearch.trim()) {
+      return phasesData;
+    }
 
-  // Transform data for better chart visualization
-  const getChartData = () => {
-    if (!data) return [];
+    const filteredData: typeof phasesData = {};
     
-    const brandPhaseData = data.working_phase_by_brand.filter(item => item.total > 0);
-    const brands = [...new Set(brandPhaseData.map(item => item.brand_name))];
-    const phases = [...new Set(brandPhaseData.map(item => item.phase_name))];
-    
-    return brands.map(brand => {
-      const brandData: any = { brand };
-      phases.forEach(phase => {
-        const phaseData = brandPhaseData.find(item => item.brand_name === brand && item.phase_name === phase);
-        if (phaseData) {
-          brandData[`${phase}_pending`] = phaseData.pending;
-          brandData[`${phase}_in_progress`] = phaseData.in_progress;
-          brandData[`${phase}_completed`] = phaseData.completed;
-          brandData[`${phase}_total`] = phaseData.total;
-        } else {
-          brandData[`${phase}_pending`] = 0;
-          brandData[`${phase}_in_progress`] = 0;
-          brandData[`${phase}_completed`] = 0;
-          brandData[`${phase}_total`] = 0;
+    Object.entries(phasesData).forEach(([phaseName, phaseData]) => {
+      const filteredGroups: typeof phaseData.model_color_groups = {};
+      
+      Object.entries(phaseData.model_color_groups).forEach(([key, group]) => {
+        const modelMatch = !phasesModelSearch.trim() || 
+          group.model_name.toLowerCase().includes(phasesModelSearch.toLowerCase());
+        const colorMatch = !phasesColorSearch.trim() || 
+          group.color_name.toLowerCase().includes(phasesColorSearch.toLowerCase());
+        
+        if (modelMatch && colorMatch) {
+          filteredGroups[key] = group;
         }
       });
-      return brandData;
-    });
-  };
-
-  // Get filtered and searchable brands
-  const getFilteredBrands = () => {
-    if (!data) return [];
-    const brandPhaseData = data.working_phase_by_brand.filter(item => item.total > 0);
-    const brands = [...new Set(brandPhaseData.map(item => item.brand_name))];
-    
-    if (!searchTerm) return brands;
-    
-    return brands.filter(brand => 
-      brand.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  };
-
-  // Get filtered and searchable models
-  const getFilteredModels = () => {
-    if (!data) return [];
-    const modelPhaseData = data.working_phase_by_model.filter(item => item.total > 0);
-    
-    // Get unique model-brand combinations
-    const modelBrandMap = new Map<string, string>();
-    modelPhaseData.forEach(item => {
-      modelBrandMap.set(item.model_name, item.brand_name);
-    });
-    
-    const models = [...new Set(modelPhaseData.map(item => item.model_name))];
-    
-    if (!modelSearchTerm) return models.map(model => ({
-      modelName: model,
-      brandName: modelBrandMap.get(model) || 'Unknown Brand'
-    }));
-    
-    return models
-      .filter(model => 
-        model.toLowerCase().includes(modelSearchTerm.toLowerCase()) ||
-        (modelBrandMap.get(model) || '').toLowerCase().includes(modelSearchTerm.toLowerCase())
-      )
-      .map(model => ({
-        modelName: model,
-        brandName: modelBrandMap.get(model) || 'Unknown Brand'
-      }));
-  };
-
-  // Get current brand data
-  const getCurrentBrandData = () => {
-    if (!data || !selectedBrand) return null;
-    
-    const brandData = data.working_phase_by_brand.filter(
-      item => item.brand_name === selectedBrand
-    );
-    
-    return {
-      brandName: selectedBrand,
-      phases: brandData.map(item => ({
-        phaseName: item.phase_name,
-        pending: item.pending,
-        inProgress: item.in_progress,
-        completed: item.completed,
-        total: item.total
-      }))
-    };
-  };
-
-  // Get current model data
-  const getCurrentModelData = () => {
-    if (!data || !selectedModel) return null;
-    
-    const modelData = data.working_phase_by_model.filter(
-      item => item.model_name === selectedModel
-    );
-    
-    return {
-      modelName: selectedModel,
-      phases: modelData.map(item => ({
-        phaseName: item.phase_name,
-        pending: item.pending,
-        inProgress: item.in_progress,
-        completed: item.completed,
-        total: item.total
-      }))
-    };
-  };
-
-  // Get stalled brands by phase
-  const getStalledBrandsByPhase = () => {
-    if (!data) return [];
-    
-    const phaseStalledBrands = [];
-    const phases = ['Cutting', 'Sewing', 'Packaging'];
-    
-    phases.forEach(phaseName => {
-      const phaseData = data.working_phase_by_brand.filter(
-        item => item.phase_name === phaseName && item.pending > 0
-      );
       
-      if (phaseData.length > 0) {
-        const topStalled = phaseData
-          .sort((a, b) => b.pending - a.pending)
-          .slice(0, 3); // Top 3 most pending
-        
-        phaseStalledBrands.push({
-          phase: phaseName,
-          brands: topStalled.map(item => ({
-            brandName: item.brand_name,
-            pending: item.pending,
-            inProgress: item.in_progress,
-            total: item.total
-          }))
-        });
+      if (Object.keys(filteredGroups).length > 0) {
+        filteredData[phaseName] = {
+          model_color_groups: filteredGroups,
+          daily_throughput: phaseData.daily_throughput
+        };
       }
     });
     
-    return phaseStalledBrands;
+    return filteredData;
   };
 
-  // Get most pending brands overall
-  const getMostPendingBrands = () => {
-    if (!data) return [];
-    
-    const brandTotals = new Map<string, { pending: number; inProgress: number; total: number }>();
-    
-    data.working_phase_by_brand.forEach(item => {
-      const existing = brandTotals.get(item.brand_name) || { pending: 0, inProgress: 0, total: 0 };
-      brandTotals.set(item.brand_name, {
-        pending: existing.pending + item.pending,
-        inProgress: existing.inProgress + item.in_progress,
-        total: existing.total + item.total
-      });
-    });
-    
-    return Array.from(brandTotals.entries())
-      .filter(([_, stats]) => stats.pending > 0)
-      .sort(([_, a], [__, b]) => b.pending - a.pending)
-      .slice(0, 5) // Top 5 most pending
-      .map(([brandName, stats]) => ({
-        brandName,
-        pending: stats.pending,
-        inProgress: stats.inProgress,
-        total: stats.total
-      }));
-  };
+  if (loading) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+            <p className="mt-4 text-gray-600">Loading production statistics...</p>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
-  if (loading) return <div className="p-6">Loading advanced statistics...</div>;
-  if (error) return <div className="p-6 text-red-600">Error: {error}</div>;
-  if (!data) return <div className="p-6">No data available.</div>;
+  if (error) {
+    return (
+      <Layout>
+        <div className="p-6">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <div className="flex items-center">
+              <AlertTriangle className="h-5 w-5 text-red-400 mr-2" />
+              <h3 className="text-red-800 font-medium">Error Loading Statistics</h3>
+            </div>
+            <p className="text-red-700 mt-2">{error}</p>
+            <button
+              onClick={loadProductionStatistics}
+              className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
 
-  const PIE_COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
-  const chartData = getChartData();
+  if (!data) {
+    return (
+      <Layout>
+        <div className="p-6">
+          <div className="text-center py-8">
+            <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">No Data Available</h3>
+            <p className="text-gray-600">No production statistics found.</p>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
 
   return (
     <Layout>
-      <div className="p-6 space-y-6 bg-gray-50 min-h-screen">
-        <h1 className="text-3xl font-bold text-gray-800">Advanced Production Statistics</h1>
-
-        {/* Brand Statistics Dashboard */}
-        <div className="grid grid-cols-1 gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Brand Statistics Dashboard</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {/* Search Bar */}
-              <div className="relative mb-6 dropdown-container">
-                <div className="relative">
-                  <Input
-                    type="text"
-                    placeholder="Search brands..."
-                    value={searchTerm}
-                    onChange={(e) => {
-                      setSearchTerm(e.target.value);
-                      setShowBrandDropdown(true);
-                    }}
-                    onFocus={() => setShowBrandDropdown(true)}
-                    className="pr-10"
-                  />
-                  <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex items-center space-x-1">
-                    {selectedBrand && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setSelectedBrand(null);
-                          setSearchTerm('');
-                        }}
-                        className="h-6 w-6 p-0"
-                      >
-                        <X className="h-3 w-3" />
-                      </Button>
-                    )}
-                    <ChevronDown className="h-4 w-4 text-gray-400" />
+      <div className="p-6 space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-800">Production Statistics</h1>
+            <p className="text-gray-600 mt-2">Real-time production monitoring and analytics</p>
                   </div>
-                </div>
-                
-                {/* Dropdown */}
-                {showBrandDropdown && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
-                    {getFilteredBrands().length > 0 ? (
-                      getFilteredBrands().map((brand) => (
-                        <div
-                          key={brand}
-                          className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
-                          onClick={() => {
-                            setSelectedBrand(brand);
-                            setSearchTerm(brand);
-                            setShowBrandDropdown(false);
-                          }}
-                        >
-                          {brand}
-                        </div>
-                      ))
-                    ) : (
-                      <div className="px-4 py-2 text-gray-500">No brands found</div>
-                    )}
-                  </div>
-                )}
+          <button
+            onClick={() => {
+              loadProductionStatistics();
+              loadPhasesData();
+            }}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+          >
+            <Activity className="h-4 w-4" />
+            Refresh
+          </button>
               </div>
 
-              {/* Selected Brand Display */}
-              {selectedBrand && (
-                <div className="mb-6 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-lg font-semibold text-blue-800">{selectedBrand}</h3>
-                      <p className="text-sm text-blue-600">Brand Statistics</p>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedBrand(null);
-                        setSearchTerm('');
-                      }}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {/* Brand Statistics Cards */}
-              {getCurrentBrandData() && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {getCurrentBrandData()!.phases
-                    .sort((a, b) => {
-                      // Custom sorting: Cutting, Sewing, Packaging
-                      const order = { 'Cutting': 1, 'Sewing': 2, 'Packaging': 3 };
-                      return (order[a.phaseName as keyof typeof order] || 0) - (order[b.phaseName as keyof typeof order] || 0);
-                    })
-                    .map((phase) => (
-                    <Card key={phase.phaseName} className="border-l-4 border-l-blue-500">
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-lg flex items-center justify-between">
-                          <span>{phase.phaseName}</span>
-                          <span className="text-2xl font-bold text-blue-600">
-                            {phase.total}
-                          </span>
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="space-y-3">
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm text-gray-600">Pending</span>
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                              {phase.pending}
-                            </span>
-                          </div>
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm text-gray-600">In Progress</span>
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                              {phase.inProgress}
-                            </span>
-                          </div>
-                          {phase.phaseName === 'Packaging' && (
-                            <div className="flex justify-between items-center">
-                              <span className="text-sm text-gray-600">Completed</span>
-                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                {phase.completed}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              )}
-
-              {/* Universal Progress Bar */}
-              {getCurrentBrandData() && (
-                <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-                  <div className="flex justify-between items-center mb-2">
-                    <h4 className="text-lg font-semibold text-gray-800">Overall Production Progress</h4>
-                    <span className="text-sm font-medium text-gray-600">
-                      {(() => {
-                        const phases = getCurrentBrandData()!.phases;
-                        const totalCompleted = phases.reduce((sum, phase) => sum + (phase.phaseName === 'Packaging' ? phase.completed : 0), 0);
-                        const totalBatches = phases.reduce((sum, phase) => sum + phase.total, 0);
-                        return totalBatches > 0 ? Math.round((totalCompleted / totalBatches) * 100) : 0;
-                      })()}% Complete
-                    </span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                    <div 
-                      className="h-3 rounded-full transition-all duration-300"
-                      style={{ 
-                        width: `${(() => {
-                          const phases = getCurrentBrandData()!.phases;
-                          const totalCompleted = phases.reduce((sum, phase) => sum + (phase.phaseName === 'Packaging' ? phase.completed : 0), 0);
-                          const totalBatches = phases.reduce((sum, phase) => sum + phase.total, 0);
-                          return totalBatches > 0 ? (totalCompleted / totalBatches) * 100 : 0;
-                        })()}%`,
-                        background: `linear-gradient(90deg, #10b981 0%, #059669 100%)`
-                      }}
-                    ></div>
-                  </div>
-                  <div className="flex justify-between text-xs text-gray-500 mt-1">
-                    <span>Total Completed: {getCurrentBrandData()!.phases.reduce((sum, phase) => sum + (phase.phaseName === 'Packaging' ? phase.completed : 0), 0)}</span>
-                    <span>Total Batches: {getCurrentBrandData()!.phases.reduce((sum, phase) => sum + phase.total, 0)}</span>
-                  </div>
-                </div>
-              )}
-
-              {/* No Selection Message */}
-              {!selectedBrand && (
-                <div className="text-center py-8">
-                  <p className="text-gray-500">Search and select a brand to view statistics.</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Model Statistics Dashboard */}
-        <div className="grid grid-cols-1 gap-6">
+        {/* Overall Statistics Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <Card>
-            <CardHeader>
-              <CardTitle>Model Statistics Dashboard</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {/* Search Bar */}
-              <div className="relative mb-6 dropdown-container">
-                <div className="relative">
-                  <Input
-                    type="text"
-                    placeholder="Search models..."
-                    value={modelSearchTerm}
-                    onChange={(e) => {
-                      setModelSearchTerm(e.target.value);
-                      setShowModelDropdown(true);
-                    }}
-                    onFocus={() => setShowModelDropdown(true)}
-                    className="pr-10"
-                  />
-                  <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex items-center space-x-1">
-                    {selectedModel && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setSelectedModel(null);
-                          setModelSearchTerm('');
-                        }}
-                        className="h-6 w-6 p-0"
-                      >
-                        <X className="h-3 w-3" />
-                      </Button>
-                    )}
-                    <ChevronDown className="h-4 w-4 text-gray-400" />
-                  </div>
-                </div>
-                
-                {/* Dropdown */}
-                {showModelDropdown && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
-                    {getFilteredModels().length > 0 ? (
-                      getFilteredModels().map((model) => (
-                        <div
-                          key={model.modelName}
-                          className="px-4 py-2 hover:bg-gray-100 cursor-pointer"
-                          onClick={() => {
-                            setSelectedModel(model.modelName);
-                            setModelSearchTerm(model.modelName);
-                            setShowModelDropdown(false);
-                          }}
-                        >
-                          {model.modelName} - {model.brandName}
-                        </div>
-                      ))
-                    ) : (
-                      <div className="px-4 py-2 text-gray-500">No models found</div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Selected Model Display */}
-              {selectedModel && (
-                <div className="mb-6 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+            <CardContent className="p-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-lg font-semibold text-purple-800">{selectedModel}</h3>
-                      <p className="text-sm text-purple-600">Model Statistics</p>
+                  <p className="text-sm font-medium text-gray-600">Total Batches</p>
+                  <p className="text-3xl font-bold text-gray-900">{data.overall_stats.total_batches}</p>
+                </div>
+                <Package className="h-8 w-8 text-blue-600" />
+                </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Pending</p>
+                  <p className="text-3xl font-bold text-yellow-600">{data.overall_stats.total_pending}</p>
+                </div>
+                <Clock className="h-8 w-8 text-yellow-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">In Progress</p>
+                  <p className="text-3xl font-bold text-blue-600">{data.overall_stats.total_in_progress}</p>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedModel(null);
-                        setModelSearchTerm('');
-                      }}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              )}
+                <TrendingUp className="h-8 w-8 text-blue-600" />
+                    </div>
+            </CardContent>
+          </Card>
 
-              {/* Model Statistics Cards */}
-              {getCurrentModelData() && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {getCurrentModelData()!.phases
-                    .sort((a, b) => {
-                      // Custom sorting: Cutting, Sewing, Packaging
-                      const order = { 'Cutting': 1, 'Sewing': 2, 'Packaging': 3 };
-                      return (order[a.phaseName as keyof typeof order] || 0) - (order[b.phaseName as keyof typeof order] || 0);
-                    })
-                    .map((phase) => (
-                    <Card key={phase.phaseName} className="border-l-4 border-l-purple-500">
-                      <CardHeader className="pb-2">
-                        <CardTitle className="text-lg flex items-center justify-between">
-                          <span>{phase.phaseName}</span>
-                          <span className="text-2xl font-bold text-purple-600">
-                            {phase.total}
-                          </span>
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="space-y-3">
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm text-gray-600">Pending</span>
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                              {phase.pending}
-                            </span>
-                          </div>
-                          <div className="flex justify-between items-center">
-                            <span className="text-sm text-gray-600">In Progress</span>
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                              {phase.inProgress}
-                            </span>
-                          </div>
-                          {phase.phaseName === 'Packaging' && (
-                            <div className="flex justify-between items-center">
-                              <span className="text-sm text-gray-600">Completed</span>
-                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                {phase.completed}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              )}
-
-              {/* Universal Progress Bar */}
-              {getCurrentModelData() && (
-                <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-                  <div className="flex justify-between items-center mb-2">
-                    <h4 className="text-lg font-semibold text-gray-800">Overall Production Progress</h4>
-                    <span className="text-sm font-medium text-gray-600">
-                      {(() => {
-                        const phases = getCurrentModelData()!.phases;
-                        const totalCompleted = phases.reduce((sum, phase) => sum + (phase.phaseName === 'Packaging' ? phase.completed : 0), 0);
-                        const totalBatches = phases.reduce((sum, phase) => sum + phase.total, 0);
-                        return totalBatches > 0 ? Math.round((totalCompleted / totalBatches) * 100) : 0;
-                      })()}% Complete
-                    </span>
-                  </div>
-                  <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                    <div 
-                      className="h-3 rounded-full transition-all duration-300"
-                      style={{ 
-                        width: `${(() => {
-                          const phases = getCurrentModelData()!.phases;
-                          const totalCompleted = phases.reduce((sum, phase) => sum + (phase.phaseName === 'Packaging' ? phase.completed : 0), 0);
-                          const totalBatches = phases.reduce((sum, phase) => sum + phase.total, 0);
-                          return totalBatches > 0 ? (totalCompleted / totalBatches) * 100 : 0;
-                        })()}%`,
-                        background: `linear-gradient(90deg, #10b981 0%, #059669 100%)`
-                      }}
-                    ></div>
-                  </div>
-                  <div className="flex justify-between text-xs text-gray-500 mt-1">
-                    <span>Total Completed: {getCurrentModelData()!.phases.reduce((sum, phase) => sum + (phase.phaseName === 'Packaging' ? phase.completed : 0), 0)}</span>
-                    <span>Total Batches: {getCurrentModelData()!.phases.reduce((sum, phase) => sum + phase.total, 0)}</span>
-                  </div>
-                </div>
-              )}
-
-              {/* No Results Message */}
-              {getFilteredModels().length === 0 && (
-                <div className="text-center py-8">
-                  <p className="text-gray-500">No models found matching your search.</p>
-                </div>
-              )}
-
-              {/* No Selection Message */}
-              {!selectedModel && (
-                <div className="text-center py-8">
-                  <p className="text-gray-500">Search and select a model to view statistics.</p>
-                </div>
-              )}
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Completed</p>
+                  <p className="text-3xl font-bold text-green-600">{data.overall_stats.total_completed}</p>
+                    </div>
+                <CheckCircle className="h-8 w-8 text-green-600" />
+                    </div>
             </CardContent>
           </Card>
         </div>
 
-        {/* Concise Stalled Models Row (Larger) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          {/* Most Pending Models Overall */}
-          <Card className="py-4 px-3">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base text-purple-600 font-bold">Most Pending Models</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {(() => {
-                if (!data) return null;
-                // Aggregate pending by model
-                const modelTotals = new Map<string, { pending: number; brand: string }>();
-                data.working_phase_by_model.forEach(item => {
-                  const existing = modelTotals.get(item.model_name) || { pending: 0, brand: item.brand_name };
-                  modelTotals.set(item.model_name, {
-                    pending: existing.pending + item.pending,
-                    brand: item.brand_name
-                  });
-                });
-                return Array.from(modelTotals.entries())
-                  .filter(([_, stats]) => stats.pending > 0)
-                  .sort(([_, a], [__, b]) => b.pending - a.pending)
-                  .slice(0, 3)
-                  .map(([modelName, stats], index) => (
-                    <div key={modelName} className="flex items-center justify-between py-2">
-                      <span className="truncate font-semibold text-sm">{index + 1}. {modelName} <span className="text-gray-400">({stats.brand})</span></span>
-                      <span className="font-bold text-lg text-purple-600">{stats.pending}</span>
-                    </div>
-                  ));
-              })()}
-            </CardContent>
-          </Card>
-          {/* Most Pending in Cutting */}
-          <Card className="py-4 px-3">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base text-blue-600 font-bold">Most Pending in Cutting</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {(() => {
-                if (!data) return null;
-                const cutting = data.working_phase_by_model.filter(item => item.phase_name === 'Cutting' && item.pending > 0);
-                return cutting
-                  .sort((a, b) => b.pending - a.pending)
-                  .slice(0, 3)
-                  .map((item, index) => (
-                    <div key={item.model_name} className="flex items-center justify-between py-2">
-                      <span className="truncate font-semibold text-sm">{index + 1}. {item.model_name} <span className="text-gray-400">({item.brand_name})</span></span>
-                      <span className="font-bold text-lg text-blue-600">{item.pending}</span>
-                    </div>
-                  ));
-              })()}
-              {data && data.working_phase_by_model.filter(item => item.phase_name === 'Cutting' && item.pending > 0).length === 0 && (
-                <div className="text-center text-gray-400 text-sm py-3">No pending</div>
-              )}
-            </CardContent>
-          </Card>
-          {/* Most Pending in Sewing */}
-          <Card className="py-4 px-3">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base text-purple-600 font-bold">Most Pending in Sewing</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {(() => {
-                if (!data) return null;
-                const sewing = data.working_phase_by_model.filter(item => item.phase_name === 'Sewing' && item.pending > 0);
-                return sewing
-                  .sort((a, b) => b.pending - a.pending)
-                  .slice(0, 3)
-                  .map((item, index) => (
-                    <div key={item.model_name} className="flex items-center justify-between py-2">
-                      <span className="truncate font-semibold text-sm">{index + 1}. {item.model_name} <span className="text-gray-400">({item.brand_name})</span></span>
-                      <span className="font-bold text-lg text-purple-600">{item.pending}</span>
-                    </div>
-                  ));
-              })()}
-              {data && data.working_phase_by_model.filter(item => item.phase_name === 'Sewing' && item.pending > 0).length === 0 && (
-                <div className="text-center text-gray-400 text-sm py-3">No pending</div>
-              )}
-            </CardContent>
-          </Card>
-          {/* Most Pending in Packaging */}
-          <Card className="py-4 px-3">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base text-orange-600 font-bold">Most Pending in Packaging</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {(() => {
-                if (!data) return null;
-                const packaging = data.working_phase_by_model.filter(item => item.phase_name === 'Packaging' && item.pending > 0);
-                return packaging
-                  .sort((a, b) => b.pending - a.pending)
-                  .slice(0, 3)
-                  .map((item, index) => (
-                    <div key={item.model_name} className="flex items-center justify-between py-2">
-                      <span className="truncate font-semibold text-sm">{index + 1}. {item.model_name} <span className="text-gray-400">({item.brand_name})</span></span>
-                      <span className="font-bold text-lg text-orange-600">{item.pending}</span>
-                    </div>
-                  ));
-              })()}
-              {data && data.working_phase_by_model.filter(item => item.phase_name === 'Packaging' && item.pending > 0).length === 0 && (
-                <div className="text-center text-gray-400 text-sm py-3">No pending</div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* KPI + Turnover Rate by Phase Row */}
+        {/* Completion Rate and Second Degree */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Stacked Turnover Cards */}
-          <div className="flex flex-col gap-6">
             <Card>
               <CardHeader>
-                <CardTitle>Slowest Turnover</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5" />
+                Completion Rate
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-red-600">{data.slowest_turnover?.average_minutes.toFixed(2)} min</div>
-              <p className="text-sm text-gray-500 mt-1">in</p>
-              <div className="text-xl font-semibold text-gray-800 mt-1">{data.slowest_turnover?.phase_name || 'N/A'}</div>
+              <div className="text-center">
+                <div className="text-4xl font-bold text-green-600 mb-2">
+                  {data.overall_stats.completion_rate}%
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-3">
+                  <div
+                    className="bg-green-600 h-3 rounded-full transition-all duration-300"
+                    style={{ width: `${data.overall_stats.completion_rate}%` }}
+                  ></div>
+                </div>
+                <p className="text-sm text-gray-600 mt-2">
+                  {data.overall_stats.total_completed} of {data.overall_stats.total_batches} batches completed
+                </p>
+              </div>
             </CardContent>
           </Card>
+
           <Card>
             <CardHeader>
-              <CardTitle>Fastest Turnover</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5" />
+                Second Degree Analysis
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold text-green-600">{data.fastest_turnover?.average_minutes.toFixed(2)} min</div>
-              <p className="text-sm text-gray-500 mt-1">in</p>
-              <div className="text-xl font-semibold text-gray-800 mt-1">{data.fastest_turnover?.phase_name || 'N/A'}</div>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Second Degree Batches:</span>
+                  <span className="font-semibold">{data.second_degree_stats.second_degree_batches}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Second Degree Quantity:</span>
+                  <span className="font-semibold">{data.second_degree_stats.second_degree_quantity}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Percentage:</span>
+                  <span className="font-semibold text-orange-600">
+                    {data.second_degree_stats.second_degree_percentage}%
+                  </span>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>
-          {/* Turnover Rate by Phase Chart */}
+
+        {/* WIP by Phase Chart */}
           <Card>
             <CardHeader>
-              <CardTitle>Turnover Rate by Phase (Avg. Minutes)</CardTitle>
+            <CardTitle>Work in Progress by Phase</CardTitle>
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={data.turnover_rate_by_phase}>
+              <BarChart data={data.wip_by_phase}>
                   <XAxis dataKey="phase_name" />
                   <YAxis />
                   <Tooltip />
-                  <Bar dataKey="average_minutes" fill="#8884d8" />
+                <Legend />
+                <Bar dataKey="pending" fill="#FCD34D" name="Pending" />
+                <Bar dataKey="in_progress" fill="#3B82F6" name="In Progress" />
+                <Bar dataKey="completed" fill="#10B981" name="Completed" />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
-        </div>
+
+        {/* Production Phases Overview */}
+        <ProductionPhasesOverview
+          phasesData={phasesData}
+          phasesLoading={phasesLoading}
+          phasesModelSearch={phasesModelSearch}
+          setPhasesModelSearch={setPhasesModelSearch}
+          phasesColorSearch={phasesColorSearch}
+          setPhasesColorSearch={setPhasesColorSearch}
+          loadPhasesData={loadPhasesData}
+          getFilteredPhasesData={getFilteredPhasesData}
+        />
         
-        {/* WIP and Batch Status Row */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Work in Progress by Phase Table */}
+        {/* Job Order Search */}
+        <JobOrderStatusSearch
+          jobOrderSearch={jobOrderSearch}
+          setJobOrderSearch={setJobOrderSearch}
+          searchJobOrder={searchJobOrder}
+          jobOrderLoading={jobOrderLoading}
+          jobOrderItems={jobOrderItems}
+          jobOrderBatches={jobOrderBatches}
+          setSelectedItemForModal={setSelectedItemForModal}
+          setIsModalOpen={setIsModalOpen}
+          jobOrderOptions={jobOrderOptions}
+        />
+
+        
+
+        {selectedBrand && (
           <Card>
             <CardHeader>
-              <CardTitle>Work in Progress by Phase</CardTitle>
+              <CardTitle className="flex items-center justify-between">
+                <span>{selectedBrand.brand_info.brand_name} Statistics</span>
+                <button
+                  onClick={() => setSelectedBrand(null)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  ×
+                </button>
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Phase</TableHead>
-                    <TableHead>Pending</TableHead>
-                    <TableHead>In Progress</TableHead>
-                    <TableHead>Completed</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.current_wip.map((item) => (
-                    <TableRow key={item.phase_id}>
-                      <TableCell>{item.phase_name}</TableCell>
-                      <TableCell>{item.pending}</TableCell>
-                      <TableCell>{item.in_progress}</TableCell>
-                      <TableCell>{item.completed}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {selectedBrand.phases
+                  .sort((a, b) => a.phase_id - b.phase_id)
+                  .map((phase) => (
+                  <div key={phase.phase_id} className="p-4 bg-gray-50 rounded-lg">
+                    <h4 className="font-medium text-gray-900 mb-2">{phase.phase_name}</h4>
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Pending:</span>
+                        <span className="font-semibold text-yellow-600">{phase.pending}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">In Progress:</span>
+                        <span className="font-semibold text-blue-600">{phase.in_progress}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Completed:</span>
+                        <span className="font-semibold text-green-600">{phase.completed}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </CardContent>
           </Card>
-          {/* Batch Status Distribution Chart */}
+        )}
+
+        {selectedModel && (
           <Card>
             <CardHeader>
-              <CardTitle>Batch Status Distribution</CardTitle>
+              <CardTitle className="flex items-center justify-between">
+                <span>{selectedModel.model_info.model_name} Statistics</span>
+                <button
+                  onClick={() => setSelectedModel(null)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  ×
+                </button>
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie data={data.status_distribution} dataKey="count" nameKey="status" cx="50%" cy="50%" outerRadius={100} fill="#8884d8" label>
-                    {data.status_distribution.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {selectedModel.phases
+                  .sort((a, b) => a.phase_id - b.phase_id)
+                  .map((phase) => (
+                  <div key={phase.phase_id} className="p-4 bg-gray-50 rounded-lg">
+                    <h4 className="font-medium text-gray-900 mb-2">{phase.phase_name}</h4>
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Pending:</span>
+                        <span className="font-semibold text-yellow-600">{phase.pending}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">In Progress:</span>
+                        <span className="font-semibold text-blue-600">{phase.in_progress}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Completed:</span>
+                        <span className="font-semibold text-green-600">{phase.completed}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </CardContent>
           </Card>
+        )}
+
+        {/* Job Order Item Details Modal */}
+        <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+          <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                {selectedItemForModal ? `${selectedItemForModal.color_name} - Detailed Breakdown` : 'Item Details'}
+              </DialogTitle>
+            </DialogHeader>
+            
+            {selectedItemForModal && (() => {
+              // Get all items of the same color for detailed breakdown
+              const colorItems = jobOrderItems.filter(item => item.color_name === selectedItemForModal.color_name);
+              
+              return (
+                <div className="space-y-6">
+                  {/* Summary for the color */}
+                  <div className="bg-blue-50 rounded-lg p-4">
+                    <h3 className="font-semibold text-blue-900 mb-2">Color Summary: {selectedItemForModal.color_name}</h3>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-gray-900">
+                          {colorItems.reduce((sum, item) => sum + item.expected_quantity, 0)}
+                        </div>
+                        <div className="text-sm text-gray-600">Total Expected</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-blue-600">
+                          {colorItems.reduce((sum, item) => sum + item.cut_quantity, 0)}
+                        </div>
+                        <div className="text-sm text-gray-600">Total Cut</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-orange-600">
+                          {colorItems.reduce((sum, item) => sum + item.working_quantity, 0)}
+                        </div>
+                        <div className="text-sm text-gray-600">Total Working</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Individual items breakdown */}
+                  <div className="space-y-4">
+                    <h3 className="font-semibold text-gray-900">Size Breakdown</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {colorItems.map((item) => {
+                        const batches = jobOrderBatches[item.item_id] || [];
+                        const phaseBreakdown = batches.reduce((acc, batch) => {
+                          const phaseKey = `phase_${batch.current_phase}`;
+                          if (!acc[phaseKey]) acc[phaseKey] = { pending: 0, in_progress: 0, completed: 0 };
+                          acc[phaseKey][batch.status.toLowerCase().replace(' ', '_')] += batch.quantity;
+                          return acc;
+                        }, {} as any);
+
+                        return (
+                          <Card key={item.item_id} className="p-4">
+                            <CardHeader className="pb-3">
+                              <CardTitle className="text-lg">Size: {item.size_value || 'N/A'}</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                              <div className="grid grid-cols-3 gap-4">
+                                <div className="text-center">
+                                  <div className="text-xl font-bold text-gray-900">{item.expected_quantity}</div>
+                                  <div className="text-sm text-gray-600">Expected</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-xl font-bold text-blue-600">{item.cut_quantity}</div>
+                                  <div className="text-sm text-gray-600">Cut</div>
+                                </div>
+                                <div className="text-center">
+                                  <div className="text-xl font-bold text-orange-600">{item.working_quantity}</div>
+                                  <div className="text-sm text-gray-600">Working</div>
+                                </div>
+                              </div>
+                              
+                                                             <div className="space-y-3">
+                                 {Object.entries(phaseBreakdown)
+                                   .sort(([a], [b]) => {
+                                     const phaseNumA = parseInt(a.replace('phase_', ''));
+                                     const phaseNumB = parseInt(b.replace('phase_', ''));
+                                     return phaseNumA - phaseNumB;
+                                   })
+                                   .map(([phaseKey, statusCounts]: [string, any]) => {
+                                   const phaseNum = phaseKey.replace('phase_', '');
+                                   const phaseName = batches.find(b => b.current_phase === parseInt(phaseNum))?.phase_name || `Phase ${phaseNum}`;
+                                   const total = statusCounts.pending + statusCounts.in_progress + statusCounts.completed;
+                                   
+                                   return (
+                                     <div key={phaseKey} className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg p-3 border border-gray-200 shadow-sm">
+                                       <div className="flex items-center justify-between mb-2">
+                                         <div className="font-medium text-gray-800 text-sm">{phaseName}</div>
+                                         <div className="text-xs text-gray-500">Total: {total}</div>
+                                       </div>
+                                       
+                                       <div className="space-y-2">
+                                         {statusCounts.pending > 0 && (
+                                           <div className="flex items-center gap-2">
+                                             <div className="w-3 h-3 bg-yellow-400 rounded-full"></div>
+                                             <div className="flex-1 bg-gray-200 rounded-full h-2">
+                                               <div 
+                                                 className="bg-yellow-400 h-2 rounded-full transition-all duration-300"
+                                                 style={{ width: `${(statusCounts.pending / total) * 100}%` }}
+                                               ></div>
+                                             </div>
+                                             <span className="text-xs font-medium text-yellow-700 min-w-[60px]">
+                                               Pending: {statusCounts.pending}
+                                             </span>
+                                           </div>
+                                         )}
+                                         
+                                         {statusCounts.in_progress > 0 && (
+                                           <div className="flex items-center gap-2">
+                                             <div className="w-3 h-3 bg-blue-400 rounded-full"></div>
+                                             <div className="flex-1 bg-gray-200 rounded-full h-2">
+                                               <div 
+                                                 className="bg-blue-400 h-2 rounded-full transition-all duration-300"
+                                                 style={{ width: `${(statusCounts.in_progress / total) * 100}%` }}
+                                               ></div>
+                                             </div>
+                                             <span className="text-xs font-medium text-blue-700 min-w-[60px]">
+                                               In Progress: {statusCounts.in_progress}
+                                             </span>
+                                           </div>
+                                         )}
+                                         
+                                         {statusCounts.completed > 0 && (
+                                           <div className="flex items-center gap-2">
+                                             <div className="w-3 h-3 bg-green-400 rounded-full"></div>
+                                             <div className="flex-1 bg-gray-200 rounded-full h-2">
+                                               <div 
+                                                 className="bg-green-400 h-2 rounded-full transition-all duration-300"
+                                                 style={{ width: `${(statusCounts.completed / total) * 100}%` }}
+                                               ></div>
+                                             </div>
+                                             <span className="text-xs font-medium text-green-700 min-w-[60px]">
+                                               Completed: {statusCounts.completed}
+                                             </span>
+                                           </div>
+                                         )}
+                                       </div>
+                                     </div>
+                                   );
+                                 })}
+                                 {batches.length === 0 && (
+                                   <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg p-3 border border-gray-200 shadow-sm">
+                                     <div className="flex items-center gap-2">
+                                       <div className="w-3 h-3 bg-gray-400 rounded-full"></div>
+                                       <span className="text-gray-500 text-sm">No batches</span>
+                                     </div>
+                                   </div>
+                                 )}
+                               </div>
+                            </CardContent>
+                          </Card>
+                        );
+                      })}
+                    </div>
+                  </div>
         </div>
+              );
+            })()}
+          </DialogContent>
+        </Dialog>
       </div>
     </Layout>
   );

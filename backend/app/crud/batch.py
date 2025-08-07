@@ -52,7 +52,9 @@ def get_batch(db: Session, batch_id: int):
             size_value=batch.size_value,
             color_name=batch.color_name,
             phase_name=batch.phase_name,
-            last_updated_at=batch.Batch.last_updated_at
+            last_updated_at=batch.Batch.last_updated_at,
+            is_second_degree=bool(batch.Batch.is_second_degree),
+            notes=getattr(batch.Batch, 'notes', None)
         )
     return None
 
@@ -121,6 +123,7 @@ def get_batch_by_barcode(db: Session, barcode: str):
         serial=str(batch_obj.serial),
         current_phase=batch_obj.current_phase,
         status=batch_obj.status,
+        is_second_degree=bool(batch_obj.is_second_degree),
         brand_name=batch.brand_name,
         model_name=batch.model_name,
         size_value=batch.size_value,
@@ -171,70 +174,14 @@ def get_batches(db: Session, skip: int = 0, limit: int = 100):
             size_value=batch.size_value,
             color_name=batch.color_name,
             phase_name=batch.phase_name,
-            last_updated_at=batch.Batch.last_updated_at
+            last_updated_at=batch.Batch.last_updated_at,
+            is_second_degree=bool(batch.Batch.is_second_degree)
         )
         for batch in batches
     ]
 
-def create_timeline_entry(db: Session, batch_id: int, status: str, phase_id: int):
-    entry = models.BarcodeStatusTimeline(
-        batch_id=batch_id,
-        status=status,
-        phase_id=phase_id,
-        start_time=datetime.utcnow(),
-        end_time=None,
-        duration_minutes=None
-    )
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
-    return entry
 
-def close_current_timeline_entry(db: Session, batch_id: int):
-    current = db.query(models.BarcodeStatusTimeline).filter(
-        models.BarcodeStatusTimeline.batch_id == batch_id,
-        models.BarcodeStatusTimeline.end_time.is_(None)
-    ).first()
-    if current:
-        current.end_time = datetime.utcnow()
-        current.duration_minutes = int((current.end_time - current.start_time).total_seconds() // 60)
-        db.commit()
-        db.refresh(current)
-    return current
 
-def get_timeline_by_batch(db: Session, batch_id: int):
-    return db.query(models.BarcodeStatusTimeline).filter(
-        models.BarcodeStatusTimeline.batch_id == batch_id
-    ).order_by(models.BarcodeStatusTimeline.start_time).all()
-
-def get_timeline_stats_by_batch(db: Session, batch_id: int):
-    results = db.query(
-        models.BarcodeStatusTimeline.phase_id,
-        models.BarcodeStatusTimeline.status,
-        sa_func.sum(models.BarcodeStatusTimeline.duration_minutes)
-    ).filter(
-        models.BarcodeStatusTimeline.batch_id == batch_id
-    ).group_by(
-        models.BarcodeStatusTimeline.phase_id,
-        models.BarcodeStatusTimeline.status
-    ).all()
-    return results
-
-def get_current_timeline_entries(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.BarcodeStatusTimeline).filter(
-        models.BarcodeStatusTimeline.end_time.is_(None)
-    ).offset(skip).limit(limit).all()
-
-def get_all_timeline_stats(db: Session):
-    results = db.query(
-        models.BarcodeStatusTimeline.phase_id,
-        models.BarcodeStatusTimeline.status,
-        sa_func.avg(models.BarcodeStatusTimeline.duration_minutes)
-    ).group_by(
-        models.BarcodeStatusTimeline.phase_id,
-        models.BarcodeStatusTimeline.status
-    ).all()
-    return results
 
 def create_batch(db: Session, batch: schemas.BatchCreate):
     db_batch = models.Batch(**batch.dict())
@@ -243,10 +190,102 @@ def create_batch(db: Session, batch: schemas.BatchCreate):
     db.refresh(db_batch)
     return db_batch
 
-def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate):
+def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate, user_id: Optional[int] = None):
     update_data = batch.dict(exclude_unset=True)
+    
+    # Store old values for comparison
+    old_status = db_batch.status
+    old_quantity = db_batch.quantity
+    old_phase = db_batch.current_phase
+    old_second_degree = db_batch.is_second_degree
+    
     for field, value in update_data.items():
-        setattr(db_batch, field, value)
+        if field == 'is_second_degree':
+            # Convert boolean to integer for MySQL TINYINT
+            new_value = 1 if value else 0
+            setattr(db_batch, field, new_value)
+        else:
+            setattr(db_batch, field, value)
+    
+    # Determine what changed
+    status_changed = 'status' in update_data and old_status != update_data['status']
+    quantity_changed = 'quantity' in update_data and old_quantity != update_data['quantity']
+    phase_changed = 'current_phase' in update_data and old_phase != update_data['current_phase']
+    second_degree_changed = 'is_second_degree' in update_data and old_second_degree != update_data['is_second_degree']
+    
+    # Get new values
+    new_status = update_data.get('status', old_status)
+    new_phase = update_data.get('current_phase', old_phase)
+    new_quantity = update_data.get('quantity', old_quantity)
+    new_second_degree = update_data.get('is_second_degree', old_second_degree)
+    
+    # Create events based on changes
+    if status_changed or phase_changed:
+        # Create scan_in event only when starting a phase (In Progress or Pending)
+        if new_status in ['In Progress', 'Pending']:
+            create_scan_event(
+                db=db,
+                batch_id=db_batch.batch_id,
+                action_type='scan_in',
+                phase_id=new_phase,
+                old_status=old_status,
+                new_status=new_status,
+                old_phase=old_phase,
+                new_phase=new_phase,
+                old_quantity=old_quantity,
+                new_quantity=new_quantity,
+                user_id=user_id,
+                notes=f"Status changed from {old_status} to {new_status}" if status_changed else None
+            )
+        
+        # Create scan_out event only when completing a phase
+        if new_status == 'Completed':
+            create_scan_event(
+                db=db,
+                batch_id=db_batch.batch_id,
+                action_type='scan_out',
+                phase_id=new_phase,
+                old_status=old_status,
+                new_status=new_status,
+                old_quantity=old_quantity,
+                new_quantity=new_quantity,
+                user_id=user_id,
+                notes="Phase completed"
+            )
+    
+    # Only create quantity event if quantity actually changed
+    if quantity_changed:
+        create_scan_event(
+            db=db,
+            batch_id=db_batch.batch_id,
+            action_type='quantity_update',
+            phase_id=new_phase,
+            old_quantity=old_quantity,
+            new_quantity=new_quantity,
+            user_id=user_id,
+            notes=f"Quantity updated from {old_quantity} to {new_quantity}"
+        )
+    
+    # Create second degree event if second degree status changed
+    if second_degree_changed:
+        create_scan_event(
+            db=db,
+            batch_id=db_batch.batch_id,
+            action_type='second_degree_update',
+            phase_id=new_phase,
+            old_status=str(old_second_degree),
+            new_status=str(new_second_degree),
+            old_quantity=old_quantity,
+            new_quantity=new_quantity,
+            user_id=user_id,
+            notes=f"Second degree status changed from {'Yes' if old_second_degree else 'No'} to {'Yes' if new_second_degree else 'No'}"
+        )
+    
+    # Note: Automatic phase transitions are handled by the database trigger 'handle_phase_transitions'
+    # The trigger automatically transitions:
+    # - Cutting (In Progress → Completed) → Sewing - 1 (Pending)
+    # - Any Sewing (In Progress → Completed) → Packaging (Pending)
+    
     db.commit()
     db.refresh(db_batch)
     # Get related info through JobOrder
@@ -268,6 +307,7 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
         serial=str(db_batch.serial),
         current_phase=db_batch.current_phase,
         status=db_batch.status,
+        is_second_degree=bool(db_batch.is_second_degree),
         brand_name=brand.brand_name if brand else "",
         model_name=model.model_name if model else "",
         size_value=size.size_value if size else "",
@@ -276,6 +316,50 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
         last_updated_at=db_batch.last_updated_at,
         archived_at=None
     )
+
+def transition_all_completed_phases(db: Session):
+    """
+    Manually transition all existing batches that are in completed phases:
+    1. Cutting phase (1) with Completed status → Sewing - 1 (phase 2) with Pending status
+    2. Any Sewing phase (2, 3, 4, 7) with Completed status → Packaging (phase 8) with Pending status
+    """
+    # Find all batches in Cutting phase with Completed status
+    cutting_completed_batches = db.query(models.Batch).filter(
+        models.Batch.current_phase == 1,
+        models.Batch.status == "Completed"
+    ).all()
+    
+    # Find all batches in Sewing phases with Completed status
+    sewing_completed_batches = db.query(models.Batch).filter(
+        models.Batch.current_phase.in_([2, 3, 4, 7]),
+        models.Batch.status == "Completed"
+    ).all()
+    
+    transitioned_count = 0
+    
+    # Transition cutting batches
+    for batch in cutting_completed_batches:
+        batch.current_phase = 2
+        batch.status = "Pending"
+        # Create scan events for the transition
+        create_scan_event(db, batch.batch_id, "scan_in", 2, "Completed", "Pending", user_id=None, notes="Phase transition from Cutting to Sewing")
+        transitioned_count += 1
+        print(f"Transitioned batch {batch.batch_id} from Cutting (Completed) to Sewing - 1 (Pending)")
+    
+    # Transition sewing batches
+    for batch in sewing_completed_batches:
+        batch.current_phase = 8
+        batch.status = "Pending"
+        # Create scan events for the transition
+        create_scan_event(db, batch.batch_id, "scan_in", 8, "Completed", "Pending", user_id=None, notes="Phase transition from Sewing to Packaging")
+        transitioned_count += 1
+        print(f"Transitioned batch {batch.batch_id} from Sewing phase {batch.current_phase} (Completed) to Packaging (Pending)")
+    
+    if transitioned_count > 0:
+        db.commit()
+        print(f"Successfully transitioned {transitioned_count} batches")
+    
+    return transitioned_count
 
 def update_batch_status(db: Session, batch_id: int, status: str):
     db_batch = get_batch(db, batch_id)
@@ -296,8 +380,9 @@ def update_batch_phase(db: Session, batch_id: int, phase_id: int):
 def delete_batch(db: Session, batch_id: int):
     batch_data = get_batch(db, batch_id)
     if batch_data:
-        db.query(models.BarcodeStatusTimeline).filter(
-            models.BarcodeStatusTimeline.batch_id == batch_id
+        # Delete related scan events first (CASCADE should handle this, but being explicit)
+        db.query(models.BarcodeScanEvent).filter(
+            models.BarcodeScanEvent.batch_id == batch_id
         ).delete()
         db.query(models.Batch).filter(models.Batch.batch_id == batch_id).delete()
         db.commit()
@@ -488,3 +573,159 @@ def recover_archived_batches_bulk(db: Session, batch_ids: List[int]):
             continue
     db.commit()
     return recovered_batches 
+
+# Event-based timeline functions
+def create_scan_event(db: Session, batch_id: int, action_type: str, phase_id: int, 
+                     old_status: Optional[str] = None, new_status: Optional[str] = None,
+                     old_quantity: Optional[int] = None, new_quantity: Optional[int] = None,
+                     old_phase: Optional[int] = None, new_phase: Optional[int] = None,
+                     user_id: Optional[int] = None, notes: Optional[str] = None):
+    """Create a new scan event record"""
+    event = models.BarcodeScanEvent(
+        batch_id=batch_id,
+        action_type=action_type,
+        phase_id=phase_id,
+        old_status=old_status,
+        new_status=new_status,
+        old_quantity=old_quantity,
+        new_quantity=new_quantity,
+        old_phase=old_phase,
+        new_phase=new_phase,
+        user_id=user_id,
+        notes=notes
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+def get_scan_events_by_batch(db: Session, batch_id: int, limit: int = 100):
+    """Get all scan events for a batch, ordered by scan time"""
+    return db.query(models.BarcodeScanEvent).filter(
+        models.BarcodeScanEvent.batch_id == batch_id
+    ).order_by(models.BarcodeScanEvent.scanned_at.desc()).limit(limit).all()
+
+def get_timeline_summary_by_batch(db: Session, batch_id: int):
+    """Get aggregated timeline summary for a batch"""
+    # Get all events for the batch
+    events = db.query(models.BarcodeScanEvent).filter(
+        models.BarcodeScanEvent.batch_id == batch_id
+    ).order_by(models.BarcodeScanEvent.scanned_at).all()
+    
+    if not events:
+        return None
+    
+    # Get batch info
+    batch = db.query(models.Batch).filter(models.Batch.batch_id == batch_id).first()
+    if not batch:
+        return None
+    
+    # Group events by phase and calculate timeline
+    timeline_entries = []
+    current_phase_events = []
+    current_phase_id = None
+    
+    for event in events:
+        if current_phase_id is None:
+            current_phase_id = event.phase_id
+            current_phase_events = [event]
+        elif event.phase_id == current_phase_id:
+            current_phase_events.append(event)
+        else:
+            # Process the previous phase
+            if current_phase_events:
+                entry = _create_timeline_entry_from_events(db, current_phase_events)
+                if entry:
+                    timeline_entries.append(entry)
+            
+            # Start new phase
+            current_phase_id = event.phase_id
+            current_phase_events = [event]
+    
+    # Process the last phase
+    if current_phase_events:
+        entry = _create_timeline_entry_from_events(db, current_phase_events)
+        if entry:
+            timeline_entries.append(entry)
+    
+    return {
+        'barcode': batch.barcode,
+        'timeline_entries': timeline_entries,
+        'total_entries': len(timeline_entries),
+        'total_events': len(events)
+    }
+
+def _create_timeline_entry_from_events(db: Session, events: List[models.BarcodeScanEvent]):
+    """Helper function to create timeline entry from events"""
+    if not events:
+        return None
+    
+    # Get phase name
+    phase = db.query(models.ProductionPhase).filter(
+        models.ProductionPhase.phase_id == events[0].phase_id
+    ).first()
+    
+    # Find start and end events
+    start_event = None
+    end_event = None
+    quantity_events = []
+    
+    for event in events:
+        if event.action_type == 'scan_in':
+            start_event = event
+        elif event.action_type == 'scan_out':
+            end_event = event
+        elif event.action_type == 'quantity_update':
+            quantity_events.append(event)
+    
+    # Calculate duration
+    duration_minutes = None
+    if start_event and end_event:
+        duration_seconds = (end_event.scanned_at - start_event.scanned_at).total_seconds()
+        duration_minutes = max(0, int(duration_seconds // 60))
+    
+    # Determine status
+    status = 'In Progress'
+    if end_event:
+        status = 'Completed'
+    elif start_event and start_event.new_status == 'Pending':
+        status = 'Pending'
+    
+    # Get quantities
+    quantity_at_start = None
+    quantity_at_end = None
+    
+    if quantity_events:
+        # Get first and last quantity events
+        first_qty_event = min(quantity_events, key=lambda x: x.scanned_at)
+        last_qty_event = max(quantity_events, key=lambda x: x.scanned_at)
+        quantity_at_start = first_qty_event.old_quantity
+        quantity_at_end = last_qty_event.new_quantity
+    
+    return {
+        'phase_id': events[0].phase_id,
+        'phase_name': phase.phase_name if phase else f'Phase {events[0].phase_id}',
+        'start_time': start_event.scanned_at if start_event else None,
+        'end_time': end_event.scanned_at if end_event else None,
+        'duration_minutes': duration_minutes,
+        'status': status,
+        'quantity_at_start': quantity_at_start,
+        'quantity_at_end': quantity_at_end,
+        'event_count': len(events)
+    }
+
+def get_detailed_events_by_batch(db: Session, batch_id: int, limit: int = 100):
+    """Get detailed scan events with phase and user names"""
+    events = db.query(
+        models.BarcodeScanEvent,
+        models.ProductionPhase.phase_name,
+        models.User.username.label('user_name')
+    ).join(
+        models.ProductionPhase, models.BarcodeScanEvent.phase_id == models.ProductionPhase.phase_id
+    ).outerjoin(
+        models.User, models.BarcodeScanEvent.user_id == models.User.user_id
+    ).filter(
+        models.BarcodeScanEvent.batch_id == batch_id
+    ).order_by(models.BarcodeScanEvent.scanned_at.desc()).limit(limit).all()
+    
+    return events 

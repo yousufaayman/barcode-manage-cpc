@@ -117,9 +117,10 @@ class BatchBase(BaseModel):
     serial: str
     current_phase: int
     status: str
+    is_second_degree: bool = False
 
 class BatchCreate(BatchBase):
-    pass
+    is_second_degree: bool = False
 
 class BatchUpdate(BaseModel):
     job_order_id: Optional[int] = None
@@ -131,6 +132,7 @@ class BatchUpdate(BaseModel):
     serial: Optional[str] = None
     current_phase: Optional[int] = None
     status: Optional[str] = None
+    is_second_degree: Optional[bool] = None
 
 class BatchResponse(BatchBase):
     batch_id: int
@@ -210,6 +212,7 @@ class TimelineEntryBase(BaseModel):
     batch_id: int
     status: str
     phase_id: int
+    updated_quantity: Optional[int] = None
 
 class TimelineEntryCreate(TimelineEntryBase):
     pass
@@ -222,6 +225,8 @@ class TimelineEntryResponse(TimelineEntryBase):
 
     class Config:
         from_attributes = True
+
+
 
 class TurnoverRateByPhase(BaseModel):
     phase_id: int
@@ -437,6 +442,7 @@ class JobOrderItemBase(BaseModel):
     size_id: int
     quantity: int
     weight: Optional[float] = None
+    notes: Optional[str] = None
 
 class JobOrderItem(JobOrderItemBase):
     item_id: int
@@ -455,12 +461,14 @@ class JobOrderItemCreateWithNames(BaseModel):
     size_value: str
     quantity: int
     weight: Optional[float] = None
+    notes: Optional[str] = None
 
 class JobOrderItemUpdate(BaseModel):
     color_id: Optional[int] = None
     size_id: Optional[int] = None
     quantity: Optional[int] = None
     weight: Optional[float] = None
+    notes: Optional[str] = None
 
 class JobOrderBase(BaseModel):
     model_id: int
@@ -520,8 +528,14 @@ class JobOrderSummary(BaseModel):
     total_items: int
     total_expected_quantity: int
     total_produced_quantity: int
+    cut_quantity: int
+    second_degree_quantity: int
+    completed_quantity: int
+    working_quantity: int
+    remaining_quantity: int
     total_batches: int
     has_issues: bool
+    has_high_second_degree: bool
     completion_percentage: float
     overproduction_quantity: int
     last_calculated_at: Optional[datetime] = None
@@ -529,10 +543,177 @@ class JobOrderSummary(BaseModel):
     last_completion_change: Optional[datetime] = None
     last_new_batch: Optional[datetime] = None
     last_batch_update: Optional[datetime] = None
+    notes: Optional[str] = None
     image_url: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+# ============================================================================
+# ITEM-LEVEL QUANTITY TRACKING SCHEMAS
+# ============================================================================
+
+class JobOrderItemSummary(BaseModel):
+    item_id: int
+    job_order_id: int
+    color_id: int
+    size_id: int
+    color_name: Optional[str] = None
+    size_value: Optional[str] = None
+    expected_quantity: int
+    produced_quantity: int
+    cut_quantity: int
+    second_degree_quantity: int
+    completed_quantity: int
+    working_quantity: int
+    remaining_quantity: int
+    total_batches: int
+    has_issues: bool
+    completion_percentage: float
+    overproduction_quantity: int
+    production_status: str
+    notes: Optional[str] = None
+    last_calculated_at: Optional[datetime] = None
+    last_quantity_change: Optional[datetime] = None
+    last_completion_change: Optional[datetime] = None
+    last_new_batch: Optional[datetime] = None
+    last_batch_update: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class JobOrderItemProductionTracking(BaseModel):
+    item_id: int
+    job_order_id: int
+    job_order_number: str
+    model_name: Optional[str] = None
+    brand_name: Optional[str] = None
+    color_id: int
+    color_name: str
+    size_id: int
+    size_value: str
+    expected_quantity: int
+    produced_quantity: int
+    cut_quantity: int
+    second_degree_quantity: int
+    completed_quantity: int
+    working_quantity: int
+    remaining_quantity: int
+    production_status: str
+    completion_percentage: float
+    has_issues: bool
+    overproduction_quantity: int
+    total_batches: int
+    last_calculated_at: Optional[datetime] = None
+    last_quantity_change: Optional[datetime] = None
+    last_completion_change: Optional[datetime] = None
+    last_new_batch: Optional[datetime] = None
+    last_batch_update: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class JobOrderItemWithIssues(BaseModel):
+    item_id: int
+    job_order_id: int
+    job_order_number: str
+    model_name: Optional[str] = None
+    brand_name: Optional[str] = None
+    color_name: str
+    size_value: str
+    expected_quantity: int
+    produced_quantity: int
+    overproduction_quantity: int
+    completion_percentage: float
+
+    class Config:
+        from_attributes = True
+
+class JobOrderItemHighSecondDegree(BaseModel):
+    item_id: int
+    job_order_id: int
+    job_order_number: str
+    model_name: Optional[str] = None
+    brand_name: Optional[str] = None
+    color_name: str
+    size_value: str
+    produced_quantity: int
+    second_degree_quantity: int
+    second_degree_percentage: float
+
+    class Config:
+        from_attributes = True
+
+class JobOrderItemWithQuantityReductions(BaseModel):
+    item_id: int
+    job_order_id: int
+    job_order_number: str
+    model_name: Optional[str] = None
+    brand_name: Optional[str] = None
+    color_name: str
+    size_value: str
+    produced_quantity: int
+    cut_quantity: int
+    quantity_reduction: int
+
+    class Config:
+        from_attributes = True
+
+class JobOrderItemQuantityBreakdown(BaseModel):
+    item_id: int
+    job_order_id: int
+    color_name: str
+    size_value: str
+    expected_quantity: int
+    produced_quantity: int
+    cut_quantity: int
+    second_degree_quantity: int
+    first_degree_quantity: int
+    cut_vs_produced_difference: int
+    second_degree_percentage: float
+    completion_percentage: float
+    has_issues: bool
+    production_status: str
+
+    class Config:
+        from_attributes = True
+
+class ItemLevelStatistics(BaseModel):
+    total_items: int
+    items_with_issues: int
+    completed_items: int
+    in_progress_items: int
+    not_started_items: int
+    total_expected_quantity: int
+    total_produced_quantity: int
+    total_second_degree_quantity: int
+    total_overproduction_quantity: int
+    overall_completion_percentage: float
+    overall_second_degree_percentage: float
+
+    class Config:
+        from_attributes = True
+
+# Response models for item-level endpoints
+class JobOrderItemSummaryListResponse(BaseModel):
+    items: List[JobOrderItemSummary]
+    total: int
+
+class JobOrderItemWithIssuesListResponse(BaseModel):
+    items: List[JobOrderItemWithIssues]
+    total: int
+
+class JobOrderItemHighSecondDegreeListResponse(BaseModel):
+    items: List[JobOrderItemHighSecondDegree]
+    total: int
+
+class JobOrderItemWithQuantityReductionsListResponse(BaseModel):
+    items: List[JobOrderItemWithQuantityReductions]
+    total: int
+
+class JobOrderItemQuantityBreakdownListResponse(BaseModel):
+    items: List[JobOrderItemQuantityBreakdown]
+    total: int
 
 class ArchivedBatchBase(BaseModel):
     job_order_id: int
@@ -555,6 +736,79 @@ class ArchivedBatchResponse(ArchivedBatchBase):
     size_value: Optional[str] = None
     color_name: Optional[str] = None
     phase_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True 
+
+# Event-based timeline schemas
+class BarcodeScanEventBase(BaseModel):
+    batch_id: int
+    action_type: str
+    phase_id: int
+    old_status: Optional[str] = None
+    new_status: Optional[str] = None
+    old_quantity: Optional[int] = None
+    new_quantity: Optional[int] = None
+    old_phase: Optional[int] = None
+    new_phase: Optional[int] = None
+    scanned_at: datetime
+    user_id: Optional[int] = None
+    notes: Optional[str] = None
+
+class BarcodeScanEventCreate(BarcodeScanEventBase):
+    pass
+
+class BarcodeScanEventResponse(BarcodeScanEventBase):
+    id: int
+    phase_name: Optional[str] = None
+    user_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class TimelineSummaryEntry(BaseModel):
+    phase_id: int
+    phase_name: str
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
+    duration_minutes: Optional[int]
+    status: str
+    quantity_at_start: Optional[int]
+    quantity_at_end: Optional[int]
+    event_count: int
+
+class TimelineSummaryResponse(BaseModel):
+    barcode: str
+    timeline_entries: List[TimelineSummaryEntry]
+    total_entries: int
+    total_events: int
+
+    class Config:
+        from_attributes = True 
+
+class ProductionStatisticsResponse(BaseModel):
+    wip_by_phase: List[Dict[str, Any]]
+    production_by_brand: List[Dict[str, Any]]
+    production_by_model: List[Dict[str, Any]]
+    recent_activity: List[Dict[str, Any]]
+    bottlenecks: List[Dict[str, Any]]
+    overall_stats: Dict[str, Any]
+    second_degree_stats: Dict[str, Any]
+
+    class Config:
+        from_attributes = True
+
+class BrandStatisticsResponse(BaseModel):
+    brand_info: Dict[str, Any]
+    phases: List[Dict[str, Any]]
+    models: List[Dict[str, Any]]
+
+    class Config:
+        from_attributes = True
+
+class ModelStatisticsResponse(BaseModel):
+    model_info: Dict[str, Any]
+    phases: List[Dict[str, Any]]
 
     class Config:
         from_attributes = True 

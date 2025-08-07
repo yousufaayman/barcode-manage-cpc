@@ -50,6 +50,7 @@ const DashboardPage: React.FC = () => {
           barcodeApi.getBatchStats(),
           barcodeApi.getPhaseStats()
         ]);
+
         setStats(batchStats);
         setPhaseStats(phaseData);
 
@@ -70,44 +71,76 @@ const DashboardPage: React.FC = () => {
           }));
         }
       } catch (error) {
-        console.error('Error fetching data:', error);
+        // Error handling
       }
     };
 
     fetchData();
   }, [user]);
 
-  // Overall production phase data
+
+
+  // Helper function to safely get phase data
+  const getPhaseStats = (phaseKey: string) => {
+    return phaseStats[phaseKey as keyof PhaseStats];
+  };
+
+  // Phase configuration with proper ordering and colors
+  const phaseConfig = [
+    { key: 'cutting', name: t('phases.cutting'), color: 'rgb(30 64 175)' },
+    { key: 'sewing', name: t('phases.sewing'), color: 'rgb(107 33 168)' },
+    { key: 'packaging', name: t('phases.packaging'), color: 'rgb(154 52 18)' }
+  ];
+
+  // Overall production phase data - dynamically generated based on phase stats
   const productionPhaseData = [
-    { phase: t('phases.cutting'), count: phaseStats.cutting.pending + phaseStats.cutting.in_progress, color: 'rgb(30 64 175)' }, // Cutting blue
-    { phase: t('phases.sewing'), count: phaseStats.sewing.pending + phaseStats.sewing.in_progress, color: 'rgb(107 33 168)' },  // Sewing purple
-    { phase: t('phases.packaging'), count: phaseStats.packaging.pending + phaseStats.packaging.in_progress, color: 'rgb(154 52 18)' }, // Packaging brown
-    { phase: t('phases.completed'), count: phaseStats.packaging.completed, color: '#90EE90' }, // light green
+    ...phaseConfig.map(phase => {
+      const phaseData = getPhaseStats(phase.key);
+      
+      // For packaging, include completed items since it's the final phase
+      let count;
+      if (phase.key === 'packaging') {
+        const packagingData = phaseData as any;
+        count = packagingData.pending + packagingData.in_progress + packagingData.completed;
+      } else {
+        count = phaseData.pending + phaseData.in_progress;
+      }
+      
+      return {
+        phase: phase.name,
+        count: count,
+        color: phase.color
+      };
+    }),
+    { phase: t('phases.completed'), count: phaseStats.packaging.completed, color: '#90EE90' } // light green
   ];
 
-  const cuttingPhaseData = [
-    { status: t('status.pending'), count: phaseStats.cutting.pending, color: 'rgb(30 64 175)' }, // Cutting blue
-    { status: t('status.inProgress'), count: phaseStats.cutting.in_progress, color: 'rgb(30 64 175)' }, // Cutting blue
-  ];
+  // Generate individual phase data dynamically
+  const getPhaseData = (phaseKey: string, phaseColor: string) => {
+    const phaseData = getPhaseStats(phaseKey);
+    // All phases (cutting, sewing, packaging) only show pending and in_progress
+    return [
+      { status: t('status.pending'), count: phaseData.pending, color: phaseColor },
+      { status: t('status.inProgress'), count: phaseData.in_progress, color: phaseColor }
+    ];
+  };
 
-  const sewingPhaseData = [
-    { status: t('status.pending'), count: phaseStats.sewing.pending, color: 'rgb(107 33 168)' }, // Sewing purple
-    { status: t('status.inProgress'), count: phaseStats.sewing.in_progress, color: 'rgb(107 33 168)' }, // Sewing purple
-  ];
 
-  const packagingPhaseData = [
-    { status: t('status.pending'), count: phaseStats.packaging.pending, color: 'rgb(154 52 18)' }, // Packaging brown
-    { status: t('status.inProgress'), count: phaseStats.packaging.in_progress, color: 'rgb(154 52 18)' }, // Packaging brown
-  ];
 
   const renderCustomLabel = (props: any) => {
     const { x, y, width, height, value } = props;
     const barHeight = height;
+    
+    // Don't render label if value is 0 or bar height is 0
+    if (value === 0 || barHeight === 0) {
+      return null;
+    }
+    
     // If bar height is less than 40px, show label above, otherwise inside
     const labelY = barHeight < 40 ? y - 8 : y + height / 2;
     const textAnchor = 'middle';
     const fill = barHeight < 40 ? '#374151' : '#ffffff'; // Dark gray above, white inside
-    const fontSize = 16; // Increased font size from 14 to 16
+    const fontSize = Math.min(16, Math.max(12, width / 8)); // Responsive font size
     const fontWeight = 'bold'; // Make text bold
 
     return (
@@ -195,13 +228,13 @@ const DashboardPage: React.FC = () => {
             <div className="bg-white p-4 rounded-lg shadow-sm">
               <div className="text-sm text-gray-500 mb-1">Pending Items</div>
               <div className="text-2xl font-bold">
-                {phaseStats[user.role.toLowerCase() as keyof PhaseStats].pending}
+                {getPhaseStats(user.role.toLowerCase()).pending}
               </div>
             </div>
             <div className="bg-white p-4 rounded-lg shadow-sm">
               <div className="text-sm text-gray-500 mb-1">In Progress</div>
               <div className="text-2xl font-bold">
-                {phaseStats[user.role.toLowerCase() as keyof PhaseStats].in_progress}
+                {getPhaseStats(user.role.toLowerCase()).in_progress}
               </div>
             </div>
           </div>
@@ -235,8 +268,14 @@ const DashboardPage: React.FC = () => {
               <CardContent className="pt-2">
                 <div className="h-80 w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={productionPhaseData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                      <XAxis dataKey="phase" />
+                    <BarChart data={productionPhaseData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                      <XAxis 
+                        dataKey="phase" 
+                        angle={-45}
+                        textAnchor="end"
+                        height={60}
+                        interval={0}
+                      />
                       <YAxis />
                       <Tooltip
                         content={({ active, payload }) => {
@@ -250,7 +289,7 @@ const DashboardPage: React.FC = () => {
                           );
                         }}
                       />
-                      <Bar dataKey="count">
+                      <Bar dataKey="count" minPointSize={2}>
                         {productionPhaseData.map((entry, index) => (
                           <Cell key={`cell-${index}`} fill={entry.color} />
                         ))}
@@ -262,110 +301,53 @@ const DashboardPage: React.FC = () => {
               </CardContent>
             </Card>
 
-            {/* Cutting Phase Detailed Graph */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg font-medium">{t('dashboard.cuttingPhaseStatus')}</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-2">
-                <div className="h-80 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={cuttingPhaseData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                      <XAxis dataKey="status" />
-                      <YAxis />
-                      <Tooltip
-                        content={({ active, payload }) => {
-                          if (!active || !payload?.length) return null;
-                          const data = payload[0].payload;
-                          return (
-                            <div className="bg-white p-3 border border-gray-200 shadow-md rounded-md">
-                              <p className="font-medium text-gray-800">{data.status}</p>
-                              <p className="text-sm mt-1">{t('common.count')}: <span className="font-medium">{data.count}</span></p>
-                            </div>
-                          );
-                        }}
-                      />
-                      <Bar dataKey="count">
-                        {cuttingPhaseData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                        <LabelList dataKey="count" content={renderCustomLabel} />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Sewing Phase Detailed Graph */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg font-medium">{t('dashboard.sewingPhaseStatus')}</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-2">
-                <div className="h-80 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={sewingPhaseData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                      <XAxis dataKey="status" />
-                      <YAxis />
-                      <Tooltip
-                        content={({ active, payload }) => {
-                          if (!active || !payload?.length) return null;
-                          const data = payload[0].payload;
-                          return (
-                            <div className="bg-white p-3 border border-gray-200 shadow-md rounded-md">
-                              <p className="font-medium text-gray-800">{data.status}</p>
-                              <p className="text-sm mt-1">{t('common.count')}: <span className="font-medium">{data.count}</span></p>
-                            </div>
-                          );
-                        }}
-                      />
-                      <Bar dataKey="count">
-                        {sewingPhaseData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                        <LabelList dataKey="count" content={renderCustomLabel} />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Packaging Phase Detailed Graph */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg font-medium">{t('dashboard.packagingPhaseStatus')}</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-2">
-                <div className="h-80 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={packagingPhaseData} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                      <XAxis dataKey="status" />
-                      <YAxis />
-                      <Tooltip
-                        content={({ active, payload }) => {
-                          if (!active || !payload?.length) return null;
-                          const data = payload[0].payload;
-                          return (
-                            <div className="bg-white p-3 border border-gray-200 shadow-md rounded-md">
-                              <p className="font-medium text-gray-800">{data.status}</p>
-                              <p className="text-sm mt-1">{t('common.count')}: <span className="font-medium">{data.count}</span></p>
-                            </div>
-                          );
-                        }}
-                      />
-                      <Bar dataKey="count">
-                        {packagingPhaseData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                        <LabelList dataKey="count" content={renderCustomLabel} />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
+            {/* Individual Phase Detailed Graphs */}
+            {phaseConfig.map((phase, index) => {
+              const phaseData = getPhaseData(phase.key, phase.color);
+              const phaseTitleKey = `${phase.key}PhaseStatus`;
+              
+              return (
+                <Card key={phase.key}>
+                  <CardHeader>
+                    <CardTitle className="text-lg font-medium">{t(`dashboard.${phaseTitleKey}`)}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-2">
+                    <div className="h-80 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={phaseData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                          <XAxis 
+                            dataKey="status" 
+                            angle={-45}
+                            textAnchor="end"
+                            height={60}
+                            interval={0}
+                          />
+                          <YAxis />
+                          <Tooltip
+                            content={({ active, payload }) => {
+                              if (!active || !payload?.length) return null;
+                              const data = payload[0].payload;
+                              return (
+                                <div className="bg-white p-3 border border-gray-200 shadow-md rounded-md">
+                                  <p className="font-medium text-gray-800">{data.status}</p>
+                                  <p className="text-sm mt-1">{t('common.count')}: <span className="font-medium">{data.count}</span></p>
+                                </div>
+                              );
+                            }}
+                          />
+                          <Bar dataKey="count" minPointSize={2}>
+                            {phaseData.map((entry, cellIndex) => (
+                              <Cell key={`cell-${cellIndex}`} fill={entry.color} />
+                            ))}
+                            <LabelList dataKey="count" content={renderCustomLabel} />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         </div>
       )}

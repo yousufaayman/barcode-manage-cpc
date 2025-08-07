@@ -31,6 +31,7 @@ interface Barcode {
   phase_name: string;
   status: 'Pending' | 'In Progress' | 'Completed';
   last_updated_at: string;
+  is_second_degree: boolean;
 }
 
 const BarcodeManagementPage: React.FC = () => {
@@ -40,12 +41,14 @@ const BarcodeManagementPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedBarcodes, setSelectedBarcodes] = useState<number[]>([]);
-  const [editingId, setEditingId] = useState<number | null>(null);
   
   // Dropdown options state
   const [brandOptions, setBrandOptions] = useState<string[]>([]);
   const [sizeOptions, setSizeOptions] = useState<string[]>([]);
   const [colorOptions, setColorOptions] = useState<string[]>([]);
+  
+  // Add filter state for second degree
+  const [secondDegreeFilter, setSecondDegreeFilter] = useState<'all' | 'only' | 'without'>('all');
   
   // Initialize filters with default phase based on user role
   const getInitialFilters = () => {
@@ -98,14 +101,7 @@ const BarcodeManagementPage: React.FC = () => {
   const [selectedPrinter, setSelectedPrinter] = useState<string>("");
   const [totalBarcodes, setTotalBarcodes] = useState(0);
   
-  // ---
-  // Only phase_name, status, and quantity are editable for a batch. Brand and model are determined by the related JobOrder and cannot be edited here.
-  // ---
-  const [editValues, setEditValues] = useState({
-    phase_name: '',
-    status: '' as 'Pending' | 'In Progress' | 'Completed',
-    quantity: 0
-  });
+
   
   // Items per page
   const itemsPerPage = 50;
@@ -188,10 +184,11 @@ const BarcodeManagementPage: React.FC = () => {
             Object.entries(filters).filter(([_, value]) => value !== '')
           )
         });
+        // Add is_second_degree filter if needed
+        if (secondDegreeFilter === 'only') queryParams.append('is_second_degree', 'true');
+        if (secondDegreeFilter === 'without') queryParams.append('is_second_degree', 'false');
         
-        console.log('Fetching barcodes with params:', queryParams.toString());
         const response = await api.get(`/batches/?${queryParams.toString()}`);
-        console.log('API response:', response.data);
         setBarcodes(response.data.items);
         setTotalBarcodes(response.data.total);
       } catch (error) {
@@ -202,7 +199,7 @@ const BarcodeManagementPage: React.FC = () => {
     };
 
     fetchBarcodes();
-  }, [currentPage, filters]);
+  }, [currentPage, filters, secondDegreeFilter]);
 
   // Fetch available printers
   useEffect(() => {
@@ -221,17 +218,23 @@ const BarcodeManagementPage: React.FC = () => {
     fetchPrinters();
   }, []);
 
+  // Add state for phases
+  const [phases, setPhases] = useState<{ phase_id: number, phase_name: string }[]>([]);
+
+  // Fetch phases from backend
+  useEffect(() => {
+    api.get('/phases/').then(res => setPhases(res.data));
+  }, []);
+
   // Handle changes to filter inputs
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    console.log('Filter change:', name, value);
     setFilters(prev => ({ ...prev, [name]: value }));
     setCurrentPage(1); // Reset to first page when filters change
   };
   
   // Handle SearchableDropdown filter changes
   const handleDropdownFilterChange = (field: string, value: string) => {
-    console.log('Dropdown filter change:', field, value);
     setFilters(prev => ({ ...prev, [field]: value }));
     setCurrentPage(1); // Reset to first page when filters change
   };
@@ -271,61 +274,7 @@ const BarcodeManagementPage: React.FC = () => {
     }
   };
   
-  // Start editing a barcode
-  const handleEdit = useCallback((barcode: Barcode) => {
-    setEditingId(barcode.batch_id);
-    setEditValues({
-      phase_name: barcode.phase_name,
-      status: barcode.status,
-      quantity: barcode.quantity
-    });
-  }, []);
-  
-  // Handle changes to editable fields
-  const handleEditChange = useCallback((e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    const { name, value } = e.target;
-    setEditValues(prev => ({ 
-      ...prev, 
-      [name]: name === 'quantity' ? parseInt(value) || 0 : value
-    }));
-  }, []);
-  
-  // Save edits
-  const handleSaveEdit = async (id: number) => {
-    try {
-      // Map phase_name to current_phase based on the phase name
-      const phaseMap: { [key: string]: number } = {
-        'Cutting': 1,
-        'Sewing': 2,
-        'Packaging': 3
-      };
 
-      const updateData = {
-        current_phase: phaseMap[editValues.phase_name],
-        status: editValues.status,
-        quantity: editValues.quantity
-      };
-
-      const response = await api.put(`/batches/${id}`, updateData);
-
-      setBarcodes(prev => 
-        prev.map(barcode => 
-          barcode.batch_id === id 
-            ? { ...barcode, ...response.data } 
-            : barcode
-        )
-      );
-      setEditingId(null);
-    } catch (error) {
-      console.error('Error updating barcode:', error);
-      // You might want to show an error message to the user here
-    }
-  };
-  
-  // Cancel editing
-  const handleCancelEdit = () => {
-    setEditingId(null);
-  };
   
   // Handle delete
   const handleDelete = async (id: number) => {
@@ -440,6 +389,8 @@ const BarcodeManagementPage: React.FC = () => {
     }
   };
 
+  const navigate = useNavigate();
+
   // Memoize the columns configuration
   const columns = useMemo(() => {
     const baseColumns = [
@@ -456,44 +407,35 @@ const BarcodeManagementPage: React.FC = () => {
         />
       )
     },
-    { key: 'barcode', header: t('barcode.barcode'), width: 110 },
-    { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 150 },
+    // Hide job_order_number in compact view
+    { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 150, hidden: !showFullView },
+    // Add barcode column
+    { key: 'barcode', header: t('barcode.barcode'), width: 150, render: (item: Barcode) => item.barcode },
     { key: 'brand_name', header: t('bulkBarcode.brand'), width: 70 },
     { key: 'model_name', header: t('bulkBarcode.model'), width: 100 },
-    { key: 'size_value', header: t('bulkBarcode.size'), width: 70, hidden: !showFullView },
+    // Always show size_value column
+    { key: 'size_value', header: t('bulkBarcode.size'), width: 70 },
     { key: 'color_name', header: t('bulkBarcode.color'), width: 110, hidden: !showFullView },
+    // Always show quantity column
     {
       key: 'quantity',
       header: t('barcode.quantity'),
       width: 70,
-      hidden: !showFullView,
-      render: (item: Barcode) => (
-        editingId === item.batch_id ? (
-          <input
-            type="number"
-            name="quantity"
-            value={editValues.quantity}
-            onChange={handleEditChange}
-            className="w-20 p-1 border rounded text-sm"
-            min="1"
-          />
-        ) : (
-          item.quantity
-        )
-      )
+      render: (item: Barcode) => item.quantity
     },
+    // Removed layers and serial columns from compact view (only show in full view)
     {
       key: 'layers',
       header: t('bulkBarcode.layers'),
       width: 60,
-      hidden: !showFullView,
+      hidden: true,
       render: (item: Barcode) => item.layers
     },
     {
       key: 'serial',
       header: t('bulkBarcode.serial'),
       width: 80,
-      hidden: !showFullView,
+      hidden: true,
       render: (item: Barcode) => item.serial
     },
     {
@@ -501,26 +443,13 @@ const BarcodeManagementPage: React.FC = () => {
       header: t('barcode.phase'),
       width: 100,
       render: (item: Barcode) => (
-        editingId === item.batch_id ? (
-          <select
-            name="phase_name"
-            value={editValues.phase_name}
-            onChange={handleEditChange}
-            className="w-24 p-1 border rounded text-sm"
-          >
-            <option value="Cutting">{t('phases.cutting')}</option>
-            <option value="Sewing">{t('phases.sewing')}</option>
-            <option value="Packaging">{t('phases.packaging')}</option>
-          </select>
-        ) : (
-          <span className={`inline-block px-2 py-1 text-xs rounded-full ${
-            item.phase_name === 'Cutting' ? 'bg-blue-100 text-blue-800' :
-            item.phase_name === 'Sewing' ? 'bg-purple-100 text-purple-800' :
-            'bg-orange-100 text-orange-800'
-          }`}>
-            {t(`phases.${item.phase_name.toLowerCase()}`)}
-          </span>
-        )
+        <span className={`inline-block px-2 py-1 text-xs rounded-full ${
+          item.phase_name === 'Cutting' ? 'bg-blue-100 text-blue-800' :
+          item.phase_name.startsWith('Sewing') ? 'bg-purple-100 text-purple-800' :
+          'bg-orange-100 text-orange-800'
+        }`}>
+          {item.phase_name}
+        </span>
       )
     },
     {
@@ -528,90 +457,47 @@ const BarcodeManagementPage: React.FC = () => {
       header: t('common.status'),
       width: 100,
       render: (item: Barcode) => (
-        editingId === item.batch_id ? (
-          <select
-            name="status"
-            value={editValues.status}
-            onChange={handleEditChange}
-            className="w-24 p-1 border rounded text-sm"
-          >
-            <option value="Pending">{t('status.pending')}</option>
-            <option value="In Progress">{t('status.inProgress')}</option>
-            <option value="Completed">{t('status.completed')}</option>
-          </select>
-        ) : (
-          <span className={`inline-block px-2 py-1 text-xs rounded-full ${
-            item.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
-            item.status === 'In Progress' ? 'bg-blue-100 text-blue-800' :
-            'bg-green-100 text-green-800'
-          }`}>
-            {item.status === 'In Progress' ? t('status.inProgress') : 
-             item.status === 'Pending' ? t('status.pending') : 
-             t('status.completed')}
-          </span>
-        )
+        <span className={`inline-block px-2 py-1 text-xs rounded-full ${
+          item.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
+          item.status === 'In Progress' ? 'bg-blue-100 text-blue-800' :
+          'bg-green-100 text-green-800'
+        }`}>
+          {item.status === 'In Progress' ? t('status.inProgress') : 
+           item.status === 'Pending' ? t('status.pending') : 
+           t('status.completed')}
+        </span>
       )
-      },
+    },
     ];
 
     // Only add actions column for admin users
     if (user?.role === 'Admin') {
       baseColumns.push({
       key: 'actions',
-      header: t('common.edit'),
+      header: t('common.actions'),
       width: 120,
       hidden: !showFullView,
       render: (item: Barcode) => (
-        editingId === item.batch_id ? (
-          <div className="flex space-x-1">
-            <button
-              onClick={() => handleSaveEdit(item.batch_id)}
-              className="px-3 py-1 text-sm !bg-green-600 text-white rounded hover:bg-green-700 transition-colors font-medium flex items-center justify-center min-w-[32px] border border-green-800"
-              title={t('common.save')}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="black"
-                strokeWidth={2}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-            </button>
-            <button
-              onClick={handleCancelEdit}
-              className="px-3 py-1 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors font-medium flex items-center justify-center min-w-[32px]"
-              title={t('common.cancel')}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        ) : (
-          <div className="flex space-x-1">
-                <button
-                  onClick={() => handleEdit(item)}
-                  className="px-2 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
-                  title={t('common.edit')}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => handleDelete(item.batch_id)}
-                  className="px-2 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors font-medium"
-                  title={t('common.delete')}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
-          </div>
-        )
+        <div className="flex space-x-1">
+          <button
+            onClick={() => handleDelete(item.batch_id)}
+            className="px-2 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors font-medium"
+            title={t('common.delete')}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+          <button
+            onClick={() => navigate(`/barcode-details/${item.batch_id}`)}
+            className="px-2 py-1 text-sm bg-gray-700 text-white rounded hover:bg-gray-800 transition-colors font-medium"
+            title={t('common.view')}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0zm6 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+        </div>
       )
       });
     } else if (user?.role === 'Creator') {
@@ -621,53 +507,23 @@ const BarcodeManagementPage: React.FC = () => {
       width: 120,
       hidden: !showFullView,
       render: (item: Barcode) => (
-        editingId === item.batch_id ? (
-          <div className="flex space-x-1">
-            <button
-              onClick={() => handleSaveEdit(item.batch_id)}
-              className="px-3 py-1 text-sm !bg-green-600 text-white rounded hover:bg-green-700 transition-colors font-medium flex items-center justify-center min-w-[32px] border border-green-800"
-              title={t('common.save')}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="black"
-                strokeWidth={2}
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-            </button>
-            <button
-              onClick={handleCancelEdit}
-              className="px-3 py-1 text-sm bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors font-medium flex items-center justify-center min-w-[32px]"
-              title={t('common.cancel')}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        ) : (
-          <div className="flex space-x-1">
-                <button
-                  onClick={() => handleEdit(item)}
-                  className="px-2 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors font-medium"
-                  title={t('common.edit')}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
-                </button>
-          </div>
-        )
+        <div className="flex space-x-1">
+          <button
+            onClick={() => navigate(`/barcode-details/${item.batch_id}`)}
+            className="px-2 py-1 text-sm bg-gray-700 text-white rounded hover:bg-gray-800 transition-colors font-medium"
+            title={t('common.view')}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0zm6 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+        </div>
       )
       });
     }
 
     return baseColumns;
-  }, [selectedBarcodes, editingId, editValues, user?.role, t]);
+  }, [selectedBarcodes, user?.role, t, navigate, phases]);
 
 
 
@@ -769,11 +625,16 @@ const BarcodeManagementPage: React.FC = () => {
                 value={filters.phase}
                 onChange={handleFilterChange}
                 className="input-field"
+                disabled={phases.length === 0}
               >
                 <option value="">{t('barcodeManagement.allPhases')}</option>
-                <option value="Cutting">{t('phases.cutting')}</option>
-                <option value="Sewing">{t('phases.sewing')}</option>
-                <option value="Packaging">{t('phases.packaging')}</option>
+                {phases.length === 0 ? (
+                  <option value="">{t('common.loading')}</option>
+                ) : (
+                  phases.map(phase => (
+                    <option key={phase.phase_id} value={phase.phase_name}>{phase.phase_name}</option>
+                  ))
+                )}
               </select>
             </div>
             
@@ -790,6 +651,22 @@ const BarcodeManagementPage: React.FC = () => {
                 <option value="Pending">{t('status.pending')}</option>
                 <option value="In Progress">{t('status.inProgress')}</option>
                 <option value="Completed">{t('status.completed')}</option>
+              </select>
+            </div>
+            
+            {/* Second Degree Filter Dropdown */}
+            <div className="form-group">
+              <label htmlFor="secondDegreeFilter" className="text-sm font-medium text-gray-700">{t('barcodeManagement.secondDegreeFilter')}</label>
+              <select
+                id="secondDegreeFilter"
+                name="secondDegreeFilter"
+                value={secondDegreeFilter}
+                onChange={e => setSecondDegreeFilter(e.target.value as 'all' | 'only' | 'without')}
+                className="input-field"
+              >
+                <option value="all">{t('barcodeManagement.showAll')}</option>
+                <option value="only">{t('barcodeManagement.showOnlySecondDegree')}</option>
+                <option value="without">{t('barcodeManagement.showWithoutSecondDegree')}</option>
               </select>
             </div>
             
@@ -914,7 +791,7 @@ const BarcodeManagementPage: React.FC = () => {
                     {t('barcodeManagement.noBarcodesFound')}
                   </div>
                 ) : (
-                                      <VirtualizedTable
+                  <VirtualizedTable
                       columns={columns}
                       data={barcodes}
                       height={600}
@@ -923,6 +800,7 @@ const BarcodeManagementPage: React.FC = () => {
                       showAllColumns={showFullView}
                       onSelectAll={handleSelectAll}
                       isAllSelected={selectedBarcodes.length === barcodes.length && barcodes.length > 0}
+                      rowClassName={(idx) => barcodes[idx]?.is_second_degree ? 'text-red-600' : ''}
                     />
                 )}
               </div>

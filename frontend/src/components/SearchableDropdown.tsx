@@ -78,8 +78,8 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
   };
 
   return (
-    <div className={cn("form-group", className)} ref={dropdownRef}>
-      <label className="text-sm font-medium text-gray-700">{label}</label>
+    <div className={cn(className, "w-full h-10")} ref={dropdownRef}>
+      {label && <label className="text-sm font-medium text-gray-700">{label}</label>}
       <div className="relative">
         <div className="relative">
           <input
@@ -96,7 +96,7 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
             }}
             placeholder={placeholder}
             disabled={disabled}
-            className="input-field pr-10"
+            className="input-field pr-10 h-10 w-full"
           />
           <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex items-center space-x-1">
             {value && !isOpen && (

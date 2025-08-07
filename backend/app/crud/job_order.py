@@ -28,7 +28,8 @@ def create_job_order(db: Session, job_order: schemas.JobOrderCreate) -> models.J
             color_id=item.color_id,
             size_id=item.size_id,
             quantity=item.quantity,
-            weight=getattr(item, 'weight', None)
+            weight=getattr(item, 'weight', None),
+            notes=getattr(item, 'notes', None)
         )
         db.add(db_item)
 
@@ -75,7 +76,8 @@ def create_job_order_with_names(db: Session, job_order: schemas.JobOrderCreateWi
             color_id=color.color_id,
             size_id=size.size_id,
             quantity=item.quantity,
-            weight=getattr(item, 'weight', None)
+            weight=getattr(item, 'weight', None),
+            notes=getattr(item, 'notes', None)
         )
         db.add(db_item)
 
@@ -151,6 +153,8 @@ def update_job_order(db: Session, job_order_id: int, job_order_update: schemas.J
                 db_item.quantity = item.get("quantity", db_item.quantity)
                 if "weight" in item:
                     db_item.weight = item["weight"]
+                if "notes" in item:
+                    db_item.notes = item["notes"]
 
     # Handle prints update
     if job_order_update.prints is not None:
@@ -279,29 +283,48 @@ def get_job_order_production_tracking(db: Session, job_order_id: int) -> List[Di
     ).filter(
         models.JobOrderItem.job_order_id == job_order_id
     ).all()
+    
     result = []
     for item in items:
-        produced_quantity = db.query(
-            func.sum(models.Batch.quantity)
-        ).filter(
+        # Get all batches for this specific item (color + size combination)
+        item_batches = db.query(models.Batch).filter(
             models.Batch.job_order_id == job_order_id,
             models.Batch.color_id == item.JobOrderItem.color_id,
             models.Batch.size_id == item.JobOrderItem.size_id
-        ).scalar() or 0
+        ).all()
+        
+        # Calculate quantities at item level
+        produced_quantity = sum(batch.quantity for batch in item_batches if batch.quantity is not None)
+        
+        # Calculate cut quantity (non-decreasing maximum)
+        cut_quantity = 0
+        if item_batches:
+            # Get the maximum quantity ever reached for this item
+            cut_quantity = max(batch.quantity for batch in item_batches if batch.quantity is not None)
+        
+        # Calculate second degree quantity
+        second_degree_quantity = sum(
+            batch.quantity for batch in item_batches 
+            if batch.quantity is not None and batch.is_second_degree == True
+        )
+        
+        # Calculate completed quantity (only completed batches)
+        completed_quantity = sum(
+            batch.quantity for batch in item_batches 
+            if batch.quantity is not None and batch.status == 'Completed'
+        )
+        
+        # Calculate remaining quantity
         remaining_quantity = item.JobOrderItem.quantity - produced_quantity
+        
+        # Determine production status
         if produced_quantity >= item.JobOrderItem.quantity:
             production_status = "Completed"
         elif produced_quantity > 0:
             production_status = "In Progress"
         else:
             production_status = "Not Started"
-        # Sum quantity of completed batches for this item
-        completed_quantity = db.query(func.sum(models.Batch.quantity)).filter(
-            models.Batch.job_order_id == job_order_id,
-            models.Batch.color_id == item.JobOrderItem.color_id,
-            models.Batch.size_id == item.JobOrderItem.size_id,
-            models.Batch.status == 'Completed'
-        ).scalar() or 0
+        
         result.append({
             "item_id": item.JobOrderItem.item_id,
             "color_id": item.JobOrderItem.color_id,
@@ -310,13 +333,17 @@ def get_job_order_production_tracking(db: Session, job_order_id: int) -> List[Di
             "size_value": item.size_value,
             "expected_quantity": item.JobOrderItem.quantity,
             "produced_quantity": produced_quantity,
+            "cut_quantity": cut_quantity,
+            "working_quantity": produced_quantity,  # Same as produced_quantity for clarity
+            "second_degree_quantity": second_degree_quantity,
+            "completed_quantity": completed_quantity,
             "remaining_quantity": remaining_quantity,
-            "production_status": production_status,
-            "completed_quantity": completed_quantity
+            "production_status": production_status
         })
     return result
 
 def get_job_order_overall_status(db: Session, job_order_id: int) -> Optional[Dict]:
+    """Get overall production status for a job order by aggregating from item summaries"""
     job_order = db.query(
         models.JobOrder,
         models.Model.model_name
@@ -326,32 +353,50 @@ def get_job_order_overall_status(db: Session, job_order_id: int) -> Optional[Dic
     ).filter(
         models.JobOrder.job_order_id == job_order_id
     ).first()
+    
     if not job_order:
         return None
-    total_expected = db.query(
-        func.sum(models.JobOrderItem.quantity)
-    ).filter(
-        models.JobOrderItem.job_order_id == job_order_id
-    ).scalar() or 0
-    total_produced = db.query(
-        func.sum(models.Batch.quantity)
-    ).filter(
-        models.Batch.job_order_id == job_order_id
-    ).scalar() or 0
-    total_remaining = total_expected - total_produced
-    if total_produced >= total_expected:
+    
+    # Get item summaries for this job order
+    item_summaries = db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.job_order_id == job_order_id
+    ).all()
+    
+    if not item_summaries:
+        return None
+    
+    # Aggregate quantities from item summaries
+    total_expected = sum(item.expected_quantity for item in item_summaries)
+    total_produced = sum(item.produced_quantity for item in item_summaries)
+    total_cut_quantity = sum(item.cut_quantity for item in item_summaries)
+    total_second_degree_quantity = sum(item.second_degree_quantity for item in item_summaries)
+    total_completed_quantity = sum(item.completed_quantity for item in item_summaries)
+    total_working_quantity = sum(item.working_quantity for item in item_summaries)
+    total_remaining = sum(item.remaining_quantity for item in item_summaries)
+    
+    # Determine overall status based on item statuses
+    completed_items = sum(1 for item in item_summaries if item.production_status == 'Completed')
+    in_progress_items = sum(1 for item in item_summaries if item.production_status == 'In Progress')
+    
+    if completed_items == len(item_summaries):
         overall_status = "Completed"
-    elif total_produced > 0:
+    elif completed_items > 0 or in_progress_items > 0:
         overall_status = "In Progress"
     else:
         overall_status = "Not Started"
+    
     completion_percentage = round((total_produced / total_expected) * 100, 2) if total_expected > 0 else 0
+    
     return {
         "job_order_id": job_order.JobOrder.job_order_id,
         "job_order_number": job_order.JobOrder.job_order_number,
         "model_name": job_order.model_name,
         "total_expected": total_expected,
         "total_produced": total_produced,
+        "cut_quantity": total_cut_quantity,
+        "working_quantity": total_working_quantity,
+        "second_degree_quantity": total_second_degree_quantity,
+        "completed_quantity": total_completed_quantity,
         "total_remaining": total_remaining,
         "overall_status": overall_status,
         "completion_percentage": completion_percentage
@@ -373,4 +418,283 @@ def get_job_order_materials(db: Session, job_order_id: int):
             "quantity": float(m.JobOrderMaterial.quantity),
             "consumption": float(m.JobOrderMaterial.consumption) if m.JobOrderMaterial.consumption is not None else None,
             "color_name": m.color_name
-        } for m in materials] 
+        } for m in materials]
+
+# ============================================================================
+# ITEM-LEVEL QUANTITY TRACKING FUNCTIONS
+# ============================================================================
+
+def get_job_order_item_summary(db: Session, item_id: int) -> Optional[models.JobOrderItemSummary]:
+    """Get item summary by item_id"""
+    return db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.item_id == item_id
+    ).first()
+
+def get_job_order_items_summary(db: Session, job_order_id: int) -> List[models.JobOrderItemSummary]:
+    """Get all item summaries for a job order"""
+    return db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.job_order_id == job_order_id
+    ).all()
+
+def get_job_order_item_production_tracking(db: Session, item_id: int) -> Optional[Dict]:
+    """Get detailed production tracking for a specific item"""
+    item_summary = get_job_order_item_summary(db, item_id)
+    if not item_summary:
+        return None
+    
+    # Get job order details
+    job_order = db.query(models.JobOrder).filter(
+        models.JobOrder.job_order_id == item_summary.job_order_id
+    ).first()
+    
+    # Get model and brand details
+    model = db.query(models.Model).filter(
+        models.Model.model_id == job_order.model_id
+    ).first()
+    
+    brand = db.query(models.Brand).filter(
+        models.Brand.brand_id == job_order.brand_id
+    ).first() if job_order.brand_id else None
+    
+    return {
+        "item_id": item_summary.item_id,
+        "job_order_id": item_summary.job_order_id,
+        "job_order_number": job_order.job_order_number,
+        "model_name": model.model_name if model else None,
+        "brand_name": brand.brand_name if brand else None,
+        "color_id": item_summary.color_id,
+        "color_name": item_summary.color_name,
+        "size_id": item_summary.size_id,
+        "size_value": item_summary.size_value,
+        "expected_quantity": item_summary.expected_quantity,
+        "produced_quantity": item_summary.produced_quantity,
+        "cut_quantity": item_summary.cut_quantity,
+        "second_degree_quantity": item_summary.second_degree_quantity,
+        "completed_quantity": item_summary.completed_quantity,
+        "working_quantity": item_summary.working_quantity,
+        "remaining_quantity": item_summary.remaining_quantity,
+        "production_status": item_summary.production_status,
+        "completion_percentage": float(item_summary.completion_percentage) if item_summary.completion_percentage else 0,
+        "has_issues": item_summary.has_issues,
+        "overproduction_quantity": item_summary.overproduction_quantity,
+        "total_batches": item_summary.total_batches,
+        "last_calculated_at": item_summary.last_calculated_at,
+        "last_quantity_change": item_summary.last_quantity_change,
+        "last_completion_change": item_summary.last_completion_change,
+        "last_new_batch": item_summary.last_new_batch,
+        "last_batch_update": item_summary.last_batch_update
+    }
+
+def get_job_order_items_with_issues(db: Session, skip: int = 0, limit: int = 100) -> List[Dict]:
+    """Get all items that have issues (overproduction)"""
+    items = db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.has_issues == True
+    ).offset(skip).limit(limit).all()
+    
+    result = []
+    for item in items:
+        # Get job order details
+        job_order = db.query(models.JobOrder).filter(
+            models.JobOrder.job_order_id == item.job_order_id
+        ).first()
+        
+        # Get model and brand details
+        model = db.query(models.Model).filter(
+            models.Model.model_id == job_order.model_id
+        ).first()
+        
+        brand = db.query(models.Brand).filter(
+            models.Brand.brand_id == job_order.brand_id
+        ).first() if job_order.brand_id else None
+        
+        result.append({
+            "item_id": item.item_id,
+            "job_order_id": item.job_order_id,
+            "job_order_number": job_order.job_order_number,
+            "model_name": model.model_name if model else None,
+            "brand_name": brand.brand_name if brand else None,
+            "color_name": item.color_name,
+            "size_value": item.size_value,
+            "expected_quantity": item.expected_quantity,
+            "produced_quantity": item.produced_quantity,
+            "overproduction_quantity": item.overproduction_quantity,
+            "completion_percentage": float(item.completion_percentage) if item.completion_percentage else 0
+        })
+    
+    return result
+
+def get_job_order_items_high_second_degree(db: Session, skip: int = 0, limit: int = 100) -> List[Dict]:
+    """Get items with high second degree quantities (>10% of total production)"""
+    items = db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.second_degree_quantity > 0
+    ).filter(
+        models.JobOrderItemSummary.produced_quantity > 0
+    ).all()
+    
+    # Filter for items with >10% second degree
+    high_second_degree_items = []
+    for item in items:
+        if item.produced_quantity > 0:
+            second_degree_percentage = (item.second_degree_quantity / item.produced_quantity) * 100
+            if second_degree_percentage > 10:
+                high_second_degree_items.append(item)
+    
+    # Sort by second degree percentage descending
+    high_second_degree_items.sort(key=lambda x: (x.second_degree_quantity / x.produced_quantity) * 100, reverse=True)
+    
+    # Apply pagination
+    paginated_items = high_second_degree_items[skip:skip + limit]
+    
+    result = []
+    for item in paginated_items:
+        # Get job order details
+        job_order = db.query(models.JobOrder).filter(
+            models.JobOrder.job_order_id == item.job_order_id
+        ).first()
+        
+        # Get model and brand details
+        model = db.query(models.Model).filter(
+            models.Model.model_id == job_order.model_id
+        ).first()
+        
+        brand = db.query(models.Brand).filter(
+            models.Brand.brand_id == job_order.brand_id
+        ).first() if job_order.brand_id else None
+        
+        second_degree_percentage = (item.second_degree_quantity / item.produced_quantity) * 100
+        
+        result.append({
+            "item_id": item.item_id,
+            "job_order_id": item.job_order_id,
+            "job_order_number": job_order.job_order_number,
+            "model_name": model.model_name if model else None,
+            "brand_name": brand.brand_name if brand else None,
+            "color_name": item.color_name,
+            "size_value": item.size_value,
+            "produced_quantity": item.produced_quantity,
+            "second_degree_quantity": item.second_degree_quantity,
+            "second_degree_percentage": round(second_degree_percentage, 2)
+        })
+    
+    return result
+
+def get_job_order_items_with_quantity_reductions(db: Session, skip: int = 0, limit: int = 100) -> List[Dict]:
+    """Get items where cut quantity > produced quantity (quantity reductions)"""
+    items = db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.cut_quantity > models.JobOrderItemSummary.produced_quantity
+    ).order_by(
+        (models.JobOrderItemSummary.cut_quantity - models.JobOrderItemSummary.produced_quantity).desc()
+    ).offset(skip).limit(limit).all()
+    
+    result = []
+    for item in items:
+        # Get job order details
+        job_order = db.query(models.JobOrder).filter(
+            models.JobOrder.job_order_id == item.job_order_id
+        ).first()
+        
+        # Get model and brand details
+        model = db.query(models.Model).filter(
+            models.Model.model_id == job_order.model_id
+        ).first()
+        
+        brand = db.query(models.Brand).filter(
+            models.Brand.brand_id == job_order.brand_id
+        ).first() if job_order.brand_id else None
+        
+        quantity_reduction = item.cut_quantity - item.produced_quantity
+        
+        result.append({
+            "item_id": item.item_id,
+            "job_order_id": item.job_order_id,
+            "job_order_number": job_order.job_order_number,
+            "model_name": model.model_name if model else None,
+            "brand_name": brand.brand_name if brand else None,
+            "color_name": item.color_name,
+            "size_value": item.size_value,
+            "produced_quantity": item.produced_quantity,
+            "cut_quantity": item.cut_quantity,
+            "quantity_reduction": quantity_reduction
+        })
+    
+    return result
+
+def get_job_order_items_quantity_breakdown(db: Session, job_order_id: int) -> List[Dict]:
+    """Get detailed quantity breakdown for all items in a job order"""
+    items = db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.job_order_id == job_order_id,
+        models.JobOrderItemSummary.produced_quantity > 0
+    ).all()
+    
+    result = []
+    for item in items:
+        first_degree_quantity = item.produced_quantity - item.second_degree_quantity
+        cut_vs_produced_difference = item.cut_quantity - item.produced_quantity
+        second_degree_percentage = (item.second_degree_quantity / item.produced_quantity) * 100 if item.produced_quantity > 0 else 0
+        
+        result.append({
+            "item_id": item.item_id,
+            "job_order_id": item.job_order_id,
+            "color_name": item.color_name,
+            "size_value": item.size_value,
+            "expected_quantity": item.expected_quantity,
+            "produced_quantity": item.produced_quantity,
+            "cut_quantity": item.cut_quantity,
+            "second_degree_quantity": item.second_degree_quantity,
+            "first_degree_quantity": first_degree_quantity,
+            "cut_vs_produced_difference": cut_vs_produced_difference,
+            "second_degree_percentage": round(second_degree_percentage, 2),
+            "completion_percentage": float(item.completion_percentage) if item.completion_percentage else 0,
+            "has_issues": item.has_issues,
+            "production_status": item.production_status
+        })
+    
+    return result
+
+def refresh_job_order_items_summary(db: Session, job_order_id: Optional[int] = None):
+    """Refresh item summaries for a specific job order or all job orders"""
+    if job_order_id:
+        # Refresh specific job order
+        db.execute(text("CALL refresh_job_order_items_summary_single(:job_order_id)"), 
+                  {"job_order_id": job_order_id})
+    else:
+        # Refresh all job orders
+        db.execute(text("CALL refresh_job_order_items_summary()"))
+    
+    db.commit()
+
+def get_item_level_statistics(db: Session) -> Dict:
+    """Get comprehensive statistics at the item level"""
+    total_items = db.query(models.JobOrderItemSummary).count()
+    items_with_issues = db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.has_issues == True
+    ).count()
+    completed_items = db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.production_status == 'Completed'
+    ).count()
+    in_progress_items = db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.production_status == 'In Progress'
+    ).count()
+    not_started_items = db.query(models.JobOrderItemSummary).filter(
+        models.JobOrderItemSummary.production_status == 'Not Started'
+    ).count()
+    
+    # Calculate totals
+    total_expected = db.query(func.sum(models.JobOrderItemSummary.expected_quantity)).scalar() or 0
+    total_produced = db.query(func.sum(models.JobOrderItemSummary.produced_quantity)).scalar() or 0
+    total_second_degree = db.query(func.sum(models.JobOrderItemSummary.second_degree_quantity)).scalar() or 0
+    total_overproduction = db.query(func.sum(models.JobOrderItemSummary.overproduction_quantity)).scalar() or 0
+    
+    return {
+        "total_items": total_items,
+        "items_with_issues": items_with_issues,
+        "completed_items": completed_items,
+        "in_progress_items": in_progress_items,
+        "not_started_items": not_started_items,
+        "total_expected_quantity": total_expected,
+        "total_produced_quantity": total_produced,
+        "total_second_degree_quantity": total_second_degree,
+        "total_overproduction_quantity": total_overproduction,
+        "overall_completion_percentage": round((total_produced / total_expected) * 100, 2) if total_expected > 0 else 0,
+        "overall_second_degree_percentage": round((total_second_degree / total_produced) * 100, 2) if total_produced > 0 else 0
+    } 

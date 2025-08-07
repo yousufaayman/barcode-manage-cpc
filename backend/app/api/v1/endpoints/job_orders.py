@@ -471,6 +471,145 @@ def job_order_production_tracking_endpoint(
         "tracking_data": tracking_data
     }
 
+# ============================================================================
+# ITEM-LEVEL QUANTITY TRACKING ENDPOINTS
+# ============================================================================
+
+@router.get("/items/summary/", response_model=schemas.JobOrderItemSummaryListResponse)
+def get_job_order_items_summary(
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100,
+    job_order_id: Optional[int] = None,
+    color_name: Optional[str] = None,
+    size_value: Optional[str] = None,
+    production_status: Optional[str] = None,
+    has_issues: Optional[bool] = None,
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+):
+    """Get job order items summary with filtering"""
+    query = db.query(models.JobOrderItemSummary)
+    
+    # Apply filters
+    if job_order_id:
+        query = query.filter(models.JobOrderItemSummary.job_order_id == job_order_id)
+    if color_name:
+        query = query.filter(models.JobOrderItemSummary.color_name.ilike(f"%{color_name}%"))
+    if size_value:
+        query = query.filter(models.JobOrderItemSummary.size_value.ilike(f"%{size_value}%"))
+    if production_status:
+        query = query.filter(models.JobOrderItemSummary.production_status == production_status)
+    if has_issues is not None:
+        query = query.filter(models.JobOrderItemSummary.has_issues == has_issues)
+    
+    # Get total count before pagination
+    total_count = query.count()
+    
+    # Apply pagination
+    items = query.offset(skip).limit(limit).all()
+    
+    return {
+        "items": items,
+        "total": total_count
+    }
+
+@router.get("/items/{item_id}/tracking", response_model=schemas.JobOrderItemProductionTracking)
+def get_job_order_item_production_tracking(
+    item_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get detailed production tracking for a specific item"""
+    tracking_data = get_job_order_item_production_tracking(db, item_id)
+    if not tracking_data:
+        raise HTTPException(status_code=404, detail="Item not found")
+    
+    return tracking_data
+
+@router.get("/items/issues/", response_model=schemas.JobOrderItemWithIssuesListResponse)
+def get_job_order_items_with_issues(
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+):
+    """Get all items that have issues (overproduction)"""
+    items = get_job_order_items_with_issues(db, skip=skip, limit=limit)
+    
+    return {
+        "items": items,
+        "total": len(items)  # Note: This is simplified, should count total separately
+    }
+
+@router.get("/items/high-second-degree/", response_model=schemas.JobOrderItemHighSecondDegreeListResponse)
+def get_job_order_items_high_second_degree(
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+):
+    """Get items with high second degree quantities (>10% of total production)"""
+    items = get_job_order_items_high_second_degree(db, skip=skip, limit=limit)
+    
+    return {
+        "items": items,
+        "total": len(items)  # Note: This is simplified, should count total separately
+    }
+
+@router.get("/items/quantity-reductions/", response_model=schemas.JobOrderItemWithQuantityReductionsListResponse)
+def get_job_order_items_with_quantity_reductions(
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+):
+    """Get items where cut quantity > produced quantity (quantity reductions)"""
+    items = get_job_order_items_with_quantity_reductions(db, skip=skip, limit=limit)
+    
+    return {
+        "items": items,
+        "total": len(items)  # Note: This is simplified, should count total separately
+    }
+
+@router.get("/{job_order_id}/items/quantity-breakdown/", response_model=schemas.JobOrderItemQuantityBreakdownListResponse)
+def get_job_order_items_quantity_breakdown(
+    job_order_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get detailed quantity breakdown for all items in a job order"""
+    # Check if job order exists
+    job_order = get_job_order(db, job_order_id=job_order_id)
+    if not job_order:
+        raise HTTPException(status_code=404, detail="Job order not found")
+    
+    items = get_job_order_items_quantity_breakdown(db, job_order_id)
+    
+    return {
+        "items": items,
+        "total": len(items)
+    }
+
+@router.post("/items/refresh-summary/")
+def refresh_job_order_items_summary_endpoint(
+    job_order_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user)
+):
+    """Refresh item summaries for a specific job order or all job orders"""
+    try:
+        refresh_job_order_items_summary(db, job_order_id)
+        return {"message": "Item summaries refreshed successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh item summaries: {str(e)}")
+
+@router.get("/items/statistics/", response_model=schemas.ItemLevelStatistics)
+def get_item_level_statistics(
+    db: Session = Depends(get_db),
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+):
+    """Get comprehensive statistics at the item level"""
+    stats = get_item_level_statistics(db)
+    return stats
+
 @router.get("/{job_order_id}/overall-status")
 def get_job_order_overall_status(
     job_order_id: int,
@@ -544,80 +683,147 @@ def get_job_orders_summary(
     brand_name: Optional[str] = None,
     current_user: Optional[schemas.User] = Depends(get_optional_current_user)
 ):
-    """Get job order summaries from the summary table"""
-    query = db.query(models.JobOrderSummary)
-    if job_order_number:
-        query = query.filter(models.JobOrderSummary.job_order_number.ilike(f"%{job_order_number}%"))
-    if model_name:
-        query = query.filter(models.JobOrderSummary.model_name.ilike(f"%{model_name}%"))
-    if brand_name:
-        query = query.filter(models.JobOrderSummary.brand_name.ilike(f"%{brand_name}%"))
+    """Get job order summaries calculated from item-level data"""
+    # Build base query for job orders with item summaries
+    query = db.query(
+        models.JobOrder,
+        models.Model.model_name,
+        models.Brand.brand_name,
+        sa_func.count(models.JobOrderItemSummary.item_id).label('total_items'),
+        sa_func.sum(models.JobOrderItemSummary.expected_quantity).label('total_expected_quantity'),
+        sa_func.sum(models.JobOrderItemSummary.produced_quantity).label('total_produced_quantity'),
+        sa_func.sum(models.JobOrderItemSummary.cut_quantity).label('total_cut_quantity'),
+        sa_func.sum(models.JobOrderItemSummary.second_degree_quantity).label('total_second_degree_quantity'),
+        sa_func.sum(models.JobOrderItemSummary.completed_quantity).label('total_completed_quantity'),
+        sa_func.sum(models.JobOrderItemSummary.working_quantity).label('total_working_quantity'),
+        sa_func.sum(models.JobOrderItemSummary.remaining_quantity).label('total_remaining_quantity'),
+        sa_func.sum(models.JobOrderItemSummary.total_batches).label('total_batches'),
+        sa_func.max(models.JobOrderItemSummary.last_calculated_at).label('last_calculated_at'),
+        sa_func.max(models.JobOrderItemSummary.last_quantity_change).label('last_quantity_change'),
+        sa_func.max(models.JobOrderItemSummary.last_completion_change).label('last_completion_change'),
+        sa_func.max(models.JobOrderItemSummary.last_new_batch).label('last_new_batch'),
+        sa_func.max(models.JobOrderItemSummary.last_batch_update).label('last_batch_update')
+    ).join(
+        models.Model,
+        models.JobOrder.model_id == models.Model.model_id
+    ).join(
+        models.Brand,
+        models.JobOrder.brand_id == models.Brand.brand_id,
+        isouter=True
+    ).join(
+        models.JobOrderItemSummary,
+        models.JobOrder.job_order_id == models.JobOrderItemSummary.job_order_id,
+        isouter=True
+    ).group_by(
+        models.JobOrder.job_order_id,
+        models.JobOrder.job_order_number,
+        models.Model.model_name,
+        models.Brand.brand_name,
+        models.JobOrder.image_url,
+        models.JobOrder.notes,
+        models.JobOrder.date_created
+    )
     
-    total = query.count()
-    items = query.offset(skip).limit(limit).all()
+    # Apply filters
+    if job_order_number:
+        query = query.filter(models.JobOrder.job_order_number.ilike(f"%{job_order_number}%"))
+    # Note: closed filter removed as closed column no longer exists
+    if model_name:
+        query = query.filter(models.Model.model_name.ilike(f"%{model_name}%"))
+    if brand_name:
+        query = query.filter(models.Brand.brand_name.ilike(f"%{brand_name}%"))
+    
+    # Get results
+    results = query.all()
+    
+    # Calculate summaries
+    summaries = []
+    for result in results:
+        # Calculate derived fields
+        total_expected = result.total_expected_quantity or 0
+        total_produced = result.total_produced_quantity or 0
+        total_cut = result.total_cut_quantity or 0
+        total_second_degree = result.total_second_degree_quantity or 0
+        total_completed = result.total_completed_quantity or 0
+        total_working = result.total_working_quantity or 0
+        total_remaining = result.total_remaining_quantity or 0
+        total_batches = result.total_batches or 0
+        
+        # Calculate completion percentage
+        completion_percentage = round((total_produced / total_expected) * 100, 2) if total_expected > 0 else 0
+        
+        # Check for items with notes
+        items_with_notes = db.query(models.JobOrderItemSummary).filter(
+            models.JobOrderItemSummary.job_order_id == result.JobOrder.job_order_id,
+            models.JobOrderItemSummary.notes.isnot(None),
+            models.JobOrderItemSummary.notes != ''
+        ).all()
+        
+        # Determine if there are issues (including notes)
+        has_issues = total_produced > total_expected or len(items_with_notes) > 0
+        
+        # Check for high second degree items (>3% threshold)
+        has_high_second_degree = False
+        if total_produced > 0:
+            # Get all items for this job order to check individual second degree percentages
+            job_order_items = db.query(models.JobOrderItemSummary).filter(
+                models.JobOrderItemSummary.job_order_id == result.JobOrder.job_order_id,
+                models.JobOrderItemSummary.produced_quantity > 0
+            ).all()
+            
+            for item in job_order_items:
+                if item.second_degree_quantity > 0:
+                    second_degree_percentage = (item.second_degree_quantity / item.produced_quantity) * 100
+                    if second_degree_percentage > 3:
+                        has_high_second_degree = True
+                        break
+        
+        # Calculate overproduction
+        overproduction_quantity = max(0, total_produced - total_expected)
+        
+        # Get notes from items (if any)
+        notes_text = ""
+        if items_with_notes:
+            notes_list = [item.notes for item in items_with_notes if item.notes]
+            notes_text = "; ".join(notes_list)
+        
+        summaries.append({
+            "job_order_id": result.JobOrder.job_order_id,
+            "job_order_number": result.JobOrder.job_order_number,
+            "model_name": result.model_name,
+            "brand_name": result.brand_name,
+            "total_items": result.total_items or 0,
+            "total_expected_quantity": total_expected,
+            "total_produced_quantity": total_produced,
+            "cut_quantity": total_cut,
+            "second_degree_quantity": total_second_degree,
+            "completed_quantity": total_completed,
+            "working_quantity": total_working,
+            "remaining_quantity": total_remaining,
+            "total_batches": total_batches,
+            "has_issues": has_issues,
+            "has_high_second_degree": has_high_second_degree,
+            "completion_percentage": completion_percentage,
+            "overproduction_quantity": overproduction_quantity,
+            "notes": notes_text,
+            "last_calculated_at": result.last_calculated_at,
+            "last_quantity_change": result.last_quantity_change,
+            "last_completion_change": result.last_completion_change,
+            "last_new_batch": result.last_new_batch,
+            "last_batch_update": result.last_batch_update
+        })
+    
+    # Apply pagination
+    total = len(summaries)
+    summaries = summaries[skip:skip + limit]
     
     return {
-        "items": items,
+        "items": summaries,
         "total": total
     } 
 
 @router.post("/refresh-summary/")
 def refresh_job_orders_summary(db: Session = Depends(get_db)):
-    refresh_sql = """
-    REPLACE INTO job_orders_summary (
-        job_order_id,
-        job_order_number,
-        model_name,
-        brand_name,
-        total_items,
-        total_expected_quantity,
-        total_produced_quantity,
-        total_batches,
-        has_issues,
-        completion_percentage,
-        overproduction_quantity,
-        last_calculated_at,
-        last_batch_update
-    )
-    SELECT
-        jo.job_order_id,
-        jo.job_order_number,
-        m.model_name,
-        b.brand_name,
-        COALESCE(items.total_items, 0) AS total_items,
-        COALESCE(items.total_expected_quantity, 0) AS total_expected_quantity,
-        COALESCE(batches.total_produced_quantity, 0) AS total_produced_quantity,
-        COALESCE(batches.total_batches, 0) AS total_batches,
-        CASE
-            WHEN COALESCE(batches.total_produced_quantity, 0) > COALESCE(items.total_expected_quantity, 0) THEN TRUE
-            ELSE FALSE
-        END AS has_issues,
-        CASE
-            WHEN COALESCE(batches.total_batches, 0) = 0 THEN 0
-            ELSE ROUND(100.0 * COALESCE(batches.completed_batches, 0) / batches.total_batches, 2)
-        END AS completion_percentage,
-        GREATEST(0, COALESCE(batches.total_produced_quantity, 0) - COALESCE(items.total_expected_quantity, 0)) AS overproduction_quantity,
-        CURRENT_TIMESTAMP AS last_calculated_at,
-        batches.last_batch_update
-    FROM job_orders jo
-    LEFT JOIN models m ON jo.model_id = m.model_id
-    LEFT JOIN brands b ON jo.brand_id = b.brand_id
-    LEFT JOIN (
-        SELECT job_order_id, COUNT(*) AS total_items, SUM(quantity) AS total_expected_quantity
-        FROM job_order_items
-        GROUP BY job_order_id
-    ) items ON jo.job_order_id = items.job_order_id
-    LEFT JOIN (
-        SELECT
-            job_order_id,
-            SUM(quantity) AS total_produced_quantity,
-            COUNT(*) AS total_batches,
-            SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) AS completed_batches,
-            MAX(last_updated_at) AS last_batch_update
-        FROM batches
-        GROUP BY job_order_id
-    ) batches ON jo.job_order_id = batches.job_order_id;
-    """
-    db.execute(text(refresh_sql))
-    db.commit()
-    return {"status": "refreshed"} 
+    """DEPRECATED: Use /items/refresh-summary/ instead. This endpoint is kept for backward compatibility."""
+    # Redirect to the new item-level refresh endpoint
+    return refresh_job_order_items_summary_endpoint(None, db, None) 

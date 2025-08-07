@@ -78,6 +78,66 @@ export interface BarcodeData {
   current_phase: number;
   status: string;
   archived_at?: string | null;
+  notes?: string;
+}
+
+// Event-based timeline interfaces
+export interface BarcodeScanEvent {
+  id: number;
+  batch_id: number;
+  action_type: string;
+  phase_id: number;
+  phase_name?: string;
+  old_status?: string;
+  new_status?: string;
+  old_quantity?: number;
+  new_quantity?: number;
+  old_phase?: number;
+  new_phase?: number;
+  scanned_at: string;
+  user_id?: number;
+  user_name?: string;
+  notes?: string;
+}
+
+export interface TimelineSummaryEntry {
+  phase_id: number;
+  phase_name: string;
+  start_time?: string;
+  end_time?: string;
+  duration_minutes?: number;
+  status: string;
+  quantity_at_start?: number;
+  quantity_at_end?: number;
+  event_count: number;
+}
+
+export interface TimelineSummaryResponse {
+  barcode: string;
+  timeline_entries: TimelineSummaryEntry[];
+  total_entries: number;
+  total_events: number;
+}
+
+// Legacy timeline interfaces (for backward compatibility)
+export interface BarcodeTimelineEntry {
+  id: number;
+  batch_id: number;
+  status: string;
+  phase_id: number;
+  phase_name: string;
+  start_time: string;
+  end_time?: string;
+  duration_minutes?: number;
+  updated_quantity?: number;
+  current_quantity: number;
+  barcode: string;
+}
+
+export interface BarcodeTimelineResponse {
+  barcode: string;
+  timeline_entries: BarcodeTimelineEntry[];
+  total_entries: number;
 }
 
 export interface BarcodeListResponse {
@@ -88,6 +148,7 @@ export interface BarcodeListResponse {
 export interface BarcodeUpdate {
   current_phase?: number;
   status?: string;
+  notes?: string;
 }
 
 export interface BatchStats {
@@ -189,6 +250,103 @@ export interface AdvancedStatisticsResponse {
   [key: string]: any; // Allow other properties for now
 }
 
+export interface ProductionStatisticsResponse {
+  wip_by_phase: Array<{
+    phase_id: number;
+    phase_name: string;
+    pending: number;
+    in_progress: number;
+    completed: number;
+    total: number;
+  }>;
+  production_by_brand: Array<{
+    brand_id: number;
+    brand_name: string;
+    pending: number;
+    in_progress: number;
+    completed: number;
+    total: number;
+    total_quantity: number;
+  }>;
+  production_by_model: Array<{
+    model_id: number;
+    model_name: string;
+    brand_name: string;
+    pending: number;
+    in_progress: number;
+    completed: number;
+    total: number;
+    total_quantity: number;
+  }>;
+  recent_activity: Array<{
+    date: string;
+    total_events: number;
+    unique_batches: number;
+  }>;
+  bottlenecks: Array<{
+    phase_name: string;
+    brand_name: string;
+    model_name: string;
+    pending_count: number;
+    total_quantity: number;
+  }>;
+  overall_stats: {
+    total_batches: number;
+    total_pending: number;
+    total_in_progress: number;
+    total_completed: number;
+    total_quantity: number;
+    completion_rate: number;
+  };
+  second_degree_stats: {
+    second_degree_batches: number;
+    second_degree_quantity: number;
+    second_degree_percentage: number;
+  };
+}
+
+export interface BrandStatisticsResponse {
+  brand_info: {
+    brand_id: number;
+    brand_name: string;
+  };
+  phases: Array<{
+    phase_id: number;
+    phase_name: string;
+    pending: number;
+    in_progress: number;
+    completed: number;
+    total: number;
+    total_quantity: number;
+  }>;
+  models: Array<{
+    model_id: number;
+    model_name: string;
+    pending: number;
+    in_progress: number;
+    completed: number;
+    total: number;
+    total_quantity: number;
+  }>;
+}
+
+export interface ModelStatisticsResponse {
+  model_info: {
+    model_id: number;
+    model_name: string;
+    brand_name: string;
+  };
+  phases: Array<{
+    phase_id: number;
+    phase_name: string;
+    pending: number;
+    in_progress: number;
+    completed: number;
+    total: number;
+    total_quantity: number;
+  }>;
+}
+
 // Job Order interfaces
 export interface JobOrderItem {
   item_id: number;
@@ -198,6 +356,7 @@ export interface JobOrderItem {
   size_id: number;
   size_value?: string;
   quantity: number;
+  notes?: string;
 }
 
 export interface JobOrderItemWithDetails {
@@ -208,6 +367,7 @@ export interface JobOrderItemWithDetails {
   size_id: number;
   size_value: string;
   quantity: number;
+  notes?: string;
 }
 
 export interface JobOrder {
@@ -239,6 +399,7 @@ export interface JobOrderCreateWithNames {
     color_name: string;
     size_value: string;
     quantity: number;
+    notes?: string;
   }[];
 }
 
@@ -248,6 +409,7 @@ export interface JobOrderUpdate {
   items?: {
     item_id: number;
     quantity: number;
+    notes?: string;
   }[];
   notes?: string;
 }
@@ -263,6 +425,10 @@ export interface JobOrderProductionTracking {
     size_value: string;
     expected_quantity: number;
     produced_quantity: number;
+    cut_quantity: number;
+    working_quantity: number;
+    second_degree_quantity: number;
+    completed_quantity: number;
     remaining_quantity: number;
     production_status: string;
   }[];
@@ -277,6 +443,63 @@ export interface JobOrderOverallStatus {
   total_remaining: number;
   overall_status: string;
   completion_percentage: number;
+}
+
+export interface JobOrderSummary {
+  job_order_id: number;
+  job_order_number: string;
+  model_name?: string;
+  brand_name?: string;
+  total_items: number;
+  total_expected_quantity: number;
+  total_produced_quantity: number;
+  cut_quantity: number;
+  second_degree_quantity: number;
+  completed_quantity: number;
+  working_quantity: number;
+  remaining_quantity: number;
+  total_batches: number;
+  has_issues: boolean;
+  has_high_second_degree: boolean;
+  completion_percentage: number;
+  overproduction_quantity: number;
+  last_calculated_at?: string;
+  last_quantity_change?: string;
+  last_completion_change?: string;
+  last_new_batch?: string;
+  last_batch_update?: string;
+}
+
+export interface JobOrderItemSummary {
+  item_id: number;
+  job_order_id: number;
+  color_id: number;
+  size_id: number;
+  color_name: string;
+  size_value: string;
+  expected_quantity: number;
+  produced_quantity: number;
+  cut_quantity: number;
+  second_degree_quantity: number;
+  completed_quantity: number;
+  working_quantity: number;
+  remaining_quantity: number;
+  total_batches: number;
+  has_issues: boolean;
+  completion_percentage: number;
+  overproduction_quantity: number;
+  production_status: string;
+  notes?: string;
+  last_calculated_at?: string;
+  last_quantity_change?: string;
+  last_completion_change?: string;
+  last_new_batch?: string;
+  last_batch_update?: string;
+}
+
+export interface JobOrderItemSummaryListResponse {
+  items: JobOrderItemSummary[];
+  total: number;
 }
 
 export interface JobOrderListResponse {
@@ -363,6 +586,9 @@ export const barcodeApi = {
     phase?: string;
     status?: string;
     archived?: boolean;
+    job_order_id?: number;
+    color_id?: number;
+    is_second_degree?: boolean;
   }): Promise<BarcodeListResponse> => {
     const response = await api.get<BarcodeListResponse>('/batches/', { params });
     return response.data;
@@ -423,7 +649,93 @@ export const barcodeApi = {
       printer_name: printerName
     });
     return response.data;
-  }
+  },
+
+  getBatchesByJobOrderAndColor: async (jobOrderId: number, colorId: number): Promise<{ total_quantity: number }> => {
+    const response = await api.get<BarcodeListResponse>('/batches/', {
+      params: {
+        job_order_id: jobOrderId,
+        color_id: colorId
+      }
+    });
+    
+    const totalQuantity = response.data.items.reduce((sum, batch) => sum + batch.quantity, 0);
+    return { total_quantity: totalQuantity };
+  },
+  getBatchById: async (batch_id: number | string): Promise<BarcodeData> => {
+    const response = await api.get<BarcodeData>(`/batches/${batch_id}`);
+    return response.data;
+  },
+
+  getPhases: async (): Promise<{ phase_id: number; phase_name: string }[]> => {
+    const response = await api.get<{ phase_id: number; phase_name: string }[]>('/phases/');
+    return response.data;
+  },
+
+  getBarcodeTimeline: async (batch_id: number): Promise<BarcodeTimelineResponse> => {
+    const response = await api.get<BarcodeTimelineResponse>(`/batches/${batch_id}/timeline/details`);
+    return response.data;
+  },
+
+  // Event-based timeline API functions
+  getBatchScanEvents: async (batch_id: number, limit: number = 100): Promise<BarcodeScanEvent[]> => {
+    const response = await api.get<BarcodeScanEvent[]>(`/batches/${batch_id}/events`, { params: { limit } });
+    return response.data;
+  },
+
+  getBatchTimelineSummary: async (batch_id: number): Promise<TimelineSummaryResponse> => {
+    const response = await api.get<TimelineSummaryResponse>(`/batches/${batch_id}/timeline/summary`);
+    return response.data;
+  },
+
+  getJobOrderItemByBarcode: async (barcode: string): Promise<{
+    item_id: number;
+    job_order_id: number;
+    color_id: number;
+    size_id: number;
+    expected_quantity: number;
+    notes?: string;
+  }> => {
+    const response = await api.get(`/batches/barcode/${barcode}/job-order-item`);
+    return response.data;
+  },
+
+  getCurrentBatchesByPhase: async (): Promise<{
+    [phaseName: string]: {
+      model_color_groups: {
+        [modelColorKey: string]: {
+          model_name: string;
+          color_name: string;
+          total_quantity: number;
+          expected_quantity: number;
+          batch_count: number;
+          time_in_phase: string;
+          sizes: Array<{
+            size_value: string;
+            quantity: number;
+            expected_quantity: number;
+            batch_count: number;
+            time_in_phase: string;
+          }>;
+          second_degree_sizes: Array<{
+            size_value: string;
+            quantity: number;
+            expected_quantity: number;
+            batch_count: number;
+            time_in_phase: string;
+          }>;
+        };
+      };
+      daily_throughput: {
+        scanned_in_not_out: number;
+        completed: number;
+        efficiency_ratio: number;
+      };
+    };
+  }> => {
+    const response = await api.get('/batches/by-phase/current');
+    return response.data;
+  },
 };
 
 export const jobOrderApi = {
@@ -518,14 +830,90 @@ export const jobOrderApi = {
     return response.data;
   },
 
-  getSummary: async (params: any) => {
-    const response = await api.get('/job-orders/summary/', { params });
+  getSummary: async (params: any): Promise<{items: JobOrderSummary[], total: number}> => {
+    const response = await api.get<{items: JobOrderSummary[], total: number}>('/job-orders/summary/', { params });
+    return response.data;
+  },
+
+  // Item-level API functions
+  getItemSummaries: async (params?: {
+    skip?: number;
+    limit?: number;
+    job_order_id?: number;
+    color_name?: string;
+    size_value?: string;
+    production_status?: string;
+    has_issues?: boolean;
+  }): Promise<JobOrderItemSummaryListResponse> => {
+    const response = await api.get<JobOrderItemSummaryListResponse>('/job-orders/items/summary/', { params });
+    return response.data;
+  },
+
+  getItemProductionTracking: async (itemId: number): Promise<JobOrderItemSummary> => {
+    const response = await api.get<JobOrderItemSummary>(`/job-orders/items/${itemId}/tracking`);
+    return response.data;
+  },
+
+  getItemsWithIssues: async (params?: {
+    skip?: number;
+    limit?: number;
+  }): Promise<JobOrderItemSummaryListResponse> => {
+    const response = await api.get<JobOrderItemSummaryListResponse>('/job-orders/items/issues/', { params });
+    return response.data;
+  },
+
+  getItemsHighSecondDegree: async (params?: {
+    skip?: number;
+    limit?: number;
+  }): Promise<JobOrderItemSummaryListResponse> => {
+    const response = await api.get<JobOrderItemSummaryListResponse>('/job-orders/items/high-second-degree/', { params });
+    return response.data;
+  },
+
+  getItemsWithQuantityReductions: async (params?: {
+    skip?: number;
+    limit?: number;
+  }): Promise<JobOrderItemSummaryListResponse> => {
+    const response = await api.get<JobOrderItemSummaryListResponse>('/job-orders/items/quantity-reductions/', { params });
+    return response.data;
+  },
+
+  getItemsQuantityBreakdown: async (jobOrderId: number): Promise<JobOrderItemSummaryListResponse> => {
+    const response = await api.get<JobOrderItemSummaryListResponse>(`/job-orders/${jobOrderId}/items/quantity-breakdown/`);
+    return response.data;
+  },
+
+  refreshItemSummaries: async (jobOrderId?: number): Promise<{message: string}> => {
+    const response = await api.post('/job-orders/items/refresh-summary/', { job_order_id: jobOrderId });
+    return response.data;
+  },
+
+  getItemLevelStatistics: async (): Promise<any> => {
+    const response = await api.get('/job-orders/items/statistics/');
     return response.data;
   },
 };
 
 export async function refreshJobOrderSummary() {
-  await api.post('/job-orders/refresh-summary/');
+  // Use the new item-level refresh endpoint
+  await api.post('/job-orders/items/refresh-summary/');
 }
+
+export const statisticsApi = {
+  getProductionStatistics: async (): Promise<ProductionStatisticsResponse> => {
+    const response = await api.get<ProductionStatisticsResponse>('/statistics/production');
+    return response.data;
+  },
+
+  getBrandStatistics: async (brandId: number): Promise<BrandStatisticsResponse> => {
+    const response = await api.get<BrandStatisticsResponse>(`/statistics/brand/${brandId}`);
+    return response.data;
+  },
+
+  getModelStatistics: async (modelId: number): Promise<ModelStatisticsResponse> => {
+    const response = await api.get<ModelStatisticsResponse>(`/statistics/model/${modelId}`);
+    return response.data;
+  },
+};
 
 export default api; 

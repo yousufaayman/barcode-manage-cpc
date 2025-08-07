@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
-import api, { jobOrderApi, JobOrder, refreshJobOrderSummary } from '../services/api';
+import api, { jobOrderApi, JobOrder } from '../services/api';
 import { cn } from '../lib/utils';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -39,11 +39,25 @@ interface JobOrderSummary {
   job_order_number: string;
   model_name: string;
   brand_name?: string;
-  total_colors: number;
-  total_quantity: number;
-  total_working_quantity: number;
+  total_items: number;
+  total_expected_quantity: number;
+  total_produced_quantity: number;
+  cut_quantity: number;
+  second_degree_quantity: number;
+  completed_quantity: number;
+  working_quantity: number;
+  remaining_quantity: number;
+  total_batches: number;
+  has_issues: boolean;
+  has_high_second_degree: boolean;
   completion_percentage: number;
-  batches?: { status: string }[];
+  overproduction_quantity: number;
+  notes?: string;
+  last_calculated_at?: string;
+  last_quantity_change?: string;
+  last_completion_change?: string;
+  last_new_batch?: string;
+  last_batch_update?: string;
 }
 
 const JobOrdersPage: React.FC = () => {
@@ -176,16 +190,36 @@ const JobOrdersPage: React.FC = () => {
   const fetchOpenJobOrders = async () => {
     try {
       setLoading(true);
-      await refreshJobOrderSummary(); // Ensure summary is refreshed before fetching
-      // Fetch all open job orders (no skip/limit)
+      // Fetch all open job orders (no skip/limit) - summary aggregates from item-level data
       const allOpenResponse = await jobOrderApi.getSummary({
         limit: 10000,
         ...Object.fromEntries(
           Object.entries(filters).filter(([_, value]) => value !== '')
         )
       });
-      // Sort so that has_issues === true come first
-      const sortedOpenItems = [...allOpenResponse.items].sort((a, b) => (b.has_issues === true ? 1 : 0) - (a.has_issues === true ? 1 : 0));
+      // Sort so that job orders with issues come first, using hierarchy: P > S > O
+      const sortedOpenItems = [...allOpenResponse.items].sort((a, b) => {
+        const aIssues = detectIssues(a);
+        const bIssues = detectIssues(b);
+        
+        // Get highest priority issue for each job order
+        const getHighestPriority = (issues: any[]) => {
+          if (issues.some(i => i.type === 'notes')) return 4; // P - highest
+          if (issues.some(i => i.type === 'lost_quantity')) return 3; // L - high
+          if (issues.some(i => i.type === 'high_second_degree')) return 2; // S - medium
+          if (issues.some(i => i.type === 'overproduction')) return 1; // O - lowest
+          return 0; // No issues
+        };
+        
+        const aPriority = getHighestPriority(aIssues);
+        const bPriority = getHighestPriority(bIssues);
+        
+        // Sort by priority (highest first), then by job order number if same priority
+        if (aPriority !== bPriority) {
+          return bPriority - aPriority;
+        }
+        return a.job_order_number.localeCompare(b.job_order_number);
+      });
       // Apply pagination after sorting
       const pagedOpenItems = sortedOpenItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
       setOpenJobOrders(pagedOpenItems);
@@ -287,38 +321,10 @@ const JobOrdersPage: React.FC = () => {
 
   // Removed closed pagination
 
-  // Fetch closed job orders using summary endpoint
+  // Note: Closed job orders functionality removed as closed column no longer exists
   const handleLoadClosedOrders = async () => {
-    if (showClosedOrders) return;
-    try {
-      setLoadingClosed(true);
-      // Fetch all closed job orders (no skip/limit)
-      const allClosedResponse = await jobOrderApi.getSummary({
-        closed: true,
-        limit: 10000,
-        ...Object.fromEntries(
-          Object.entries(filters).filter(([_, value]) => value !== '')
-        )
-      });
-      // Sort so that has_issues === true come first
-      const sortedClosedItems = [...allClosedResponse.items].sort((a, b) => (b.has_issues === true ? 1 : 0) - (a.has_issues === true ? 1 : 0));
-      // Apply pagination after sorting
-      const pagedClosedItems = sortedClosedItems.slice((currentPageClosed - 1) * itemsPerPage, currentPageClosed * itemsPerPage);
-      setClosedJobOrders(pagedClosedItems);
-      setTotalClosedJobOrders(sortedClosedItems.length);
-      if (!showClosedOrders) {
-        setShowClosedOrders(true);
-      }
-    } catch (error) {
-      console.error('Error fetching closed job orders:', error);
-      toast({
-        title: t('common.error'),
-        description: 'Failed to fetch closed job orders',
-        variant: 'destructive'
-      });
-    } finally {
-      setLoadingClosed(false);
-    }
+    // This function is no longer needed as closed column was removed
+    console.warn('Closed job orders functionality removed - closed column no longer exists');
   };
 
   const handleEditJobOrder = async (jobOrder: JobOrderSummary) => {
@@ -657,6 +663,50 @@ const JobOrdersPage: React.FC = () => {
     setAddDialogOpen(true);
   };
 
+  // Helper to detect issues for a specific item
+  const detectIssues = (item: any) => {
+    const issues = [];
+    
+    // Case 1: Overproduction
+    if (item.total_produced_quantity > item.total_expected_quantity) {
+      issues.push({
+        type: 'overproduction',
+        message: `Overproduction: ${item.total_produced_quantity} produced vs ${item.total_expected_quantity} expected`,
+        severity: 'high'
+      });
+    }
+    
+    // Case 2: High second degree quantity (using backend flag)
+    if (item.has_high_second_degree) {
+      issues.push({
+        type: 'high_second_degree',
+        message: `High second degree items detected (>3% threshold)`,
+        severity: 'medium'
+      });
+    }
+    
+    // Case 3: Notes present (flagged as issue)
+    if (item.notes && item.notes.trim()) {
+      issues.push({
+        type: 'notes',
+        message: `Notes: ${item.notes}`,
+        severity: 'info'
+      });
+    }
+    
+    // Case 4: Lost quantity (working quantity != cut quantity)
+    if (item.cut_quantity > item.total_produced_quantity) {
+      const lostQuantity = item.cut_quantity - item.total_produced_quantity;
+      issues.push({
+        type: 'lost_quantity',
+        message: `Lost quantity: ${lostQuantity} (${item.cut_quantity} cut vs ${item.total_produced_quantity} working)`,
+        severity: 'high'
+      });
+    }
+    
+    return issues;
+  };
+
   // Table columns using summary fields directly
   const columns = [
     {
@@ -688,7 +738,7 @@ const JobOrdersPage: React.FC = () => {
     {
       key: 'total_items',
       header: 'Total Items',
-      width: 150,
+      width: 120,
       render: (item: any) => (
         <Badge variant="secondary" className="bg-blue-100 text-blue-800">
           {item.total_items}
@@ -698,36 +748,100 @@ const JobOrdersPage: React.FC = () => {
     },
     {
       key: 'total_expected_quantity',
-      header: t('barcode.quantity'),
-      width: 150,
+      header: 'Expected',
+      width: 120,
       render: (item: any) => (
-        <span>{item.total_expected_quantity?.toLocaleString()}</span>
+        <span className="bg-yellow-100 text-yellow-800 font-semibold px-2 py-1 rounded">{item.total_expected_quantity?.toLocaleString()}</span>
       ),
+      hidden: isMobile && !showFullView
+    },
+    {
+      key: 'cut_quantity',
+      header: 'Cut Qty',
+      width: 120,
+      render: (item: any) => {
+        const cutQty = item.cut_quantity || 0;
+        const expectedQty = item.total_expected_quantity || 0;
+        const isOverCut = cutQty > expectedQty;
+        
+        return (
+          <span className={`${isOverCut ? 'bg-red-100 text-red-800' : 'bg-purple-100 text-purple-800'} font-semibold px-2 py-1 rounded`}>
+            {cutQty.toLocaleString()}
+          </span>
+        );
+      },
       hidden: isMobile && !showFullView
     },
     {
       key: 'total_produced_quantity',
-      header: t('barcode.workingQuantity'),
-      width: 150,
+      header: 'Working Qty',
+      width: 120,
       render: (item: any) => (
-        <span>{item.total_produced_quantity?.toLocaleString()}</span>
+        <span className="bg-blue-100 text-blue-800 font-semibold px-2 py-1 rounded">
+          {item.total_produced_quantity?.toLocaleString()}
+        </span>
       ),
       hidden: isMobile && !showFullView
     },
     {
-      key: 'completion_percentage',
-      header: 'Completion %',
+      key: 'second_degree_quantity',
+      header: 'Second Degree',
       width: 120,
-      render: (item: any) => (
-        <span>{item.completion_percentage}%</span>
-      ),
+      render: (item: any) => {
+        const hasHighSecondDegree = item.has_high_second_degree;
+        return (
+          <span className={`${hasHighSecondDegree ? 'bg-red-100 text-red-800' : 'bg-orange-200 text-orange-900'} font-semibold px-2 py-1 rounded`}>
+            {item.second_degree_quantity?.toLocaleString()}
+          </span>
+        );
+      },
+      hidden: isMobile && !showFullView
+    },
+    {
+      key: 'remaining_quantity',
+      header: 'Cutting Difference',
+      width: 120,
+      render: (item: any) => {
+        const expectedQty = item.total_expected_quantity || 0;
+        const cutQty = item.cut_quantity || 0;
+        const cuttingDiff = cutQty - expectedQty;
+        const isPositive = cuttingDiff > 0;
+        
+        return (
+          <span className={`${isPositive ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'} font-semibold px-2 py-1 rounded`}>
+            {cuttingDiff > 0 ? '+' : ''}{cuttingDiff.toLocaleString()}
+          </span>
+        );
+      },
       hidden: isMobile && !showFullView
     },
     {
       key: 'has_issues',
       header: 'Issues',
       width: 80,
-      render: (item: any) => item.has_issues ? <span style={{color: 'red'}}>!</span> : null,
+      render: (item: any) => {
+        const issues = detectIssues(item);
+        if (issues.length === 0) return null;
+        
+        // Count different types of issues
+        const overproductionIssues = issues.filter(i => i.type === 'overproduction').length;
+        const secondDegreeIssues = issues.filter(i => i.type === 'high_second_degree').length;
+        const notesIssues = issues.filter(i => i.type === 'notes').length;
+        const lostQuantityIssues = issues.filter(i => i.type === 'lost_quantity').length;
+        
+        let displayText = '';
+        // Hierarchy: P (notes) > L (lost quantity) > S (second degree) > O (overproduction)
+        if (notesIssues > 0) displayText += 'P';
+        if (lostQuantityIssues > 0) displayText += 'L';
+        if (secondDegreeIssues > 0) displayText += 'S';
+        if (overproductionIssues > 0) displayText += 'O';
+        
+        return (
+          <span className="text-red-600 font-bold" title={issues.map(i => i.message).join(', ')}>
+            {displayText || '!'}
+          </span>
+        );
+      },
       hidden: isMobile && !showFullView
     },
     {
@@ -843,6 +957,29 @@ const JobOrdersPage: React.FC = () => {
               <h3 className="text-lg font-semibold text-green-700">Open Job Orders</h3>
               <div className="text-sm text-gray-600">
                 Showing {openJobOrders.length} of {totalOpenJobOrders} open job orders
+              </div>
+            </div>
+            
+            {/* Issues Legend */}
+            <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+              <h4 className="text-sm font-semibold text-gray-700 mb-2">Issue Indicators:</h4>
+              <div className="flex flex-wrap gap-4 text-xs">
+                <div className="flex items-center gap-1">
+                  <span className="text-red-600 font-bold">P</span>
+                  <span className="text-gray-600">Production Issues (Notes)</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-red-600 font-bold">L</span>
+                  <span className="text-gray-600">Lost Quantity (Cut &gt; Working)</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-red-600 font-bold">S</span>
+                  <span className="text-gray-600">Second Degree (&gt;3% threshold)</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-red-600 font-bold">O</span>
+                  <span className="text-gray-600">Overproduction</span>
+                </div>
               </div>
             </div>
             {loading ? (

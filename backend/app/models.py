@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Enum, UniqueConstraint, DECIMAL, TIMESTAMP
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Enum, UniqueConstraint, DECIMAL, TIMESTAMP, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import declarative_base
@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 import enum
+from sqlalchemy.dialects.mysql import TINYINT
 
 Base = declarative_base()
 
@@ -92,6 +93,7 @@ class Batch(Base):
     current_phase = Column(Integer, ForeignKey("production_phases.phase_id", ondelete="RESTRICT"))
     status = Column(String(50))
     last_updated_at = Column(DateTime, server_default=func.now())
+    is_second_degree = Column(TINYINT(1), nullable=False, default=0, server_default='0')
 
     size = relationship("Size", back_populates="batches")
     color = relationship("Color", back_populates="batches")
@@ -103,20 +105,7 @@ class TokenPayload(BaseModel):
     sub: Optional[int] = None
     exp: Optional[datetime] = None
 
-#Barcode Status Timeline
-class BarcodeStatusTimeline(Base):
-    __tablename__ = "barcode_status_timeline"
 
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    batch_id = Column(Integer, ForeignKey("batches.batch_id", ondelete="CASCADE"), nullable=False)
-    status = Column(String(50), nullable=False)  # 'in', 'out', 'pending'
-    phase_id = Column(Integer, ForeignKey("production_phases.phase_id", ondelete="RESTRICT"), nullable=False)
-    start_time = Column(DateTime, nullable=False, default=func.now())
-    end_time = Column(DateTime, nullable=True)
-    duration_minutes = Column(Integer, nullable=True)
-
-    batch = relationship("Batch")
-    phase = relationship("ProductionPhase")
 
 #Archived Batches
 class ArchivedBatch(Base):
@@ -134,6 +123,7 @@ class ArchivedBatch(Base):
     status = Column(String(50))
     last_updated_at = Column(DateTime)
     archived_at = Column(DateTime)
+    notes = Column(String(length=1000), nullable=True)
 
     size = relationship("Size")
     color = relationship("Color")
@@ -158,6 +148,8 @@ class JobOrder(Base):
     brand = relationship("Brand")
     materials = relationship("JobOrderMaterial", back_populates="job_order", cascade="all, delete-orphan")
     prints = relationship("JobOrderPrint", back_populates="job_order", uselist=False, cascade="all, delete-orphan")
+    # summaries relationship removed - now inherited from item level
+    item_summaries = relationship("JobOrderItemSummary", back_populates="job_order", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<JobOrder {self.job_order_number}>"
@@ -197,6 +189,7 @@ class JobOrderItem(Base):
     size_id = Column(Integer, ForeignKey("sizes.size_id", ondelete="RESTRICT"), nullable=False)
     quantity = Column(Integer, nullable=False)
     weight = Column(DECIMAL(10,2), nullable=True)
+    notes = Column(String(length=1000), nullable=True)
 
     # Add unique constraint for job_order_id + color_id + size_id combination
     __table_args__ = (
@@ -206,11 +199,14 @@ class JobOrderItem(Base):
     job_order = relationship("JobOrder", back_populates="items")
     color = relationship("Color", back_populates="job_order_items")
     size = relationship("Size", back_populates="job_order_items")
+    summary = relationship("JobOrderItemSummary", back_populates="item")
 
     def __repr__(self):
         return f"<JobOrderItem {self.job_order_id}:{self.color_id}:{self.size_id} x{self.quantity} w{self.weight}>"
 
-# Job Order Summary model
+# Job Order Summary model (DEPRECATED - Now inherited from item level)
+# This model is kept for backward compatibility but should not be used
+# All calculations now inherit from job_order_items_summary
 class JobOrderSummary(Base):
     __tablename__ = "job_orders_summary"
 
@@ -221,15 +217,59 @@ class JobOrderSummary(Base):
     total_items = Column(Integer, default=0)
     total_expected_quantity = Column(Integer, default=0)
     total_produced_quantity = Column(Integer, default=0)
+    cut_quantity = Column(Integer, default=0)
+    second_degree_quantity = Column(Integer, default=0)
     total_batches = Column(Integer, default=0)
     has_issues = Column(Boolean, default=False)
+    has_high_second_degree = Column(Boolean, default=False)
     completion_percentage = Column(DECIMAL(5,2), default=0.00)
     overproduction_quantity = Column(Integer, default=0)
     last_calculated_at = Column(TIMESTAMP)
     last_quantity_change = Column(TIMESTAMP)
     last_completion_change = Column(TIMESTAMP)
     last_new_batch = Column(TIMESTAMP)
-    last_batch_update = Column(TIMESTAMP) 
+    last_batch_update = Column(TIMESTAMP)
+
+    def __repr__(self):
+        return f"<JobOrderSummary {self.job_order_number}>"
+
+# Job Order Item Summary model (Item-level tracking)
+class JobOrderItemSummary(Base):
+    __tablename__ = "job_order_items_summary"
+
+    item_id = Column(Integer, ForeignKey("job_order_items.item_id", ondelete="CASCADE"), primary_key=True, index=True)
+    job_order_id = Column(Integer, ForeignKey("job_orders.job_order_id", ondelete="CASCADE"), nullable=False)
+    color_id = Column(Integer, ForeignKey("colors.color_id", ondelete="RESTRICT"), nullable=False)
+    size_id = Column(Integer, ForeignKey("sizes.size_id", ondelete="RESTRICT"), nullable=False)
+    color_name = Column(String(50))
+    size_value = Column(String(20))
+    expected_quantity = Column(Integer, default=0)
+    produced_quantity = Column(Integer, default=0)
+    cut_quantity = Column(Integer, default=0)
+    second_degree_quantity = Column(Integer, default=0)
+    completed_quantity = Column(Integer, default=0)
+    working_quantity = Column(Integer, default=0)
+    remaining_quantity = Column(Integer, default=0)
+    total_batches = Column(Integer, default=0)
+    has_issues = Column(Boolean, default=False)
+    completion_percentage = Column(DECIMAL(5,2), default=0.00)
+    overproduction_quantity = Column(Integer, default=0)
+    production_status = Column(Enum('Not Started', 'In Progress', 'Completed'), default='Not Started')
+    notes = Column(String(1000), nullable=True)
+    last_calculated_at = Column(TIMESTAMP)
+    last_quantity_change = Column(TIMESTAMP)
+    last_completion_change = Column(TIMESTAMP)
+    last_new_batch = Column(TIMESTAMP)
+    last_batch_update = Column(TIMESTAMP)
+
+    # Relationships
+    job_order = relationship("JobOrder", back_populates="item_summaries")
+    color = relationship("Color")
+    size = relationship("Size")
+    item = relationship("JobOrderItem", back_populates="summary")
+
+    def __repr__(self):
+        return f"<JobOrderItemSummary Item:{self.item_id} JO:{self.job_order_id} {self.color_name}-{self.size_value}>"
 
 class Material(Base):
     __tablename__ = "materials"
@@ -238,7 +278,7 @@ class Material(Base):
     material_name = Column(String(100), unique=True, nullable=False, index=True)
 
     # Relationships
-    job_order_materials = relationship("JobOrderMaterial", back_populates="material") 
+    job_order_materials = relationship("JobOrderMaterial", back_populates="material")
 
 # ---------------------------------------------------------------------------
 # Job Order Print flags
@@ -262,3 +302,28 @@ class JobOrderPrint(Base):
 
     def __repr__(self):
         return f"<JobOrderPrint JO:{self.job_order_id}>" 
+
+class BarcodeScanEvent(Base):
+    __tablename__ = "barcode_scan_events"
+    
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    batch_id = Column(Integer, ForeignKey("batches.batch_id", ondelete="CASCADE"), nullable=False, index=True)
+    action_type = Column(String(50), nullable=False, index=True)  # 'scan_in', 'scan_out', 'quantity_update', 'status_change', 'phase_change'
+    phase_id = Column(Integer, ForeignKey("production_phases.phase_id", ondelete="RESTRICT"), nullable=False)
+    old_status = Column(String(50), nullable=True)
+    new_status = Column(String(50), nullable=True)
+    old_quantity = Column(Integer, nullable=True)
+    new_quantity = Column(Integer, nullable=True)
+    old_phase = Column(Integer, nullable=True)
+    new_phase = Column(Integer, nullable=True)
+    scanned_at = Column(DateTime, nullable=False, default=func.now(), index=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    notes = Column(Text, nullable=True)
+    
+    # Relationships
+    batch = relationship("Batch")
+    phase = relationship("ProductionPhase")
+    user = relationship("User")
+    
+    def __repr__(self):
+        return f"<BarcodeScanEvent {self.batch_id}:{self.action_type}:{self.scanned_at}>" 

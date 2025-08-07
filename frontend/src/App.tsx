@@ -23,6 +23,7 @@ const UnauthorizedPage = lazy(() => import('./pages/UnauthorizedPage'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 const AdvancedStatisticsPage = lazy(() => import('./pages/AdvancedStatisticsPage'));
 const JobOrderDetailsPage = lazy(() => import('./pages/JobOrderDetailsPage'));
+const BarcodeDetailsPage = lazy(() => import('./pages/BarcodeDetailsPage'));
 
 const queryClient = new QueryClient();
 
@@ -51,6 +52,7 @@ const AppContent: React.FC = () => {
             <Route path="/barcode-management" element={<BarcodeManagementPage />} />
             <Route path="/job-orders" element={<JobOrdersPage />} />
             <Route path="/job-orders/:jobOrderId" element={<JobOrderDetailsPage />} />
+            <Route path="/barcode-details/:batchId" element={<BarcodeDetailsPage />} />
           </Route>
           
           {/* Admin and Creator Only Routes */}

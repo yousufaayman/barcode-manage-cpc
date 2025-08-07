@@ -33,7 +33,7 @@ const JobOrderDetailsPage: React.FC = () => {
   const [editItems, setEditItems] = useState<Array<{item_id: number, quantity: number, color_name: string, size_value: string}>>([]);
   const [editLoading, setEditLoading] = useState(false);
   const [editNotes, setEditNotes] = useState<string>('');
-  const [editMaterials, setEditMaterials] = useState<Array<{material_name: string, color_name: string, quantity: number}>>([]);
+  const [editMaterials, setEditMaterials] = useState<Array<{material_name: string, color_name: string, quantity: number, notes?: string}>>([]);
   const [editPrints, setEditPrints] = useState({
     chest: false,
     back: false,
@@ -220,13 +220,26 @@ const JobOrderDetailsPage: React.FC = () => {
       try {
         const jobOrder = await jobOrderApi.getById(Number(jobOrderId));
         setViewJobOrder(jobOrder);
-        const tracking = await jobOrderApi.getProductionTracking(Number(jobOrderId));
-        setViewTrackingData(tracking.tracking_data || []);
+        
+        // Get item-level production tracking data
+        const itemSummaries = await jobOrderApi.getItemSummaries({
+          job_order_id: Number(jobOrderId)
+        });
+        setViewTrackingData(itemSummaries.items || []);
+        
         const mats = await jobOrderApi.getMaterials(Number(jobOrderId));
         setMaterials(mats);
+        
         // --- Populate edit dialog state for materials/consumption ---
         if (editDialogOpen) {
-          setEditMaterials(mats);
+          // Map materials to the expected format
+          const mappedMats = mats.map(mat => ({
+            material_name: mat.material_name,
+            color_name: mat.color_name || '',
+            quantity: mat.quantity,
+            notes: mat.notes
+          }));
+          setEditMaterials(mappedMats);
           if (mats.length > 0) {
             setEditMaterialName(mats[0].material_name);
             // For each material/color/category, set the consumption value
@@ -234,21 +247,15 @@ const JobOrderDetailsPage: React.FC = () => {
             mats.forEach(mat => {
               // Default to 'body' if no category info
               const categoryKey = 'body';
-              const cellKey = getConsumptionCellKey(mat.material_name, mat.color_name, categoryKey);
-              if (mat.consumption != null) {
-                newConsumptionValues[cellKey] = mat.consumption;
-              } else if (mat.quantity && mat.quantity > 0 && mat.color_name) {
-                // Try to infer per-unit consumption if possible
-                const item = editItems.find(i => i.color_name === mat.color_name);
-                if (item && item.quantity > 0) {
-                  newConsumptionValues[cellKey] = mat.quantity / item.quantity;
-                }
-              }
+              const cellKey = getConsumptionCellKey(mat.material_name, mat.color_name || '', categoryKey);
+              // Note: consumption field doesn't exist in the API response, so we'll skip this logic
+              // The consumption values will be calculated from the quantity and item quantities
             });
             setEditConsumptionValues(newConsumptionValues);
           }
         }
       } catch (error) {
+        console.error('Error fetching job order data:', error);
         setViewJobOrder(null);
         setViewTrackingData([]);
       } finally {
@@ -278,7 +285,14 @@ const JobOrderDetailsPage: React.FC = () => {
       setEditNotes(fullJobOrder.notes || '');
       // Fetch and initialize materials
       const materials = await jobOrderApi.getMaterials(fullJobOrder.job_order_id);
-      setEditMaterials(materials);
+      // Map materials to the expected format
+      const mappedMats = materials.map(mat => ({
+        material_name: mat.material_name,
+        color_name: mat.color_name || '',
+        quantity: mat.quantity,
+        notes: mat.notes
+      }));
+      setEditMaterials(mappedMats);
       setEditMaterialName(materials.length > 0 ? materials[0].material_name : '');
       // Reset consumption values
       setEditBulkConsumption({});
@@ -488,25 +502,76 @@ const JobOrderDetailsPage: React.FC = () => {
     ['left_arm', t('jobOrderDetails.leftArm')],
   ];
 
+  // Helper to detect issues for a specific item
+  const detectIssues = (item: any) => {
+    const issues = [];
+    
+    // Case 1: Overproduction
+    if (item.produced_quantity > item.expected_quantity) {
+      issues.push({
+        type: 'overproduction',
+        message: `Overproduction: ${item.produced_quantity} produced vs ${item.expected_quantity} expected`,
+        severity: 'high'
+      });
+    }
+    
+    // Case 2: High second degree quantity (>3% of working qty)
+    if (item.second_degree_quantity > 0 && item.produced_quantity > 0) {
+      const secondDegreePercentage = (item.second_degree_quantity / item.produced_quantity) * 100;
+      if (secondDegreePercentage > 3) {
+        issues.push({
+          type: 'high_second_degree',
+          message: `High second degree: ${secondDegreePercentage.toFixed(1)}% (${item.second_degree_quantity} of ${item.produced_quantity})`,
+          severity: 'medium'
+        });
+      }
+    }
+    
+    // Case 3: Notes present (flagged as issue)
+    if (item.notes && item.notes.trim()) {
+      issues.push({
+        type: 'notes',
+        message: item.notes,
+        severity: 'info'
+      });
+    }
+    
+    // Case 4: Lost quantity (working quantity != cut quantity)
+    if (item.cut_quantity > item.produced_quantity) {
+      const lostQuantity = item.cut_quantity - item.produced_quantity;
+      issues.push({
+        type: 'lost_quantity',
+        message: `Lost quantity: ${lostQuantity} (${item.cut_quantity} cut vs ${item.produced_quantity} working)`,
+        severity: 'high'
+      });
+    }
+    
+    return issues;
+  };
+
   return (
     <Layout>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold mb-2 text-gray-800">
+          <h1 className="text-xl md:text-2xl font-bold mb-2 text-gray-800">
             {viewJobOrder
               ? t('jobOrderDetails.productionDetailsWithNumber', { jobOrderNumber: viewJobOrder.job_order_number })
               : t('jobOrders.title')}
           </h1>
-          <p className="text-gray-600">{t('jobOrderDetails.subtitle')}</p>
+          <p className="text-gray-600 text-sm md:text-base">{t('jobOrderDetails.subtitle')}</p>
           {/* Date Created Display */}
           {viewJobOrder?.date_created && (
-            <p className="text-gray-500 text-sm mt-1">
+            <p className="text-gray-500 text-xs md:text-sm mt-1">
               {t('jobOrderDetails.dateCreated')}: {format(new Date(viewJobOrder.date_created), 'yyyy-MM-dd HH:mm')}
             </p>
           )}
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => navigate(-1)}>
+        <div className="flex flex-wrap gap-2 justify-center md:justify-end">
+          <Button 
+            variant="outline" 
+            onClick={() => navigate(-1)}
+            className="text-sm px-3 py-2 md:px-4 md:py-2"
+          >
             {t('common.back')}
           </Button>
           {viewJobOrder && (
@@ -514,24 +579,33 @@ const JobOrderDetailsPage: React.FC = () => {
               <Button
                 variant="outline"
                 onClick={handleEditJobOrder}
-                className="flex items-center gap-1"
+                className="flex items-center gap-1 text-sm px-3 py-2 md:px-4 md:py-2"
                 disabled={editLoading}
               >
-                <Edit className="w-4 h-4" /> {t('common.edit')}
+                <Edit className="w-4 h-4" /> 
+                <span className="hidden sm:inline">{t('common.edit')}</span>
+                <span className="sm:hidden">Edit</span>
               </Button>
-              {/* Removed: Close/Reopen button */}
             </>
           )}
           {/* Print Controls */}
-          <input
-            type="number"
-            min={1}
-            value={printCopies}
-            onChange={e => setPrintCopies(Math.max(1, parseInt(e.target.value) || 1))}
-            className="w-16 border rounded px-1 text-center"
-            title={t('common.copies')}
-          />
-          <Button variant="outline" onClick={handlePrint}>{t('common.print')}</Button>
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              min={1}
+              value={printCopies}
+              onChange={e => setPrintCopies(Math.max(1, parseInt(e.target.value) || 1))}
+              className="w-12 md:w-16 border rounded px-1 text-center text-sm"
+              title={t('common.copies')}
+            />
+            <Button 
+              variant="outline" 
+              onClick={handlePrint}
+              className="text-sm px-3 py-2 md:px-4 md:py-2"
+            >
+              {t('common.print')}
+            </Button>
+          </div>
         </div>
       </div>
       {/* Brand and Model Information */}
@@ -572,41 +646,160 @@ const JobOrderDetailsPage: React.FC = () => {
               <strong>{t('jobOrderDetails.notes')}:</strong> {viewJobOrder.notes}
             </div>
           )}
-          {/* Quantity Issue Indicator */}
-          {viewTrackingData.some(item => item.produced_quantity > item.expected_quantity) && (
-            <div className="flex items-center mb-4 p-3 bg-red-100 border border-red-300 rounded text-red-700 font-semibold">
-              <svg className="w-5 h-5 mr-2 text-red-600" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-              {t('jobOrderDetails.quantityWarning')}
+          {/* Summary Section */}
+          {viewTrackingData.length > 0 && (
+            <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+              <h3 className="text-lg font-semibold mb-3 text-gray-800">Production Summary</h3>
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
+                <div className="text-center">
+                  <div className="font-medium text-gray-600">Expected</div>
+                  <div className="text-xl font-bold text-gray-800">
+                    {viewTrackingData.reduce((sum, item) => sum + item.expected_quantity, 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="font-medium text-gray-600">Cut Qty</div>
+                  <div className="text-xl font-bold text-purple-600">
+                    {viewTrackingData.reduce((sum, item) => sum + item.cut_quantity, 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="font-medium text-gray-600">Second Degree</div>
+                  <div className="text-xl font-bold text-orange-600">
+                    {viewTrackingData.reduce((sum, item) => sum + item.second_degree_quantity, 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="font-medium text-gray-600">Completed</div>
+                  <div className="text-xl font-bold text-green-600">
+                    {viewTrackingData.reduce((sum, item) => sum + item.completed_quantity, 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="font-medium text-gray-600">Remaining</div>
+                  <div className="text-xl font-bold text-blue-700">
+                    {viewTrackingData.reduce((sum, item) => sum + item.remaining_quantity, 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="font-medium text-gray-600">Working Qty</div>
+                  <div className="text-xl font-bold text-blue-700">
+                    {viewTrackingData.reduce((sum, item) => sum + item.working_quantity, 0).toLocaleString()}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
+
+          {/* Issue Indicators */}
+          {(() => {
+            const allIssues = viewTrackingData.flatMap(item => {
+              const issues = detectIssues(item);
+              return issues.map(issue => ({
+                ...issue,
+                item: `${item.color_name} - ${item.size_value}`
+              }));
+            });
+            
+            if (allIssues.length === 0) return null;
+            
+            // Group issues by type
+            const issuesByType = allIssues.reduce((acc, issue) => {
+              if (!acc[issue.type]) acc[issue.type] = [];
+              acc[issue.type].push(issue);
+              return acc;
+            }, {} as Record<string, any[]>);
+            
+            return (
+              <div className="mb-4 space-y-2">
+                                {Object.entries(issuesByType).map(([type, issues]) => {
+                  const bgColor = 'bg-red-100';
+                  const borderColor = 'border-red-300';
+                  const textColor = 'text-red-700';
+                  const iconColor = 'text-red-600';
+                  
+                  return (
+                    <div key={type} className={`flex items-start p-3 ${bgColor} border ${borderColor} rounded ${textColor}`}>
+                      <svg className={`w-5 h-5 mr-2 ${iconColor} mt-0.5 flex-shrink-0`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <div className="flex-1">
+                        <div className="font-semibold mb-1">
+                          {type === 'overproduction' ? 'Overproduction Issues' : 
+                           type === 'high_second_degree' ? 'High Second Degree Issues' : 
+                           type === 'notes' ? 'Production Issues' :
+                           type === 'lost_quantity' ? 'Lost Quantity Issues' :
+                           'Production Issues'}
+                        </div>
+                        <div className="text-sm space-y-1">
+                          {(issues as any[]).map((issue, idx) => (
+                            <div key={idx} className={textColor}>
+                              <span className="font-medium">{issue.item}:</span> {issue.message}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
           <div className="overflow-x-auto">
             <table className="min-w-full border rounded-lg overflow-hidden shadow-sm">
               <thead className="bg-gray-100 text-gray-800">
                 <tr>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.color')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.size')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.expected')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.produced')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.remaining')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.diff')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.completedQuantity')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Expected</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Cut Qty</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Working Qty</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Second Degree</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Lost Quantity</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Remaining Quantity</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Completed</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Cutting Difference</th>
                 </tr>
               </thead>
               <tbody>
                 {viewTrackingData.map((item, idx) => {
-                  const diff = item.produced_quantity - item.expected_quantity;
-                  let diffColor = diff > 0 ? 'text-red-600 font-bold' : diff === 0 ? 'text-green-700 font-bold' : 'text-gray-500';
-                  let producedColor = item.produced_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
-                  let remainingColor = item.remaining_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
+                  const producedColor = item.produced_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
+                  const cutColor = item.cut_quantity > item.produced_quantity ? 'text-purple-600 font-bold' : 'text-blue-600 font-medium';
+                  const secondDegreeColor = item.second_degree_quantity > 0 ? 'text-orange-600 font-medium' : 'text-gray-500';
+                  const completedColor = item.completed_quantity > 0 ? 'text-green-600 font-semibold' : 'text-gray-500';
+                  const remainingColor = item.remaining_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
+                  
+                  // Detect all issues for this item
+                  const issues = detectIssues(item);
+                  const hasIssues = issues.length > 0;
+                  
+                  let rowBackgroundClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-200 hover:bg-gray-300';
+                  if (hasIssues) {
+                    rowBackgroundClass = 'bg-red-100 hover:bg-red-200 border-l-4 border-l-red-600 shadow-sm';
+                  }
+                  
+                  // Enhanced cut quantity styling for rows with issues
+                  const enhancedCutColor = hasIssues 
+                    ? 'text-red-700 font-bold'
+                    : cutColor;
+                  
+                  // Enhanced cutting difference styling for rows with issues
+                  const enhancedCuttingDiffColor = hasIssues 
+                    ? 'text-red-700 font-bold'
+                    : remainingColor;
+                  
                   return (
-                    <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50 hover:bg-gray-100 transition-colors'}>
+                    <tr key={idx} className={`${rowBackgroundClass} transition-colors`}>
                       <td className="px-4 py-2 border-b border-gray-200">{item.color_name}</td>
                       <td className="px-4 py-2 border-b border-gray-200">{item.size_value}</td>
                       <td className="px-4 py-2 border-b border-gray-200 text-right font-medium">{item.expected_quantity}</td>
+                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${enhancedCutColor}`}>{item.cut_quantity}</td>
                       <td className={`px-4 py-2 border-b border-gray-200 text-right ${producedColor}`}>{item.produced_quantity}</td>
-                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${remainingColor}`}>{item.remaining_quantity}</td>
-                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${diffColor}`}>{diff > 0 ? `+${diff}` : diff}</td>
-                      <td className="px-4 py-2 border-b border-gray-200 text-right font-semibold">{item.completed_quantity ?? 0}</td>
+                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${secondDegreeColor}`}>{item.second_degree_quantity}</td>
+                      <td className="px-4 py-2 border-b border-gray-200 text-right font-semibold text-orange-700">{item.cut_quantity > item.produced_quantity ? (item.cut_quantity - item.produced_quantity) : 0}</td>
+                      <td className="px-4 py-2 border-b border-gray-200 text-right font-medium">{item.expected_quantity - item.completed_quantity}</td>
+                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${completedColor}`}>{item.completed_quantity}</td>
+                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${enhancedCuttingDiffColor}`}>{item.cut_quantity - item.expected_quantity > 0 ? '+' : ''}{item.cut_quantity - item.expected_quantity}</td>
                     </tr>
                   );
                 })}
@@ -657,7 +850,7 @@ const JobOrderDetailsPage: React.FC = () => {
                 <h3 className="text-lg font-semibold mb-2">{t('jobOrderDetails.printingDetails')}</h3>
                 <div className="flex flex-wrap gap-2 text-sm">
                   {activePrints.map(([key, label]) => (
-                    <div key={key} className="flex items-center gap-1 bg-green-50 text-green-700 px-2 py-1 rounded border border-green-200">
+                    <div key={String(key)} className="flex items-center gap-1 bg-green-50 text-green-700 px-2 py-1 rounded border border-green-200">
                       ✔️ <span>{label}</span>
                     </div>
                   ))}
