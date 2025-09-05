@@ -5,6 +5,7 @@ from . import models
 from .api.v1.api import api_router
 from .db.init_db import init_db, create_initial_admin
 from .core.config import settings
+from .utils.pool_manager import ConnectionPoolManager
 import logging
 import uvicorn
 import os
@@ -44,8 +45,20 @@ app.mount('/static', StaticFiles(directory=image_dir), name='static')
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up application...")
+    
+    # Test database connection and pool
+    if ConnectionPoolManager.test_connection():
+        logger.info("Database connection test successful")
+        ConnectionPoolManager.log_pool_status()
+    else:
+        logger.error("Database connection test failed")
+    
+    # Initialize database
     init_db()
     create_initial_admin()
+    
+    # Log final pool status
+    ConnectionPoolManager.log_pool_status()
     logger.info("Application startup complete")
 
 @app.get("/")

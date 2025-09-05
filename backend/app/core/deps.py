@@ -9,18 +9,14 @@ from app.crud import *
 from app import models, schemas
 from app.core import security
 from app.core.config import settings
-from app.db.session import SessionLocal
+from app.db.session import get_db as get_db_session
 
 reusable_oauth2 = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_STR}/auth/login"
 )
 
-def get_db() -> Generator:
-    try:
-        db = SessionLocal()
-        yield db
-    finally:
-        db.close()
+# Use the enhanced get_db from session.py
+get_db = get_db_session
 
 def get_current_user(
     db: Session = Depends(get_db),
