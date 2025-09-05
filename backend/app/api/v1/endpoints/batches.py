@@ -839,7 +839,7 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
                         time_in_phase = f"{hours}h {minutes}m"
                     else:
                         time_in_phase = f"{minutes}m"
-            except:
+            except (ValueError, TypeError, AttributeError):
                 time_in_phase = "N/A"
             
             # Calculate total expected quantity for this model-color combination
@@ -877,7 +877,7 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
             ).first()
             
             size_expected_quantity = job_order_item.quantity if job_order_item else 0
-        except:
+        except (ValueError, TypeError, AttributeError):
             size_expected_quantity = 0
         
         # Add size data to the model-color group
@@ -917,7 +917,7 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
                     size_data['time_in_phase'] = f"{hours}h {minutes}m"
                 else:
                     size_data['time_in_phase'] = f"{minutes}m"
-        except:
+        except (ValueError, TypeError, AttributeError):
             pass
         
         # Check if this size already exists in the appropriate array
@@ -992,7 +992,7 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
                         'efficiency_ratio': 0
                     }
                 }
-        except:
+        except (ValueError, TypeError, AttributeError, KeyError):
             # Store the model_color_groups data before overwriting
             model_color_groups_data = phases_data[phase_name].copy()
             phases_data[phase_name] = {

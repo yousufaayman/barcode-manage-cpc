@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import SearchableDropdown from '@/components/SearchableDropdown';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import HandleMonitor from '@/components/HandleMonitor';
 
 
 const DashboardPage: React.FC = () => {
@@ -931,6 +932,11 @@ const DashboardPage: React.FC = () => {
                   </Card>
                 );
               })}
+            </div>
+            
+            {/* Handle Monitor for Admin */}
+            <div className="mt-6">
+              <HandleMonitor />
             </div>
           </div>
         )}

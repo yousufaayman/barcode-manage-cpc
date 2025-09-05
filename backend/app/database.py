@@ -18,9 +18,12 @@ initial_engine = create_engine(
     pool_recycle=3600,
     connect_args={"charset": "utf8mb4"}
 )
-with initial_engine.connect() as conn:
-    conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {settings.MYSQL_DATABASE}"))
-    conn.commit()
+try:
+    with initial_engine.connect() as conn:
+        conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {settings.MYSQL_DATABASE}"))
+        conn.commit()
+except Exception as e:
+    print(f"Warning: Could not create database {settings.MYSQL_DATABASE}: {e}")
 
 # Now create engine with database name
 SQLALCHEMY_DATABASE_URL = f"mysql+pymysql://{settings.MYSQL_USER}:{password}@{settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE}"

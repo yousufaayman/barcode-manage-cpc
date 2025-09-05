@@ -22,9 +22,12 @@ initial_engine = create_engine(
     max_overflow=10,
     connect_args={"charset": "utf8mb4"}
 )
-with initial_engine.connect() as conn:
-    conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {settings.MYSQL_DATABASE}"))
-    conn.commit()
+try:
+    with initial_engine.connect() as conn:
+        conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {settings.MYSQL_DATABASE}"))
+        conn.commit()
+except Exception as e:
+    logging.warning(f"Could not create database {settings.MYSQL_DATABASE}: {e}")
 
 SQLALCHEMY_DATABASE_URL = f"mysql+pymysql://{settings.MYSQL_USER}:{password}@{settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE}"
 

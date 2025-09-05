@@ -312,8 +312,14 @@ async def create_job_order_with_names(
         filename = f"{safe_order_number}{original_ext}"
         # Store absolute filesystem path (env dir + filename) exactly as requested
         image_url = os.path.join(image_upload_dir, filename)
-        with open(image_url, "wb") as f:
-            f.write(await image.read())
+        try:
+            with open(image_url, "wb") as f:
+                f.write(await image.read())
+        except (IOError, OSError) as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save image: {str(e)}"
+            )
     # Create the job order with names
     job_order_in = schemas.JobOrderCreateWithNames(
         model_name=model_name,
