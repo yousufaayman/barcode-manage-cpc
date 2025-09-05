@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Use environment variable if available, otherwise use relative URL
-const API_URL = '/api/v1';
+const API_URL = 'http://localhost:8000/api/v1';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -24,12 +24,30 @@ api.interceptors.request.use(
   }
 );
 
-// Add a response interceptor for debugging
+// Add a response interceptor to handle auth errors globally
+let isRedirectingForAuthError = false;
 api.interceptors.response.use(
   (response) => {
     return response;
   },
   (error) => {
+    try {
+      const status = error?.response?.status;
+      const requestUrl: string | undefined = error?.config?.url;
+      const isAuthEndpoint = requestUrl?.includes('/auth/login');
+
+      if ((status === 401 || status === 403) && !isAuthEndpoint) {
+        // Clear token and redirect to login on session timeout or forbidden
+        localStorage.removeItem('token');
+        if (!isRedirectingForAuthError && typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          isRedirectingForAuthError = true;
+          window.location.href = '/login';
+        }
+      }
+    } catch (e) {
+      // swallow any interceptor errors and continue rejecting original error
+    }
+
     console.error('API Error:', error.config?.url, error.message);
     return Promise.reject(error);
   }
@@ -461,6 +479,7 @@ export interface JobOrderSummary {
   total_batches: number;
   has_issues: boolean;
   has_high_second_degree: boolean;
+  has_stalled_batches: boolean;
   completion_percentage: number;
   overproduction_quantity: number;
   last_calculated_at?: string;
@@ -500,6 +519,20 @@ export interface JobOrderItemSummary {
 export interface JobOrderItemSummaryListResponse {
   items: JobOrderItemSummary[];
   total: number;
+}
+
+export interface ArchivedJobOrderItem {
+  item_id: number;
+  job_order_id: number;
+  job_order_number?: string | null;
+  color_id: number;
+  size_id: number;
+  quantity: number;
+  weight?: number | null;
+  notes?: string | null;
+  archived_at: string;
+  color_name?: string | null;
+  size_value?: string | null;
 }
 
 export interface JobOrderListResponse {
@@ -662,6 +695,16 @@ export const barcodeApi = {
     const totalQuantity = response.data.items.reduce((sum, batch) => sum + batch.quantity, 0);
     return { total_quantity: totalQuantity };
   },
+
+  getRemainingQuantityForPhaseStatus: async (jobOrderId: number, colorId: number, sizeId: number, phaseId: number, status: string): Promise<{ remaining_quantity: number; total_batches: number; job_order_item_quantity: number }> => {
+    const response = await api.get<{ remaining_quantity: number; total_batches: number; job_order_item_quantity: number }>(`/batches/remaining-quantity/${jobOrderId}/${colorId}/${sizeId}`, {
+      params: {
+        phase_id: phaseId,
+        status: status
+      }
+    });
+    return response.data;
+  },
   getBatchById: async (batch_id: number | string): Promise<BarcodeData> => {
     const response = await api.get<BarcodeData>(`/batches/${batch_id}`);
     return response.data;
@@ -781,6 +824,11 @@ export const jobOrderApi = {
     return response.data;
   },
 
+  updateItemNotes: async (itemId: number, notes: string): Promise<JobOrderItem> => {
+    const response = await api.put(`/job-orders/items/${itemId}/notes`, { notes });
+    return response.data;
+  },
+
   delete: async (id: number): Promise<void> => {
     await api.delete(`/job-orders/${id}`);
   },
@@ -825,7 +873,7 @@ export const jobOrderApi = {
     return response.data;
   },
 
-  getMaterials: async (jobOrderId: number): Promise<{id:number,material_id:number,material_name:string,color_name?:string,quantity:number,notes?:string}[]> => {
+  getMaterials: async (jobOrderId: number): Promise<{id:number,material_id:number,material_name:string,color_name?:string,quantity:number,consumption?:number,notes?:string}[]> => {
     const response = await api.get(`/job-orders/${jobOrderId}/materials`);
     return response.data;
   },
@@ -833,6 +881,14 @@ export const jobOrderApi = {
   getSummary: async (params: any): Promise<{items: JobOrderSummary[], total: number}> => {
     const response = await api.get<{items: JobOrderSummary[], total: number}>('/job-orders/summary/', { params });
     return response.data;
+  },
+
+  archive: async (id: number): Promise<void> => {
+    await api.post(`/job-orders/${id}/archive`);
+  },
+
+  archiveBulk: async (jobOrderIds: number[]): Promise<void> => {
+    await api.post('/job-orders/archive/bulk', { job_order_ids: jobOrderIds });
   },
 
   // Item-level API functions
@@ -884,7 +940,8 @@ export const jobOrderApi = {
   },
 
   refreshItemSummaries: async (jobOrderId?: number): Promise<{message: string}> => {
-    const response = await api.post('/job-orders/items/refresh-summary/', { job_order_id: jobOrderId });
+    const params = jobOrderId ? { job_order_id: jobOrderId } : {};
+    const response = await api.post('/job-orders/items/refresh-summary/', null, { params });
     return response.data;
   },
 
@@ -892,6 +949,48 @@ export const jobOrderApi = {
     const response = await api.get('/job-orders/items/statistics/');
     return response.data;
   },
+
+  archiveItem: async (itemId: number): Promise<{message: string, archived_item_id: number}> => {
+    const response = await api.post(`/job-orders/items/${itemId}/archive`);
+    return response.data;
+  },
+
+  getAllArchivedItems: async (params?: {
+    skip?: number;
+    limit?: number;
+    job_order_id?: number;
+    color_name?: string;
+    size_value?: string;
+  }): Promise<ArchivedJobOrderItem[]> => {
+    const response = await api.get('/job-orders/archive/items/', { params });
+    return response.data;
+  },
+
+  restoreItem: async (itemId: number): Promise<{message: string, restored_item_id: number}> => {
+    const response = await api.post(`/job-orders/items/${itemId}/restore`);
+    return response.data;
+  },
+
+          restoreJobOrder: async (jobOrderId: number): Promise<{message: string, restored_job_order_id: number}> => {
+          const response = await api.post(`/job-orders/archive/${jobOrderId}/restore`);
+          return response.data;
+        },
+        deleteArchivedJobOrder: async (jobOrderId: number): Promise<{message: string, job_order_id: number, deleted_items: number, deleted_batches: number}> => {
+          const response = await api.delete(`/job-orders/archive/${jobOrderId}/delete`);
+          return response.data;
+        },
+        deleteArchivedItem: async (itemId: number): Promise<{message: string, item_id: number, deleted_batches: number}> => {
+          const response = await api.delete(`/job-orders/items/${itemId}/delete`);
+          return response.data;
+        },
+        recoverBatch: async (batchId: number): Promise<{message: string, batch_id: number}> => {
+          const response = await api.post(`/batches/archived/${batchId}/recover`);
+          return response.data;
+        },
+        deleteArchivedBatch: async (batchId: number): Promise<{message: string, batch_id: number}> => {
+          const response = await api.delete(`/batches/archived/${batchId}`);
+          return response.data;
+        },
 };
 
 export async function refreshJobOrderSummary() {

@@ -37,15 +37,12 @@ def validate_numeric_fields(row_data: Dict[str, Any]) -> Tuple[bool, Optional[st
     try:
         quantity = int(float(row_data["quantity"]))
         layers = int(float(row_data["layers"]))
-        serial = int(float(row_data["serial"]))
         
         # Check each field individually for better error messages
         if quantity <= 0:
             return False, "Quantity must be a positive number"
         if layers <= 0:
             return False, "Layers must be a positive number"
-        if serial <= 0:
-            return False, "Serial must be a positive number"
         
         return True, None
     except (ValueError, TypeError):
@@ -60,26 +57,9 @@ def validate_numeric_fields(row_data: Dict[str, Any]) -> Tuple[bool, Optional[st
         except (ValueError, TypeError):
             return False, "Layers must be a valid number"
         
-        try:
-            int(float(row_data["serial"]))
-        except (ValueError, TypeError):
-            return False, "Serial must be a valid number"
-        
-        return False, "Quantity, layers, and serial must be valid numbers"
+        return False, "Quantity and layers must be valid numbers"
 
-def validate_serial_field(row_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-    serial = row_data.get("serial")
-    if serial is None or str(serial).strip() == "":
-        return False, "Serial must not be empty"
-    try:
-        serial_num = int(float(serial))
-        if serial_num < 0:
-            return False, "Serial must be 0 or greater"
-        if serial_num > 999:
-            return False, "Serial must be 999 or less"
-    except (ValueError, TypeError):
-        return False, "Serial must be a valid number"
-    return True, None
+
 
 def process_row(db: Session, row_data: Dict[str, Any], job_order: models.JobOrder, allowed_sizes: Dict[str, Any], allowed_colors: Dict[str, Any]) -> Dict[str, Any]:
     size_value = str(row_data["size"]).strip().lower()
@@ -96,10 +76,11 @@ def process_row(db: Session, row_data: Dict[str, Any], job_order: models.JobOrde
         raise ValueError("Color not allowed for this job order.")
     quantity = int(float(row_data["quantity"]))
     layers = int(float(row_data["layers"]))
-    serial_int = int(float(row_data["serial"]))
+    
+    # Auto-generate serial number based on existing batches for this job order + size + color combination
+    serial_int = get_next_serial_number(db, job_order.job_order_id, size.size_id, color.color_id)
     serial_str = f"{serial_int:03d}"
-    if len(serial_str) > 3:
-        raise ValueError("Serial number cannot exceed 3 digits after formatting.")
+    
     brand = db.query(models.Brand).filter(models.Brand.brand_id == job_order.brand_id).first() if job_order.brand_id else None
     model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first() if job_order.model_id else None
     barcode = generate_barcode_string(
@@ -125,28 +106,89 @@ def process_row(db: Session, row_data: Dict[str, Any], job_order: models.JobOrde
         "color": color.color_name,
         "quantity": quantity,
         "layers": layers,
-        "serial": serial_str
+        "serial": serial_str,
+        "current_phase": 1,  # Default to first phase (Cutting)
+        "status": "In Progress"  # Default status for new batches
+    }
+
+def process_row_with_serial(db: Session, row_data: Dict[str, Any], job_order: models.JobOrder, allowed_sizes: Dict[str, Any], allowed_colors: Dict[str, Any], serial_number: int) -> Dict[str, Any]:
+    """Process a row with a pre-assigned serial number"""
+    size_value = str(row_data["size"]).strip().lower()
+    color_name = str(row_data["color"]).strip().lower()
+    size = allowed_sizes.get(size_value)
+    color = allowed_colors.get(color_name)
+    
+    # Provide specific error messages for size/color validation
+    if not size and not color:
+        raise ValueError("Size/color not allowed for this job order.")
+    elif not size:
+        raise ValueError("Size not allowed for this job order.")
+    elif not color:
+        raise ValueError("Color not allowed for this job order.")
+    quantity = int(float(row_data["quantity"]))
+    layers = int(float(row_data["layers"]))
+    
+    # Use the pre-assigned serial number
+    serial_str = f"{serial_number:03d}"
+    
+    brand = db.query(models.Brand).filter(models.Brand.brand_id == job_order.brand_id).first() if job_order.brand_id else None
+    model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first() if job_order.model_id else None
+    barcode = generate_barcode_string(
+        job_order.job_order_id,
+        brand.brand_id if brand else 0,
+        model.model_id if model else 0,
+        size.size_id,
+        color.color_id,
+        quantity,
+        layers,
+        serial_number
+    )
+    return {
+        "barcode": barcode,
+        "job_order_id": job_order.job_order_id,
+        "brand_id": brand.brand_id if brand else None,
+        "model_id": model.model_id if model else None,
+        "size_id": size.size_id,
+        "color_id": color.color_id,
+        "brand": brand.brand_name if brand else None,
+        "model": model.model_name if model else None,
+        "size": size.size_value,
+        "color": color.color_name,
+        "quantity": quantity,
+        "layers": layers,
+        "serial": serial_str,
+        "current_phase": 1,  # Default to first phase (Cutting)
+        "status": "In Progress"  # Default status for new batches
     }
 
 def process_bulk_barcodes(db: Session, df: pd.DataFrame, job_order_id: int) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     processed_data = []
     error_rows = []
-    required_columns = ["size", "color", "quantity", "layers", "serial"]
+    required_columns = ["size", "color", "quantity", "layers"]
     missing_columns = [col for col in required_columns if col not in df.columns]
     if missing_columns:
         raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
     job_order = db.query(models.JobOrder).filter(models.JobOrder.job_order_id == job_order_id).first()
     if not job_order:
         raise ValueError("Job order not found.")
+    
     # Build allowed sizes/colors dicts for fast lookup (case-insensitive)
     allowed_sizes = {item.size.size_value.strip().lower(): item.size for item in job_order.items}
     allowed_colors = {item.color.color_name.strip().lower(): item.color for item in job_order.items}
+    
+    # First pass: validate all rows and collect valid ones
+    valid_rows = []
     for index, row in df.iterrows():
         try:
             row_data = {k: v if pd.notna(v) else None for k, v in row.to_dict().items()}
             for key, value in row_data.items():
                 if isinstance(value, str):
                     row_data[key] = value.strip().lower()
+                elif isinstance(value, (int, float)):
+                    # Convert numeric values to string for size and color fields
+                    if key in ["size", "color"]:
+                        row_data[key] = str(value).strip().lower()
+            
             is_valid, error = validate_row_data(row_data, required_columns)
             if not is_valid:
                 error_rows.append({"rowNumber": index + 2, "data": row_data, "error": error})
@@ -155,10 +197,7 @@ def process_bulk_barcodes(db: Session, df: pd.DataFrame, job_order_id: int) -> T
             if not is_valid:
                 error_rows.append({"rowNumber": index + 2, "data": row_data, "error": error})
                 continue
-            is_valid, error = validate_serial_field(row_data)
-            if not is_valid:
-                error_rows.append({"rowNumber": index + 2, "data": row_data, "error": error})
-                continue
+            
             # Check if size and color are allowed for this job order with specific error messages
             size_valid = row_data["size"] in allowed_sizes
             color_valid = row_data["color"] in allowed_colors
@@ -184,15 +223,56 @@ def process_bulk_barcodes(db: Session, df: pd.DataFrame, job_order_id: int) -> T
                     "error": "Color not allowed for this job order."
                 })
                 continue
+            
             row_data["quantity"] = int(row_data["quantity"])
             row_data["layers"] = int(row_data["layers"])
-            processed_data.append(process_row(db, row_data, job_order, allowed_sizes, allowed_colors))
+            valid_rows.append((index, row_data))
+            
         except Exception as e:
             error_rows.append({
                 "rowNumber": index + 2,
                 "data": row_data,
                 "error": str(e)
             })
+    
+    # Group valid rows by size+color combination
+    size_color_groups = {}
+    for index, row_data in valid_rows:
+        size_value = row_data["size"]
+        color_name = row_data["color"]
+        key = (size_value, color_name)
+        if key not in size_color_groups:
+            size_color_groups[key] = []
+        size_color_groups[key].append((index, row_data))
+    
+    # For each group, get the starting serial number and assign sequential numbers
+    for (size_value, color_name), group_rows in size_color_groups.items():
+        size = allowed_sizes[size_value]
+        color = allowed_colors[color_name]
+        
+        # Get the starting serial number for this combination
+        existing_count = db.query(models.Batch).filter(
+            models.Batch.job_order_id == job_order_id,
+            models.Batch.size_id == size.size_id,
+            models.Batch.color_id == color.color_id
+        ).count()
+        
+        # Assign sequential serial numbers to each row in this group
+        for i, (index, row_data) in enumerate(group_rows):
+            serial_number = existing_count + i + 1
+            row_data["serial"] = serial_number
+            
+            # Process the row with the assigned serial number
+            try:
+                processed_row = process_row_with_serial(db, row_data, job_order, allowed_sizes, allowed_colors, serial_number)
+                processed_data.append(processed_row)
+            except Exception as e:
+                error_rows.append({
+                    "rowNumber": index + 2,
+                    "data": row_data,
+                    "error": str(e)
+                })
+    
     return processed_data, error_rows
 
 def get_or_create_brand(db: Session, name: str) -> models.Brand:
@@ -233,5 +313,17 @@ def get_or_create_color(db: Session, name: str) -> models.Color:
         db.commit()
         db.refresh(color)
     return color
+
+def get_next_serial_number(db: Session, job_order_id: int, size_id: int, color_id: int) -> int:
+    """Get the next serial number for a specific job order + size + color combination"""
+    # Count existing batches for this job order + size + color combination
+    existing_count = db.query(models.Batch).filter(
+        models.Batch.job_order_id == job_order_id,
+        models.Batch.size_id == size_id,
+        models.Batch.color_id == color_id
+    ).count()
+    
+    # Return the next serial number (starting from 1)
+    return existing_count + 1
 
 # All barcode/row helpers and get_or_create functions from crud.py should be moved here with their full implementation. 

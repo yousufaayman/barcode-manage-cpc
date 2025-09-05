@@ -138,8 +138,8 @@ const VirtualizedTable: React.FC<VirtualizedTableProps> = ({
           {/* Visible Rows */}
           {data.slice(visibleRange.start, visibleRange.end).map((item, index) => {
             const actualIndex = visibleRange.start + index;
-            // Use a more flexible key - try common ID fields
-            const itemKey = item.batch_id || item.job_order_id || item.id || actualIndex;
+            // Create a unique key by combining the item type, ID, and additional identifiers
+            const itemKey = `${item.batch_id ? 'batch' : item.job_order_id ? 'job_order' : item.item_id ? 'item' : 'row'}_${item.batch_id || item.job_order_id || item.item_id || actualIndex}_${item.archived_at ? 'archived' : 'active'}_${actualIndex}`;
             const isSelected = selectedItems?.includes(item.batch_id || item.job_order_id);
 
             return (

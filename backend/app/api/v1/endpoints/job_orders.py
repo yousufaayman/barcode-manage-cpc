@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
-from sqlalchemy import func as sa_func, text
+from sqlalchemy import func as sa_func, text, case
 from typing import List, Dict, Optional
 from pydantic import BaseModel
 from app.crud import *
@@ -673,6 +673,44 @@ def get_job_order_materials_endpoint(job_order_id: int, db: Session = Depends(ge
     mats = get_job_order_materials(db, job_order_id)
     return mats
 
+@router.put("/items/{item_id}/notes", response_model=schemas.JobOrderItem)
+def update_job_order_item_notes(
+    item_id: int,
+    notes_update: schemas.JobOrderItemNotesUpdate,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user)
+):
+    """Update notes for a specific job order item"""
+    # Find the job order item
+    job_order_item = db.query(models.JobOrderItem).filter(
+        models.JobOrderItem.item_id == item_id
+    ).first()
+    
+    if not job_order_item:
+        raise HTTPException(status_code=404, detail="Job order item not found")
+    
+    # Update the notes
+    job_order_item.notes = notes_update.notes
+    
+    # Commit the changes
+    db.commit()
+    db.refresh(job_order_item)
+    
+    # Return the updated item with color and size names
+    color = db.query(models.Color).filter(models.Color.color_id == job_order_item.color_id).first()
+    size = db.query(models.Size).filter(models.Size.size_id == job_order_item.size_id).first()
+    
+    return {
+        "item_id": job_order_item.item_id,
+        "job_order_id": job_order_item.job_order_id,
+        "color_id": job_order_item.color_id,
+        "color_name": color.color_name if color else None,
+        "size_id": job_order_item.size_id,
+        "size_value": size.size_value if size else None,
+        "quantity": job_order_item.quantity,
+        "notes": job_order_item.notes
+    }
+
 @router.get("/summary/", response_model=JobOrderSummaryListResponse)
 def get_job_orders_summary(
     db: Session = Depends(get_db),
@@ -781,6 +819,40 @@ def get_job_orders_summary(
         # Calculate overproduction
         overproduction_quantity = max(0, total_produced - total_expected)
         
+        # Detect stalled batches: for any item (color_id,size_id) of this job order,
+        # if its batches are spread across more than one current phase (Cutting, any Sewing phase, Packaging)
+        # then mark the job order as having stalled batches.
+        # Map phases to phase groups: Cutting (1), Sewing (2,3,4,7), Packaging (8)
+        # Count distinct phase groups per (color_id,size_id)
+        phase_group_case = case(
+            (
+                models.Batch.current_phase == 1,
+                'Cutting'
+            ),
+            (
+                models.Batch.current_phase.in_([2, 3, 4, 7]),
+                'Sewing'
+            ),
+            (
+                models.Batch.current_phase == 8,
+                'Packaging'
+            ),
+            else_='Other'
+        )
+
+        stalled_subq = db.query(
+            models.Batch.color_id.label('color_id'),
+            models.Batch.size_id.label('size_id'),
+            sa_func.count(sa_func.distinct(phase_group_case)).label('group_count')
+        ).filter(
+            models.Batch.job_order_id == result.JobOrder.job_order_id
+        ).group_by(
+            models.Batch.color_id,
+            models.Batch.size_id
+        ).subquery()
+
+        has_stalled_batches = db.query(stalled_subq).filter(stalled_subq.c.group_count > 1).first() is not None
+
         # Get notes from items (if any)
         notes_text = ""
         if items_with_notes:
@@ -803,6 +875,7 @@ def get_job_orders_summary(
             "total_batches": total_batches,
             "has_issues": has_issues,
             "has_high_second_degree": has_high_second_degree,
+            "has_stalled_batches": has_stalled_batches,
             "completion_percentage": completion_percentage,
             "overproduction_quantity": overproduction_quantity,
             "notes": notes_text,
@@ -824,6 +897,467 @@ def get_job_orders_summary(
 
 @router.post("/refresh-summary/")
 def refresh_job_orders_summary(db: Session = Depends(get_db)):
-    """DEPRECATED: Use /items/refresh-summary/ instead. This endpoint is kept for backward compatibility."""
-    # Redirect to the new item-level refresh endpoint
-    return refresh_job_order_items_summary_endpoint(None, db, None) 
+    """Refresh all job orders summary"""
+    from app.crud.job_order import refresh_job_order_items_summary
+    refresh_job_order_items_summary(db)
+    return {"message": "Job orders summary refreshed successfully"}
+
+# --- Job Order Archival Endpoints ---
+
+class BulkArchiveRequest(BaseModel):
+    job_order_ids: List[int]
+
+@router.post("/{job_order_id}/archive")
+def archive_job_order(
+    job_order_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Archive a job order and all its associated items and batches"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to archive job orders."
+        )
+    
+    from app.crud.job_order import archive_job_order as crud_archive_job_order
+    archived_job_order = crud_archive_job_order(db, job_order_id)
+    
+    if not archived_job_order:
+        raise HTTPException(status_code=404, detail="Job order not found")
+    
+    return {"message": f"Job order {job_order_id} archived successfully"}
+
+@router.post("/archive/bulk")
+def archive_job_orders_bulk(
+    request: BulkArchiveRequest,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Archive multiple job orders and all their associated items and batches"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to archive job orders."
+        )
+    
+    from app.crud.job_order import archive_job_orders_bulk as crud_archive_job_orders_bulk
+    archived_job_orders = crud_archive_job_orders_bulk(db, request.job_order_ids)
+    
+    return {"message": f"Archived {len(archived_job_orders)} job orders successfully"}
+
+# --- Archive Overview Endpoints ---
+
+@router.get("/archive/overview")
+def get_archive_overview(
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Get overview of all archived data"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to view archive."
+        )
+    
+    from app.crud.job_order import get_archived_job_orders as crud_get_archived_job_orders
+    from app.crud.batch import get_archived_batches as crud_get_archived_batches
+    
+    # Get counts
+    archived_job_orders_count = db.query(models.ArchivedJobOrder).count()
+    archived_items_count = db.query(models.ArchivedJobOrderItem).count()
+    archived_batches_count = db.query(models.ArchivedBatch).count()
+    
+    # Get recent archived job orders (last 10)
+    recent_job_orders = db.query(models.ArchivedJobOrder).order_by(
+        models.ArchivedJobOrder.archived_at.desc()
+    ).limit(10).all()
+    
+    # Get recent archived batches (last 10)
+    recent_batches = db.query(models.ArchivedBatch).order_by(
+        models.ArchivedBatch.archived_at.desc()
+    ).limit(10).all()
+    
+    # Format recent job orders
+    recent_job_orders_data = []
+    for jo in recent_job_orders:
+        model = db.query(models.Model).filter(models.Model.model_id == jo.model_id).first()
+        brand = db.query(models.Brand).filter(models.Brand.brand_id == jo.brand_id).first() if jo.brand_id else None
+        
+        recent_job_orders_data.append({
+            "job_order_id": jo.job_order_id,
+            "job_order_number": jo.job_order_number,
+            "model_name": model.model_name if model else "Unknown",
+            "brand_name": brand.brand_name if brand else "Unknown",
+            "archived_at": jo.archived_at,
+            "date_created": jo.date_created
+        })
+    
+    # Format recent batches
+    recent_batches_data = []
+    for batch in recent_batches:
+        recent_batches_data.append({
+            "batch_id": batch.batch_id,
+            "barcode": batch.barcode,
+            "job_order_id": batch.job_order_id,
+            "archived_at": batch.archived_at,
+            "status": batch.status
+        })
+    
+    return {
+        "summary": {
+            "archived_job_orders": archived_job_orders_count,
+            "archived_items": archived_items_count,
+            "archived_batches": archived_batches_count
+        },
+        "recent_job_orders": recent_job_orders_data,
+        "recent_batches": recent_batches_data
+    }
+
+@router.get("/archive/job-orders/", response_model=List[schemas.ArchivedJobOrderResponse])
+def get_archived_job_orders_detailed(
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100,
+    job_order_number: Optional[str] = None,
+    model_name: Optional[str] = None,
+    brand_name: Optional[str] = None,
+    include_partial: bool = False,
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Get all archived job orders with filtering and pagination"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to view archived job orders."
+        )
+    
+    # Build query for fully archived job orders
+    query = db.query(models.ArchivedJobOrder)
+    
+    # Apply filters
+    if job_order_number:
+        query = query.filter(models.ArchivedJobOrder.job_order_number.ilike(f"%{job_order_number}%"))
+    
+    # Apply pagination
+    archived_job_orders = query.offset(skip).limit(limit).all()
+    
+    result = []
+    for jo in archived_job_orders:
+        # Get model and brand names
+        model = db.query(models.Model).filter(models.Model.model_id == jo.model_id).first()
+        brand = db.query(models.Brand).filter(models.Brand.brand_id == jo.brand_id).first() if jo.brand_id else None
+        
+        # Filter by model_name if specified
+        if model_name and model and model_name.lower() not in model.model_name.lower():
+            continue
+            
+        # Filter by brand_name if specified
+        if brand_name and brand and brand_name.lower() not in brand.brand_name.lower():
+            continue
+        
+        result.append(schemas.ArchivedJobOrderResponse(
+            job_order_id=jo.job_order_id,
+            model_id=jo.model_id,
+            job_order_number=jo.job_order_number,
+            brand_id=jo.brand_id,
+            image_url=jo.image_url,
+            notes=jo.notes,
+            date_created=jo.date_created,
+            archived_at=jo.archived_at,
+            model_name=model.model_name if model else None,
+            brand_name=brand.brand_name if brand else None
+        ))
+    
+    # If include_partial is True, also include job orders that have archived items but are not fully archived
+    if include_partial:
+        # Get job order IDs that have archived items
+        archived_item_job_orders = db.query(models.ArchivedJobOrderItem.job_order_id).distinct().all()
+        archived_item_job_order_ids = [item[0] for item in archived_item_job_orders]
+        
+        # Get job orders that are not fully archived but have archived items
+        partial_job_orders = db.query(models.JobOrder).filter(
+            models.JobOrder.job_order_id.in_(archived_item_job_order_ids)
+        ).all()
+        
+        for jo in partial_job_orders:
+            # Skip if already in result (fully archived)
+            if any(r.job_order_id == jo.job_order_id for r in result):
+                continue
+                
+            # Get model and brand names
+            model = db.query(models.Model).filter(models.Model.model_id == jo.model_id).first()
+            brand = db.query(models.Brand).filter(models.Brand.brand_id == jo.brand_id).first() if jo.brand_id else None
+            
+            # Filter by model_name if specified
+            if model_name and model and model_name.lower() not in model.model_name.lower():
+                continue
+                
+            # Filter by brand_name if specified
+            if brand_name and brand and brand_name.lower() not in brand.brand_name.lower():
+                continue
+            
+            result.append(schemas.ArchivedJobOrderResponse(
+                job_order_id=jo.job_order_id,
+                model_id=jo.model_id,
+                job_order_number=jo.job_order_number,
+                brand_id=jo.brand_id,
+                image_url=jo.image_url,
+                notes=jo.notes,
+                date_created=jo.date_created,
+                archived_at=None,  # Not fully archived
+                model_name=model.model_name if model else None,
+                brand_name=brand.brand_name if brand else None
+            ))
+    
+    return result
+
+@router.get("/archive/job-orders/{job_order_id}/items", response_model=List[schemas.ArchivedJobOrderItemResponse])
+def get_archived_job_order_items_detailed(
+    job_order_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Get all archived items for a specific job order with detailed information"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to view archived job order items."
+        )
+    
+    # Verify the archived job order exists
+    archived_job_order = db.query(models.ArchivedJobOrder).filter(
+        models.ArchivedJobOrder.job_order_id == job_order_id
+    ).first()
+    
+    if not archived_job_order:
+        raise HTTPException(status_code=404, detail="Archived job order not found")
+    
+    from app.crud.job_order import get_archived_job_order_items as crud_get_archived_job_order_items
+    archived_items = crud_get_archived_job_order_items(db, job_order_id)
+    
+    result = []
+    for item in archived_items:
+        # Get color and size names
+        color = db.query(models.Color).filter(models.Color.color_id == item.color_id).first()
+        size = db.query(models.Size).filter(models.Size.size_id == item.size_id).first()
+        
+        result.append(schemas.ArchivedJobOrderItemResponse(
+            item_id=item.item_id,
+            job_order_id=item.job_order_id,
+            color_id=item.color_id,
+            size_id=item.size_id,
+            quantity=item.quantity,
+            weight=item.weight,
+            notes=item.notes,
+            archived_at=item.archived_at,
+            color_name=color.color_name if color else None,
+            size_value=size.size_value if size else None
+        ))
+    
+    return result
+
+@router.get("/archive/items/", response_model=List[schemas.ArchivedJobOrderItemResponse])
+def get_all_archived_items(
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100,
+    job_order_id: Optional[int] = None,
+    color_name: Optional[str] = None,
+    size_value: Optional[str] = None,
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Get all archived items (regardless of job order status) with filtering and pagination"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to view archived items."
+        )
+    
+    # Build query for all archived items
+    query = db.query(models.ArchivedJobOrderItem)
+    
+    # Apply filters
+    if job_order_id:
+        query = query.filter(models.ArchivedJobOrderItem.job_order_id == job_order_id)
+    
+    # Apply pagination
+    archived_items = query.offset(skip).limit(limit).all()
+    
+    result = []
+    for item in archived_items:
+        # Get color and size names
+        color = db.query(models.Color).filter(models.Color.color_id == item.color_id).first()
+        size = db.query(models.Size).filter(models.Size.size_id == item.size_id).first()
+        
+        # Get job order number (check both active and archived job orders)
+        job_order = db.query(models.JobOrder).filter(models.JobOrder.job_order_id == item.job_order_id).first()
+        if job_order:
+            job_order_number = job_order.job_order_number
+        else:
+            # Check archived job orders
+            archived_job_order = db.query(models.ArchivedJobOrder).filter(models.ArchivedJobOrder.job_order_id == item.job_order_id).first()
+            job_order_number = archived_job_order.job_order_number if archived_job_order else f"JO-{item.job_order_id}"
+        
+        # Filter by color_name if specified
+        if color_name and color and color_name.lower() not in color.color_name.lower():
+            continue
+            
+        # Filter by size_value if specified
+        if size_value and size and size_value.lower() not in size.size_value.lower():
+            continue
+        
+        result.append(schemas.ArchivedJobOrderItemResponse(
+            item_id=item.item_id,
+            job_order_id=item.job_order_id,
+            job_order_number=job_order_number,
+            color_id=item.color_id,
+            size_id=item.size_id,
+            quantity=item.quantity,
+            weight=item.weight,
+            notes=item.notes,
+            archived_at=item.archived_at,
+            color_name=color.color_name if color else None,
+            size_value=size.size_value if size else None
+        ))
+    
+    return result
+
+@router.post("/items/{item_id}/archive")
+def archive_job_order_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Archive a single job order item"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to archive job order items."
+        )
+    
+    from app.crud.job_order import archive_job_order_item as crud_archive_job_order_item
+    
+    try:
+        archived_item = crud_archive_job_order_item(db, item_id)
+        if archived_item is None:
+            raise HTTPException(status_code=404, detail="Job order item not found or already archived")
+        return {"message": "Job order item archived successfully", "archived_item_id": archived_item.item_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in archive endpoint for item {item_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to archive item: {str(e)}")
+
+@router.post("/items/{item_id}/restore")
+def restore_job_order_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Restore a single archived job order item"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to restore job order items."
+        )
+    
+    from app.crud.job_order import restore_job_order_item as crud_restore_job_order_item
+    
+    try:
+        restored_item = crud_restore_job_order_item(db, item_id)
+        if restored_item is None:
+            raise HTTPException(status_code=404, detail="Archived job order item not found or already restored")
+        return {"message": "Job order item restored successfully", "restored_item_id": restored_item.item_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in restore endpoint for item {item_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to restore item: {str(e)}")
+
+@router.post("/archive/{job_order_id}/restore")
+def restore_job_order(
+    job_order_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Restore a fully archived job order and all its archived items"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to restore job orders."
+        )
+    
+    from app.crud.job_order import restore_job_order as crud_restore_job_order
+    
+    try:
+        restored_job_order = crud_restore_job_order(db, job_order_id)
+        if restored_job_order is None:
+            raise HTTPException(status_code=404, detail="Archived job order not found or already restored")
+        return {"message": "Job order restored successfully", "restored_job_order_id": restored_job_order.job_order_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in restore job order endpoint for job order {job_order_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to restore job order: {str(e)}")
+
+@router.delete("/archive/{job_order_id}/delete")
+def delete_archived_job_order(
+    job_order_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Permanently delete an archived job order and all its associated archived items and batches"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to delete archived job orders."
+        )
+    
+    from app.crud.job_order import delete_archived_job_order as crud_delete_archived_job_order
+    
+    try:
+        result = crud_delete_archived_job_order(db, job_order_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Archived job order not found")
+        return {
+            "message": "Archived job order deleted successfully", 
+            "job_order_id": result["job_order_id"],
+            "deleted_items": result["deleted_items"],
+            "deleted_batches": result["deleted_batches"]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in delete archived job order endpoint for job order {job_order_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to delete archived job order: {str(e)}")
+
+@router.delete("/items/{item_id}/delete")
+def delete_archived_job_order_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_active_superuser)
+):
+    """Permanently delete an archived job order item and all its associated archived batches"""
+    if current_user.role != schemas.RoleEnum.ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied. Admin privileges required to delete archived job order items."
+        )
+    
+    from app.crud.job_order import delete_archived_job_order_item as crud_delete_archived_item
+    
+    try:
+        result = crud_delete_archived_item(db, item_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Archived job order item not found")
+        return {
+            "message": "Archived job order item deleted successfully", 
+            "item_id": result["item_id"],
+            "deleted_batches": result["deleted_batches"]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in delete archived item endpoint for item {item_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to delete archived item: {str(e)}")

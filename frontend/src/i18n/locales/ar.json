@@ -30,7 +30,16 @@
     "updating": "جاري التحديث...",
     "saving": "جاري الحفظ...",
     "print": "طباعة",
-    "copies": "عدد النسخ"
+    "copies": "نسخ",
+    "none": "لا شيء",
+    "attempts": "محاولات",
+    "loadingMore": "جاري تحميل المزيد...",
+    "archive": "أرشفة",
+    "archiving": "جارٍ الأرشفة...",
+    "complete": "مكتمل",
+    "unknown": "غير معروف",
+    "na": "غير متاح",
+    "clearing": "جارٍ المسح..."
   },
   "auth": {
     "signIn": "تسجيل الدخول",
@@ -46,7 +55,16 @@
     "accessDenied": "تم رفض الوصول",
     "noPermission": "ليس لديك صلاحية للوصول إلى هذه الصفحة.",
     "currentRole": "دورك الحالي",
-    "doesNotHavePermission": "ليس لديه صلاحية للوصول إلى هذه الصفحة."
+    "doesNotHavePermission": "ليس لديه صلاحية للوصول إلى هذه الصفحة.",
+    "incorrectCredentials": "اسم المستخدم أو كلمة المرور غير صحيحة",
+    "networkError": "خطأ في الشبكة. يرجى التحقق من اتصالك والمحاولة مرة أخرى.",
+    "serverError": "خطأ في الخادم. يرجى المحاولة مرة أخرى لاحقاً.",
+    "accountLocked": "الحساب مؤقتاً مقفل. يرجى المحاولة مرة أخرى لاحقاً.",
+    "tooManyAttempts": "محاولات تسجيل دخول كثيرة جداً. يرجى المحاولة مرة أخرى لاحقاً.",
+    "userNotFound": "المستخدم غير موجود",
+    "invalidCredentials": "بيانات الاعتماد المقدمة غير صحيحة",
+    "usernameTooShort": "يجب أن يكون اسم المستخدم 3 أحرف على الأقل",
+    "passwordTooShort": "يجب أن تكون كلمة المرور 6 أحرف على الأقل"
   },
   "navigation": {
     "mainNavigation": "التنقل الرئيسي",
@@ -57,7 +75,8 @@
     "barcodeManagement": "إدارة الباركود",
     "jobOrders": "أوامر العمل",
     "barcodeCreate": "إنشاء الباركود",
-    "archivedBatches": "الدفعات المؤرشفة",
+    "archivedBatches": "الأرشيف",
+    "archive": "الأرشيف",
     "advancedStatistics": "الإحصائيات المتقدمة",
     "userManagement": "إدارة المستخدمين",
     "goToDashboard": "الذهاب إلى لوحة التحكم"
@@ -74,7 +93,40 @@
     "overallProductionStatus": "حالة الإنتاج العامة",
     "cuttingPhaseStatus": "حالة مرحلة القص",
     "sewingPhaseStatus": "حالة مرحلة الحياکة",
-    "packagingPhaseStatus": "حالة مرحلة التعبئة"
+    "packagingPhaseStatus": "حالة مرحلة التعبئة",
+    "welcome": "مرحباً بعودتك، {{username}}. إليك نظرة عامة.",
+    "stats": {
+      "totalBatches": "إجمالي الدفعات",
+      "inProduction": "قيد الإنتاج",
+      "completed": "مكتمل"
+    },
+    "jobOrders": {
+      "title": "أوامر العمل",
+      "recent": "أوامر العمل الأخيرة",
+      "loading": "جاري تحميل أوامر العمل...",
+      "none": "لا توجد أوامر عمل متاحة.",
+      "filters": {
+        "jobOrderNumber": "رقم أمر العمل",
+        "model": "الموديل",
+        "brand": "العميل",
+        "jobOrderNumberPlaceholder": "ابحث بالرقم",
+        "modelPlaceholder": "ابحث بالموديل",
+        "brandPlaceholder": "ابحث بالعميل"
+      },
+      "columns": {
+        "number": "الرقم",
+        "model": "الموديل",
+        "brand": "العميل",
+        "expected": "المتوقع",
+        "working": "قيد العمل",
+        "completed": "المكتمل",
+        "actions": "الإجراءات"
+      },
+      "viewDetails": "عرض التفاصيل"
+    },
+    "departmentOverview": "نظرة عامة لقسم {{role}}",
+    "pendingItems": "العناصر في الانتظار",
+    "inProgressItems": "العناصر قيد التنفيذ"
   },
   "barcode": {
     "scanning": "جاري المسح...",
@@ -121,6 +173,8 @@
     "updateQuantityDescription": "امسح باركود وقم بتحديث كميته باستخدام واجهة العداد الكبيرة.",
     "secondDegreeMode": "الدرجة الثانية",
     "secondDegreeDescription": "امسح باركود وقم بتعيين حالة الدرجة الثانية تلقائياً.",
+    "productionIssuesMode": "مشاكل الإنتاج",
+    "productionIssuesDescription": "امسح باركود لإضافة أو تحديث ملاحظات مشاكل الإنتاج لعنصر أمر العمل المرتبط.",
     "secondDegreeSetting": "إعداد الدرجة الثانية",
     "markAsSecondDegree": "تعيين كدرجة ثانية",
     "markAsFirstDegree": "تعيين كدرجة أولى",
@@ -160,6 +214,20 @@
     "batchNotFound": "لم يتم العثور على الدفعة. يرجى التحقق من الباركود.",
     "serverError": "خطأ في الخادم. يرجى المحاولة مرة أخرى أو الاتصال بالدعم.",
     "failedToUpdate": "فشل في تحديث الدفعة. يرجى المحاولة مرة أخرى.",
+    "failedToUpdateIssueNote": "فشل في تحديث ملاحظة المشكلة. يرجى المحاولة مرة أخرى.",
+    "failedToClearIssueNote": "فشل في مسح ملاحظة المشكلة. يرجى المحاولة مرة أخرى.",
+    "enterIssueNote": "يرجى إدخال ملاحظة مشكلة",
+    "saveIssueNote": "حفظ ملاحظة المشكلة",
+    "clearIssueNote": "مسح الملاحظات",
+    "addIssueNote": "إضافة ملاحظة مشكلة",
+    "issueNote": "ملاحظة المشكلة",
+    "enterIssueNotePlaceholder": "أدخل تفاصيل مشكلة الإنتاج...",
+    "jobOrderItemInfo": "معلومات عنصر أمر العمل",
+    "itemId": "معرف العنصر",
+    "currentNotes": "الملاحظات الحالية",
+    "scanBarcodeForIssues": "امسح الباركود للمشاكل",
+    "productionIssuesInstructions": "امسح باركود لعرض وتحديث ملاحظات مشاكل الإنتاج لعنصر أمر العمل المرتبط.",
+    "keyboardShortcuts": "اختصارات لوحة المفاتيح",
     "phaseRestriction": "يمكنك فقط مسح العناصر في مرحلة {role}",
     "noValidRows": "لا توجد صفوف صالحة للإرسال",
     "basicInformation": "المعلومات الأساسية",
@@ -175,6 +243,13 @@
     "scanUpdateSuccess": "تم تحديث الباركود بنجاح",
     "barcodeScannedSuccessfully": "تم مسح الباركود واسترجاع المعلومات بنجاح.",
     "barcodeUpdatedSuccessfully": "تم مسح الباركود وتحديثه بنجاح.",
+    "viewModeShort": "عرض",
+    "updateModeShort": "تحديث",
+    "updateQuantityShort": "الكمية",
+    "secondDegreeModeShort": "درجة ثانية",
+    "productionIssuesModeShort": "مشاكل الإنتاج",
+    "sessionCompleteTitle": "اكتملت الجلسة!",
+    "sessionCompleteMessage": "تم مسح {{scanned}} من أصل {{expected}} من الكمية المتوقعة بنجاح.",
     "referencedColors": "الألوان المشار إليها",
     "referencedSizes": "المقاسات المشار إليها"
   },
@@ -197,7 +272,16 @@
     "hideAdditionalColumns": "إخفاء الأعمدة الإضافية",
     "showAdditionalColumns": "إظهار الأعمدة الإضافية",
     "noBarcodesFound": "لم يتم العثور على باركود يطابق تصفيتك.",
-    "viewArchivedBatches": "عرض الدفعات المؤرشفة",
+    "viewArchivedBatches": "عرض الأرشيف",
+    "archive": {
+      "subtitle": "عرض أوامر العمل المؤرشفة والعناصر والدفعات",
+      "tabs": {
+        "jobOrders": "أوامر العمل المؤرشفة",
+        "items": "العناصر المؤرشفة",
+        "batches": "الدفعات المؤرشفة"
+      },
+      "backToBarcodeManagement": "العودة إلى إدارة الباركود"
+    },
     "confirmDelete": "هل أنت متأكد من أنك تريد حذف هذا الباركود؟",
     "confirmBulkDelete": "هل أنت متأكد من أنك تريد حذف {count} باركود محدد؟",
     "selectBarcodesToDelete": "يرجى تحديد باركود واحد على الأقل للحذف.",
@@ -262,6 +346,11 @@
     "scanned": "تم المسح",
     "notScanned": "لم يتم المسح"
   },
+  "commonExt": {
+    "clearFilters": "مسح التصفية",
+    "view": "عرض",
+    "viewDetails": "عرض التفاصيل"
+  },
   "language": {
     "english": "English",
     "arabic": "العربية",
@@ -292,10 +381,11 @@
     "submitBarcodes": "إرسال الباركود",
     "fileFormatRequirements": "متطلبات تنسيق الملف:",
     "excelCsvFormat": "ملفات إكسل (.xlsx, .xls) أو تنسيق CSV",
-    "requiredColumns": "الأعمدة المطلوبة: العميل، الموديل، المقاس، اللون، الكمية، الطبقات، الرقم التسلسلي",
+    "requiredColumns": "الأعمدة المطلوبة: المقاس، اللون، الكمية، الطبقات (الأرقام التسلسلية تُولد تلقائياً)",
     "headerRowRequired": "يجب أن يكون الصف الأول صف عنوان",
     "uniqueBarcodes": "يجب أن يكون كل باركود فريداً",
     "maxRecords": "الحد الأقصى 1000 سجل لكل تحميل",
+    "serialAutoGenerated": "الأرقام التسلسلية تُولد تلقائياً بناءً على الدفعات الموجودة لكل مجموعة أمر عمل + مقاس + لون",
     "duplicateBarcodesFound": "تم العثور على باركود مكررة",
     "noBarcodesForPrinting": "لا توجد باركود متاحة للطباعة",
     "failedToPrint": "فشل في طباعة الباركود",
@@ -305,6 +395,11 @@
     "networkError": "حدث خطأ في الشبكة. يرجى التحقق من اتصالك والمحاولة مرة أخرى.",
     "successfullySubmitted": "تم إرسال {count} صفوف بنجاح. تم العثور على {duplicates} مكررة. تم تخطي {errors} صفوف بسبب الأخطاء.",
     "printedBarcodes": "تم طباعة {count} باركود {times} مرات لكل منها على {printer}.",
+    "noValidRows": "لم يتم العثور على صفوف صحيحة في الملف المرفوع. يرجى التحقق من بياناتك والمحاولة مرة أخرى.",
+    "noValidRowsToSubmit": "لا توجد صفوف صحيحة للإرسال. يرجى إصلاح الأخطاء في ملفك قبل الإرسال.",
+    "noRowsToSubmit": "لا توجد صفوف للإرسال. يرجى رفع ملف ببيانات صحيحة.",
+    "validationComplete": "اكتمل التحقق: {count} صفوف صحيحة، {errors} صفوف بها أخطاء.",
+    "allRowsValid": "جميع {count} الصفوف صحيحة وجاهزة للإرسال.",
     "rowNumber": "Row #",
     "brand": "Brand",
     "model": "Model",
@@ -406,7 +501,40 @@
       "addNew": "إضافة \"{value}\"",
       "noOptionsFound": "لم يتم العثور على خيارات."
     },
-    "brandName": "اسم العميل"
+    "brandName": "اسم العميل",
+    "placeholders": {
+      "jobOrderNumber": "ابحث برقم أمر العمل...",
+      "modelName": "ابحث باسم الموديل...",
+      "brandName": "ابحث باسم العميل..."
+    },
+    "openOrders": "أوامر العمل المفتوحة",
+    "loadingOpenOrders": "جاري تحميل أوامر العمل المفتوحة...",
+    "openOrdersShowing": "عرض {{count}} من {{total}} أوامر عمل مفتوحة",
+    "issueIndicators": "مؤشرات المشاكل:",
+    "issueLegend": {
+      "P": "مشاكل الإنتاج (ملاحظات)",
+      "T": "دفعات متوقفة (مقسمة عبر مجموعات المراحل)",
+      "L": "كمية مفقودة (القص > العمل)",
+      "S": "درجة ثانية (>3% حد)",
+      "O": "إنتاج زائد"
+    },
+    "noOpenOrdersFilteredAlt": "لا توجد أوامر عمل مفتوحة تطابق تصفيتك الحالية.",
+    "noOpenOrdersAlt": "لا توجد أوامر عمل مفتوحة.",
+    "archiveSelected": "أرشفة أوامر العمل المحددة ({{count}})",
+    "confirmArchiveBulk": "هل أنت متأكد أنك تريد أرشفة {{count}} أمر عمل؟ سيؤدي ذلك أيضاً إلى أرشفة جميع العناصر والدفعات المرتبطة.",
+    "confirmArchiveSingle": "هل أنت متأكد أنك تريد أرشفة أمر العمل هذا؟ سيؤدي ذلك أيضاً إلى أرشفة جميع العناصر والدفعات المرتبطة.",
+    "archivedSuccessfullyBulk": "تمت أرشفة {{count}} أمر عمل بنجاح",
+    "archivedSuccessfully": "تمت أرشفة أمر العمل بنجاح",
+    "failedToArchive": "فشل في أرشفة أوامر العمل",
+    "failedToArchiveSingle": "فشل في أرشفة أمر العمل",
+    "selectToArchive": "يرجى تحديد أوامر العمل للأرشفة",
+    "colorSize": "اللون / المقاس",
+    "addColorRow": "إضافة صف لون",
+    "addSizeColumn": "إضافة عمود مقاس",
+    "addConsumptionColumn": "إضافة عمود استهلاك",
+    "addColumn": "إضافة عمود",
+    "jobOrderImageOptional": "صورة أمر العمل (اختياري)",
+    "viewProductionDetails": "عرض تفاصيل الإنتاج"
   },
   "jobOrderDetails": {
     "printingDetails": "تفاصيل الطباعة",
@@ -441,6 +569,22 @@
     "reopen": "إعادة فتح",
     "confirmClose": "هل أنت متأكد أنك تريد إغلاق أمر العمل هذا؟ سيؤدي ذلك إلى تحديده كمكتمل.",
     "confirmReopen": "هل أنت متأكد أنك تريد إعادة فتح أمر العمل هذا؟ سيؤدي ذلك إلى تحديده كنشط مرة أخرى.",
-    "dateCreated": "تاريخ الإنشاء"
+    "dateCreated": "تاريخ الإنشاء",
+    "productionSummary": "ملخص الإنتاج",
+    "workingQuantity": "كمية العمل",
+    "cutQuantity": "كمية القص",
+    "secondDegree": "درجة ثانية",
+    "lostQuantity": "الكمية المفقودة",
+    "cuttingDifference": "فرق القص",
+    "actions": "الإجراءات",
+    "archiveItem": "أرشفة هذا العنصر",
+    "archivingItem": "جارٍ الأرشفة...",
+    "overproductionIssues": "مشاكل الإنتاج الزائد",
+    "highSecondDegreeIssues": "مشاكل الدرجة الثانية العالية",
+    "productionIssues": "مشاكل الإنتاج",
+    "lostQuantityIssues": "مشاكل الكمية المفقودة",
+    "completed": "مكتمل",
+    "remainingQuantity": "الكمية المتبقية",
+    "workingQty": "كمية العمل"
   }
 } 

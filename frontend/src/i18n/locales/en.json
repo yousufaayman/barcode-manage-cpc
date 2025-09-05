@@ -30,7 +30,16 @@
     "updating": "Updating...",
     "saving": "Saving...",
     "print": "Print",
-    "copies": "Copies"
+    "copies": "Copies",
+    "none": "None",
+    "attempts": "attempts",
+    "loadingMore": "Loading more…",
+    "unknown": "Unknown",
+    "na": "N/A",
+    "clearing": "Clearing...",
+    "complete": "Complete",
+    "archive": "Archive",
+    "archiving": "Archiving..."
   },
   "auth": {
     "signIn": "Sign In",
@@ -46,7 +55,16 @@
     "accessDenied": "Access Denied",
     "noPermission": "You don't have permission to access this page.",
     "currentRole": "Your current role",
-    "doesNotHavePermission": "does not have permission to access this page."
+    "doesNotHavePermission": "does not have permission to access this page.",
+    "incorrectCredentials": "Incorrect username or password",
+    "networkError": "Network error. Please check your connection and try again.",
+    "serverError": "Server error. Please try again later.",
+    "accountLocked": "Account is temporarily locked. Please try again later.",
+    "tooManyAttempts": "Too many login attempts. Please try again later.",
+    "userNotFound": "User not found",
+    "invalidCredentials": "Invalid credentials provided",
+    "usernameTooShort": "Username must be at least 3 characters long",
+    "passwordTooShort": "Password must be at least 6 characters long"
   },
   "navigation": {
     "mainNavigation": "Main Navigation",
@@ -57,7 +75,8 @@
     "barcodeManagement": "Barcode Management",
     "jobOrders": "Job Orders",
     "barcodeCreate": "Bulk Barcode Create",
-    "archivedBatches": "Archived Batches",
+    "archivedBatches": "Archive",
+    "archive": "Archive",
     "advancedStatistics": "Advanced Statistics",
     "userManagement": "User Management",
     "goToDashboard": "Go to Dashboard"
@@ -74,7 +93,40 @@
     "overallProductionStatus": "Overall Production Status",
     "cuttingPhaseStatus": "Cutting Phase Status",
     "sewingPhaseStatus": "Sewing Phase Status",
-    "packagingPhaseStatus": "Packaging Phase Status"
+    "packagingPhaseStatus": "Packaging Phase Status",
+    "welcome": "Welcome back, {{username}}. Here's your overview.",
+    "stats": {
+      "totalBatches": "Total Batches",
+      "inProduction": "In Production",
+      "completed": "Completed"
+    },
+    "jobOrders": {
+      "title": "Job Orders",
+      "recent": "Recent Job Orders",
+      "loading": "Loading job orders...",
+      "none": "No job orders available.",
+      "filters": {
+        "jobOrderNumber": "Job Order Number",
+        "model": "Model",
+        "brand": "Brand",
+        "jobOrderNumberPlaceholder": "Search by number",
+        "modelPlaceholder": "Search by model",
+        "brandPlaceholder": "Search brand"
+      },
+      "columns": {
+        "number": "Number",
+        "model": "Model",
+        "brand": "Brand",
+        "expected": "Expected",
+        "working": "Working",
+        "completed": "Completed",
+        "actions": "Actions"
+      },
+      "viewDetails": "View Details"
+    },
+    "departmentOverview": "{{role}} Department Overview",
+    "pendingItems": "Pending Items",
+    "inProgressItems": "In Progress Items"
   },
   "barcode": {
     "scanning": "Scanning...",
@@ -121,6 +173,15 @@
     "updateQuantityDescription": "Scan a barcode and update its quantity using the large counter interface.",
     "secondDegreeMode": "Second Degree",
     "secondDegreeDescription": "Scan a barcode and automatically set its second degree status.",
+    "productionIssuesMode": "Production Issues",
+    "productionIssuesDescription": "Scan a barcode to add or update production issue notes for the associated job order item.",
+    "viewModeShort": "View",
+    "updateModeShort": "Update",
+    "updateQuantityShort": "Quantity",
+    "secondDegreeModeShort": "2nd Degree",
+    "productionIssuesModeShort": "Prod Issues",
+    "sessionCompleteTitle": "Session Complete!",
+    "sessionCompleteMessage": "Successfully scanned {{scanned}} out of {{expected}} expected quantity.",
     "secondDegreeSetting": "Second Degree Setting",
     "markAsSecondDegree": "Mark as Second Degree",
     "markAsFirstDegree": "Mark as First Degree",
@@ -160,6 +221,20 @@
     "batchNotFound": "Batch not found. Please check the barcode.",
     "serverError": "Server error. Please try again or contact support.",
     "failedToUpdate": "Failed to update batch. Please try again.",
+    "failedToUpdateIssueNote": "Failed to update issue note. Please try again.",
+    "failedToClearIssueNote": "Failed to clear issue note. Please try again.",
+    "enterIssueNote": "Please enter an issue note",
+    "saveIssueNote": "Save Issue Note",
+    "clearIssueNote": "Clear Notes",
+    "addIssueNote": "Add Issue Note",
+    "issueNote": "Issue Note",
+    "enterIssueNotePlaceholder": "Enter production issue details...",
+    "jobOrderItemInfo": "Job Order Item Information",
+    "itemId": "Item ID",
+    "currentNotes": "Current Notes",
+    "scanBarcodeForIssues": "Scan Barcode for Issues",
+    "productionIssuesInstructions": "Scan a barcode to view and update production issue notes for the associated job order item.",
+    "keyboardShortcuts": "Keyboard shortcuts",
     "phaseRestriction": "You can only scan items in the {role} phase",
     "noValidRows": "No valid rows to submit",
     "basicInformation": "Basic Information",
@@ -199,7 +274,16 @@
     "hideAdditionalColumns": "Hide Additional Columns",
     "showAdditionalColumns": "Show Additional Columns",
     "noBarcodesFound": "No barcodes found matching your filters.",
-    "viewArchivedBatches": "View Archived Batches",
+    "viewArchivedBatches": "View Archive",
+    "archive": {
+      "subtitle": "View archived job orders, items, and batches",
+      "tabs": {
+        "jobOrders": "Archived Job Orders",
+        "items": "Archived Items",
+        "batches": "Archived Batches"
+      },
+      "backToBarcodeManagement": "Back to Barcode Management"
+    },
     "confirmDelete": "Are you sure you want to delete this barcode?",
     "confirmBulkDelete": "Are you sure you want to delete {count} selected barcodes?",
     "selectBarcodesToDelete": "Please select at least one barcode to delete.",
@@ -264,6 +348,11 @@
     "scanned": "Scanned",
     "notScanned": "Not Scanned"
   },
+  "commonExt": {
+    "clearFilters": "Clear Filters",
+    "view": "View",
+    "viewDetails": "View Details"
+  },
   "language": {
     "english": "English",
     "arabic": "العربية",
@@ -294,10 +383,11 @@
     "submitBarcodes": "Submit Barcodes",
     "fileFormatRequirements": "File Format Requirements:",
     "excelCsvFormat": "Excel files (.xlsx, .xls) or CSV format",
-    "requiredColumns": "Required columns: client, model, size, color, quantity, layers, serial",
+    "requiredColumns": "Required columns: size, color, quantity, layers (serial numbers are auto-generated)",
     "headerRowRequired": "First row must be header row",
     "uniqueBarcodes": "Each barcode must be unique",
     "maxRecords": "Maximum 1000 records per upload",
+    "serialAutoGenerated": "Serial numbers are automatically generated based on existing batches for each job order + size + color combination",
     "duplicateBarcodesFound": "Duplicate Barcodes Found",
     "noBarcodesForPrinting": "No barcodes available for printing",
     "failedToPrint": "Failed to print barcodes",
@@ -307,6 +397,11 @@
     "networkError": "A network error occurred. Please check your connection and try again.",
     "successfullySubmitted": "Successfully submitted {count} rows. {duplicates} duplicates found. {errors} rows were skipped due to errors.",
     "printedBarcodes": "Printed {count} barcodes {times} times each on {printer}.",
+    "noValidRows": "No valid rows found in the uploaded file. Please check your data and try again.",
+    "noValidRowsToSubmit": "No valid rows to submit. Please fix the errors in your file before submitting.",
+    "noRowsToSubmit": "No rows to submit. Please upload a file with valid data.",
+    "validationComplete": "Validation complete: {count} valid rows, {errors} rows with errors.",
+    "allRowsValid": "All {count} rows are valid and ready for submission.",
     "rowNumber": "Row #",
     "brand": "Client",
     "model": "Model",
@@ -406,7 +501,40 @@
       "addNew": "Add \"{value}\"",
       "noOptionsFound": "No options found."
     },
-    "brandName": "Brand Name"
+    "brandName": "Brand Name",
+    "placeholders": {
+      "jobOrderNumber": "Search job order number...",
+      "modelName": "Search model name...",
+      "brandName": "Search brand name..."
+    },
+    "openOrders": "Open Job Orders",
+    "loadingOpenOrders": "Loading open job orders...",
+    "openOrdersShowing": "Showing {{count}} of {{total}} open job orders",
+    "issueIndicators": "Issue Indicators:",
+    "issueLegend": {
+      "P": "Production Issues (Notes)",
+      "T": "Stalled Batches (split across phase groups)",
+      "L": "Lost Quantity (Cut > Working)",
+      "S": "Second Degree (>3% threshold)",
+      "O": "Overproduction"
+    },
+    "noOpenOrdersFilteredAlt": "No open job orders match your current filters.",
+    "noOpenOrdersAlt": "No open job orders found.",
+    "archiveSelected": "Archive Selected Job Orders ({{count}})",
+    "confirmArchiveBulk": "Are you sure you want to archive {{count}} job order(s)? This will also archive all associated items and batches.",
+    "confirmArchiveSingle": "Are you sure you want to archive this job order? This will also archive all associated items and batches.",
+    "archivedSuccessfullyBulk": "Successfully archived {{count}} job order(s)",
+    "archivedSuccessfully": "Job order archived successfully",
+    "failedToArchive": "Failed to archive job orders",
+    "failedToArchiveSingle": "Failed to archive job order",
+    "selectToArchive": "Please select job orders to archive",
+    "colorSize": "Color / Size",
+    "addColorRow": "Add Color Row",
+    "addSizeColumn": "Add Size Column",
+    "addConsumptionColumn": "Add consumption column",
+    "addColumn": "Add Column",
+    "jobOrderImageOptional": "Job Order Image (optional)",
+    "viewProductionDetails": "View Production Details"
   },
   "jobOrderDetails": {
     "printingDetails": "Printing Details",
@@ -441,6 +569,22 @@
     "reopen": "Reopen",
     "confirmClose": "Are you sure you want to close this job order? This will mark it as completed.",
     "confirmReopen": "Are you sure you want to reopen this job order? This will mark it as active again.",
-    "dateCreated": "Date Created"
+    "dateCreated": "Date Created",
+    "productionSummary": "Production Summary",
+    "workingQuantity": "Working Qty",
+    "cutQuantity": "Cut Qty",
+    "secondDegree": "Second Degree",
+    "lostQuantity": "Lost Quantity",
+    "cuttingDifference": "Cutting Difference",
+    "actions": "Actions",
+    "archiveItem": "Archive this item",
+    "archivingItem": "Archiving...",
+    "overproductionIssues": "Overproduction Issues",
+    "highSecondDegreeIssues": "High Second Degree Issues",
+    "productionIssues": "Production Issues",
+    "lostQuantityIssues": "Lost Quantity Issues",
+    "completed": "Completed",
+    "remainingQuantity": "Remaining Quantity",
+    "workingQty": "Working Qty"
   }
 } 

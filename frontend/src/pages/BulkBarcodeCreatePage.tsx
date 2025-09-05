@@ -40,7 +40,7 @@ interface BarcodeEntry {
   color: string;
   quantity: number;
   layers: number;
-  serial: number;
+  serial?: number;
   status?: 'success' | 'error' | 'duplicate';
   brand_id: number;
   model_id: number;
@@ -86,11 +86,10 @@ const ErrorDisplay: React.FC<ErrorDisplayProps> = ({ errors, className, showAllC
                     <TableRow className="bg-red-50">
                       <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('bulkBarcode.rowNumber')}</TableHead>
                       <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('common.error')}</TableHead>
-                      <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('bulkBarcode.size')}</TableHead>
-                      <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('bulkBarcode.color')}</TableHead>
-                      <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('barcode.quantity')}</TableHead>
-                      <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('bulkBarcode.layers')}</TableHead>
-                      <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('bulkBarcode.serial')}</TableHead>
+                                              <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('bulkBarcode.size')}</TableHead>
+                        <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('bulkBarcode.color')}</TableHead>
+                        <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('barcode.quantity')}</TableHead>
+                        <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('bulkBarcode.layers')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -102,7 +101,6 @@ const ErrorDisplay: React.FC<ErrorDisplayProps> = ({ errors, className, showAllC
                         <TableCell className="md:px-4 md:py-2 px-2 py-1">{detail.data?.color}</TableCell>
                         <TableCell className="md:px-4 md:py-2 px-2 py-1">{detail.data?.quantity}</TableCell>
                         <TableCell className="md:px-4 md:py-2 px-2 py-1">{detail.data?.layers}</TableCell>
-                        <TableCell className="md:px-4 md:py-2 px-2 py-1">{detail.data?.serial}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -130,16 +128,8 @@ const BulkBarcodeCreatePage: React.FC = () => {
       'Missing required fields:': t('bulkBarcode.errors.missingRequiredFields'),
       'Quantity must be a positive number': t('bulkBarcode.errors.quantityPositive'),
       'Layers must be a positive number': t('bulkBarcode.errors.layersPositive'),
-      'Serial must be a positive number': t('bulkBarcode.errors.serialPositive'),
       'Quantity must be a valid number': t('bulkBarcode.errors.quantityValid'),
       'Layers must be a valid number': t('bulkBarcode.errors.layersValid'),
-      'Serial must be a valid number': t('bulkBarcode.errors.serialValid'),
-      'Quantity, layers, and serial must be valid numbers': t('bulkBarcode.errors.allNumericValid'),
-      'Serial must not be empty': t('bulkBarcode.errors.serialNotEmpty'),
-      'Serial must be 0 or greater': t('bulkBarcode.errors.serialMin'),
-      'Serial must be 999 or less': t('bulkBarcode.errors.serialMax'),
-      'Serial must be a valid number': t('bulkBarcode.errors.serialValidNumber'),
-      'Serial number cannot exceed 3 digits after formatting.': t('bulkBarcode.errors.serialMaxDigits'),
       'Missing required columns:': t('bulkBarcode.errors.missingRequiredColumns'),
       'Job order not found.': t('bulkBarcode.errors.jobOrderNotFound'),
       'The uploaded file is empty.': t('bulkBarcode.errors.emptyFile'),
@@ -369,14 +359,19 @@ const BulkBarcodeCreatePage: React.FC = () => {
       
       setErrorRows(translatedErrorRows);
       
-      if (error_rows.length > 0) {
+      // Check if there are any valid rows
+      if (valid_rows.length === 0) {
+        // No valid rows - show error message
+        const errorMessage = t('bulkBarcode.noValidRows');
+        setErrors([{
+          message: errorMessage,
+          details: translatedErrorRows
+        }]);
+        setSubmitMessage('');
+        setIsSubmitted(false);
+      } else if (error_rows.length > 0) {
+        // Some rows have errors but there are valid rows too
         const errorMessage = t('bulkBarcode.foundErrors', { count: error_rows.length });
-        console.log('Translation debug:', {
-          key: 'bulkBarcode.foundErrors',
-          count: error_rows.length,
-          result: errorMessage,
-          currentLanguage: i18n.language
-        });
         
         // Fallback if interpolation doesn't work
         const finalMessage = errorMessage.includes('{count}') 
@@ -387,26 +382,31 @@ const BulkBarcodeCreatePage: React.FC = () => {
           message: finalMessage,
           details: translatedErrorRows
         }]);
+        
+        // Show validation summary message
+        const successMessage = t('bulkBarcode.validationComplete', {
+          count: valid_rows.length,
+          errors: error_rows.length
+        })
+        .replace('{count}', String(valid_rows.length))
+        .replace('{errors}', String(error_rows.length));
+
+        setSubmitMessage(successMessage);
+        setIsSubmitted(false); // Don't mark as submitted if there are errors
+      } else {
+        // All rows are valid
+        const successMessage = t('bulkBarcode.allRowsValid', {
+          count: valid_rows.length
+        })
+        .replace('{count}', String(valid_rows.length));
+
+        setSubmitMessage(successMessage);
+        setIsSubmitted(false); // Don't mark as submitted until user clicks submit button
       }
 
       const updatedPreview = updatePreviewWithStatus(preview, valid_rows, response);
       setPreview(updatedPreview);
       
-      const duplicates = response.data.duplicate_barcodes.length;
-      const validCount = valid_rows.length;
-      const errorCount = preview.length - validCount;
-
-      const successMessage = t('bulkBarcode.successfullySubmitted', {
-        count: validCount,
-        duplicates: duplicates,
-        errors: errorCount
-      })
-      .replace('{count}', String(validCount))
-      .replace('{duplicates}', String(duplicates))
-      .replace('{errors}', String(errorCount));
-
-      setSubmitMessage(successMessage);
-      setIsSubmitted(true);
     } catch (err: any) {
       if (err.response && err.response.data) {
         const { status, data } = err.response;
@@ -447,9 +447,10 @@ const BulkBarcodeCreatePage: React.FC = () => {
       color_id: row.color_id,
       quantity: row.quantity,
       layers: row.layers,
-      serial: row.serial,
+      serial: row.serial ? String(row.serial).padStart(3, '0') : '001', // Convert to string and pad with zeros
       current_phase: 1, // Default to first phase (Cutting)
-      status: 'Pending' // Default status for new batches
+      status: 'In Progress' // Default status for new batches
+
     }));
   };
 
@@ -470,9 +471,21 @@ const BulkBarcodeCreatePage: React.FC = () => {
   };
 
   const handleSubmit = async () => {
-    const validation = validateRows(preview);
-    if (!validation.isValid) {
-      setErrors([{ message: validation.error }]);
+    // Check if there are any valid rows to submit
+    const validRows = preview.filter(row => row.status === 'success');
+    
+    if (validRows.length === 0) {
+      // No valid rows to submit
+      if (errorRows.length > 0) {
+        // There are error rows - show the error details
+        setErrors([{ 
+          message: t('bulkBarcode.noValidRowsToSubmit'),
+          details: errorRows
+        }]);
+      } else {
+        // No rows at all
+        setErrors([{ message: t('bulkBarcode.noRowsToSubmit') }]);
+      }
       return;
     }
 
@@ -480,15 +493,15 @@ const BulkBarcodeCreatePage: React.FC = () => {
       setIsSubmitting(true);
       setErrors([]);
       
-      const submitData = transformRowsForSubmission(validation.validRows);
+      const submitData = transformRowsForSubmission(validRows);
       const response = await api.post('/barcodes/bulk/submit', submitData);
       
-      const updatedPreview = updatePreviewWithStatus(preview, validation.validRows, response);
+      const updatedPreview = updatePreviewWithStatus(preview, validRows, response);
       setPreview(updatedPreview);
       
-      const duplicates = response.data.duplicate_barcodes.length;
-      const validCount = validation.validRows.length;
-      const errorCount = preview.length - validCount;
+      const duplicates = response.data.duplicate_barcodes?.length || 0;
+      const validCount = validRows.length;
+      const errorCount = errorRows.length;
 
       const successMessage = t('bulkBarcode.successfullySubmitted', {
         count: validCount,
@@ -553,7 +566,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
           color: item.color,
           quantity: item.quantity,
           layers: item.layers,
-          serial: item.serial
+          serial: item.serial || 1
         }));
 
       if (barcodesToPrint.length === 0) {
@@ -711,7 +724,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
             </div>
           )}
 
-          {!isLoading && preview.length > 0 && (
+          {!isLoading && (preview.length > 0 || errorRows.length > 0) && (
             <div className="mb-6">
               <h2 className="text-lg font-semibold mb-3">{t('bulkBarcode.previewData')}</h2>
               {submitMessage && (
@@ -728,12 +741,6 @@ const BulkBarcodeCreatePage: React.FC = () => {
                     errors={[{
                       message: (() => {
                         const errorMessage = t('bulkBarcode.foundErrors', { count: errorRows.length });
-                        console.log('Translation debug (ErrorDisplay):', {
-                          key: 'bulkBarcode.foundErrors',
-                          count: errorRows.length,
-                          result: errorMessage,
-                          currentLanguage: i18n.language
-                        });
                         
                         // Fallback if interpolation doesn't work
                         return errorMessage.includes('{count}') 
@@ -747,8 +754,9 @@ const BulkBarcodeCreatePage: React.FC = () => {
                 </div>
               )}
               
-              {/* Main Preview Table */}
-              <div className="border rounded-md">
+              {/* Main Preview Table - Only show if there are valid rows */}
+              {preview.length > 0 && (
+                <div className="border rounded-md">
                 <div className="flex justify-end mb-2">
                   <button
                     onClick={() => setShowAllColumns(!showAllColumns)}
@@ -784,7 +792,6 @@ const BulkBarcodeCreatePage: React.FC = () => {
                         <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.color')}</TableHead>
                         <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('barcode.quantity')}</TableHead>
                         <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.layers')}</TableHead>
-                        <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.serial')}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -812,7 +819,6 @@ const BulkBarcodeCreatePage: React.FC = () => {
                           <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.color}</TableCell>
                           <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.quantity}</TableCell>
                           <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.layers}</TableCell>
-                          <TableCell className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{entry.serial}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -820,6 +826,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                 </div>
                 {totalPages > 1 && renderPagination(currentPage, totalPages, handlePageChange)}
               </div>
+              )}
               
               {isSubmitted && (
                 <div className="flex flex-wrap gap-2 items-center justify-end mt-4">
@@ -892,10 +899,10 @@ const BulkBarcodeCreatePage: React.FC = () => {
                     type="button"
                     className={cn(
                       "btn-primary",
-                      (errorRows.length > 0) && "opacity-50 cursor-not-allowed bg-gray-400 hover:bg-gray-400"
+                      (preview.length === 0 || preview.filter(row => row.status === 'success').length === 0) && "opacity-50 cursor-not-allowed bg-gray-400 hover:bg-gray-400"
                     )}
                     onClick={handleSubmit}
-                    disabled={isSubmitting || preview.length === 0 || validateRows(preview).validRows?.length === 0 || errorRows.length > 0}
+                    disabled={isSubmitting || preview.length === 0 || preview.filter(row => row.status === 'success').length === 0}
                   >
                     {isSubmitting ? (
                       <span className="flex items-center">
@@ -923,6 +930,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                 <li>{t('bulkBarcode.headerRowRequired')}</li>
                 <li>{t('bulkBarcode.uniqueBarcodes')}</li>
                 <li>{t('bulkBarcode.maxRecords')}</li>
+                <li className="text-green-600 font-medium">{t('bulkBarcode.serialAutoGenerated')}</li>
               </ul>
             </div>
           )}
@@ -955,7 +963,6 @@ const BulkBarcodeCreatePage: React.FC = () => {
                     <TableHead>{t('bulkBarcode.color')}</TableHead>
                     <TableHead>{t('barcode.quantity')}</TableHead>
                     <TableHead>{t('bulkBarcode.layers')}</TableHead>
-                    <TableHead>{t('bulkBarcode.serial')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -968,7 +975,6 @@ const BulkBarcodeCreatePage: React.FC = () => {
                       <TableCell>{item.color}</TableCell>
                       <TableCell>{item.quantity}</TableCell>
                       <TableCell>{item.layers}</TableCell>
-                      <TableCell>{item.serial}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

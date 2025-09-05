@@ -4,6 +4,8 @@ from typing import List
 from .crud import *
 from . import schemas
 from .database import get_db
+from .core.deps import get_current_active_user
+from . import models
 import os
 import pandas as pd
 from fastapi.responses import FileResponse, StreamingResponse
@@ -81,11 +83,11 @@ def read_batches(skip: int = 0, limit: int = 100, db: Session = Depends(get_db))
     return batches
 
 @router.post("/batches/", response_model=schemas.Batch)
-def create_batch(batch: schemas.BatchCreate, db: Session = Depends(get_db)):
+def create_batch(batch: schemas.BatchCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
     db_batch = get_batch_by_barcode(db, barcode=batch.barcode)
     if db_batch:
         raise HTTPException(status_code=400, detail="Batch with this barcode already exists")
-    return create_batch(db=db, batch=batch)
+    return create_batch(db=db, batch=batch, user_id=current_user.user_id)
 
 @router.get("/batches/{batch_id}", response_model=schemas.BatchResponse)
 def read_batch(batch_id: int, db: Session = Depends(get_db)):
@@ -124,11 +126,11 @@ def delete_batch(batch_id: int, db: Session = Depends(get_db)):
 
 # Bulk batch creation
 @router.post("/batches/bulk", response_model=List[schemas.Batch])
-async def create_bulk_batches(batches: List[schemas.BatchCreate], db: Session = Depends(get_db)):
+async def create_bulk_batches(batches: List[schemas.BatchCreate], db: Session = Depends(get_db), current_user: models.User = Depends(get_current_active_user)):
     """Create multiple batches from pre-processed data"""
     created_batches = []
     for batch in batches:
-        db_batch = create_batch(db=db, batch=batch)
+        db_batch = create_batch(db=db, batch=batch, user_id=current_user.user_id)
         created_batches.append(db_batch)
     return created_batches
 
@@ -144,8 +146,7 @@ async def download_barcode_template():
             'size': ['Example Size'],
             'color': ['Example Color'],
             'quantity': [1],
-            'layers': [1],
-            'serial': [1]
+            'layers': [1]
         })
         
         # Create a BytesIO object to store the Excel file
@@ -166,8 +167,7 @@ async def download_barcode_template():
                 'C1': 'Size value (required)',
                 'D1': 'Color name (required)',
                 'E1': 'Quantity (required, 1-999)',
-                'F1': 'Layers (required, 1-99)',
-                'G1': 'Serial number (required, 1-999)'
+                'F1': 'Layers (required, 1-99)'
             }
             
             # Add descriptions as comments
@@ -230,7 +230,8 @@ async def process_bulk_barcodes(
 @router.post("/barcodes/bulk/submit", response_model=List[schemas.BatchResponse])
 async def submit_bulk_barcodes(
     barcodes: List[schemas.BatchCreate],
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
 ):
     """Submit processed barcodes to create batches"""
     created_batches = []
@@ -242,6 +243,6 @@ async def submit_bulk_barcodes(
                 status_code=400,
                 detail=f"Barcode {barcode.barcode} already exists"
             )
-        created_batch = create_batch(db, barcode)
+        created_batch = create_batch(db, barcode, user_id=current_user.user_id)
         created_batches.append(created_batch)
     return created_batches 

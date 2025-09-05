@@ -5,9 +5,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
 import { Label } from '../components/ui/label';
 import { Card, CardContent } from '../components/ui/card';
-import { Eye, Edit3, Scan, Keyboard, Package, RefreshCw, Play, Square } from 'lucide-react';
+import { Eye, Edit3, Scan, Keyboard, Package, RefreshCw, Play, Square, AlertTriangle } from 'lucide-react';
 
-type ScannerMode = 'view' | 'update' | 'updateQuantity' | 'secondDegree';
+type ScannerMode = 'view' | 'update' | 'updateQuantity' | 'secondDegree' | 'productionIssues';
 type InputMode = 'manual' | 'scanner';
 
 const STATUS_OPTIONS = ['Pending', 'In Progress', 'Completed'];
@@ -23,8 +23,10 @@ interface SessionData {
   initialBarcode: string;
   jobOrderId: number | null;
   colorId: number | null;
+  sizeId: number | null;
   expectedQuantity: number;
   scannedQuantity: number;
+  remainingQuantity: number;
   scannedBarcodes: string[];
   isActive: boolean;
 }
@@ -53,6 +55,19 @@ const BarcodeScannerPage: React.FC = () => {
   const [isSecondDegreeMode, setIsSecondDegreeMode] = useState(false);
   const [secondDegreeToggle, setSecondDegreeToggle] = useState(true);
   
+  // Production Issues mode state
+  const [issueNote, setIssueNote] = useState<string>('');
+  const [isAddingIssueNote, setIsAddingIssueNote] = useState(false);
+  const [currentJobOrderItem, setCurrentJobOrderItem] = useState<{
+    item_id: number;
+    job_order_id: number;
+    color_id: number;
+    size_id: number;
+    expected_quantity: number;
+    notes?: string;
+  } | null>(null);
+  const [showIssueNoteDialog, setShowIssueNoteDialog] = useState(false);
+  
   // Session mode state
   const [sessionData, setSessionData] = useState<SessionData>({
     phase: 1,
@@ -60,8 +75,10 @@ const BarcodeScannerPage: React.FC = () => {
     initialBarcode: '',
     jobOrderId: null,
     colorId: null,
+    sizeId: null,
     expectedQuantity: 0,
     scannedQuantity: 0,
+    remainingQuantity: 0,
     scannedBarcodes: [],
     isActive: false
   });
@@ -74,15 +91,23 @@ const BarcodeScannerPage: React.FC = () => {
         setSelectedPhase(1);
         setSessionData(prev => ({ ...prev, phase: 1 }));
       } else {
-        // Map role to phase ID
-        const roleToPhaseId: { [key: string]: number } = {
-          'Cutting': 1,
-          'Sewing': 2,
-          'Packaging': 3
-        };
-        const phaseId = roleToPhaseId[user.role] || 1;
-        setSelectedPhase(phaseId);
-        setSessionData(prev => ({ ...prev, phase: phaseId }));
+        // Get the default phase for the user's role
+        let defaultPhaseId: number;
+        switch (user.role) {
+          case 'Cutting':
+            defaultPhaseId = 1; // Cutting
+            break;
+          case 'Sewing':
+            defaultPhaseId = 2; // Sewing line 1
+            break;
+          case 'Packaging':
+            defaultPhaseId = 8; // Packaging
+            break;
+          default:
+            defaultPhaseId = 1; // Default to cutting
+        }
+        setSelectedPhase(defaultPhaseId);
+        setSessionData(prev => ({ ...prev, phase: defaultPhaseId }));
       }
     }
   }, [user, mode]);
@@ -90,7 +115,7 @@ const BarcodeScannerPage: React.FC = () => {
   // Ensure input is always focused
   useEffect(() => {
     const focusInput = () => {
-      if (barcodeInputRef.current) {
+      if (barcodeInputRef.current && !showIssueNoteDialog) {
         barcodeInputRef.current.focus();
       }
     };
@@ -110,11 +135,15 @@ const BarcodeScannerPage: React.FC = () => {
       window.removeEventListener('keydown', focusInput);
       clearInterval(focusInterval);
     };
-  }, []);
+  }, [showIssueNoteDialog]);
 
   // Auto-capture barcode input - only active in scanner mode
   useEffect(() => {
-    if (inputMode !== 'scanner') {
+    if (inputMode !== 'scanner' || showIssueNoteDialog) {
+      // If dialog is open, blur the barcode input to prevent auto-capture
+      if (showIssueNoteDialog && barcodeInputRef.current) {
+        barcodeInputRef.current.blur();
+      }
       return;
     }
 
@@ -181,7 +210,7 @@ const BarcodeScannerPage: React.FC = () => {
         clearTimeout(scanTimeoutRef.current);
       }
     };
-  }, [inputMode]);
+  }, [inputMode, showIssueNoteDialog]);
 
   // Fetch phases from backend
   useEffect(() => {
@@ -250,13 +279,8 @@ const BarcodeScannerPage: React.FC = () => {
           if (mode === 'update') {
             // Validate phase selection for non-admin users
             if (user && user.role !== 'Admin') {
-              const roleToPhaseId: { [key: string]: number } = {
-                'Cutting': 1,
-                'Sewing': 2,
-                'Packaging': 3
-              };
-              const allowedPhaseId = roleToPhaseId[user.role];
-              if (selectedPhase !== allowedPhaseId) {
+              const allowedPhases = getAllowedPhasesForRole(user.role);
+              if (!allowedPhases.includes(selectedPhase)) {
                 setError(t('barcode.phaseRestriction', { role: user.role }));
                 return;
               }
@@ -275,6 +299,20 @@ const BarcodeScannerPage: React.FC = () => {
             console.log('Second Degree mode - updateData:', updateData);
             console.log('secondDegreeToggle value:', secondDegreeToggle);
             console.log('Current mode:', mode);
+          } else if (mode === 'productionIssues') {
+            // For production issues mode, we need to get the job order item and show the note input
+            try {
+              const jobOrderItem = await barcodeApi.getJobOrderItemByBarcode(barcodeToSubmit);
+              setCurrentJobOrderItem(jobOrderItem);
+              setIssueNote(jobOrderItem.notes || '');
+              setShowIssueNoteDialog(true);
+              // Don't make any batch updates in this mode, just show the interface
+              return;
+            } catch (err) {
+              setError(t('barcode.failedToGetJobOrderItem'));
+              console.error('Failed to get job order item:', err);
+              return;
+            }
           }
           // Note: updateQuantity mode is handled separately in handleQuantityUpdate function
           
@@ -331,30 +369,32 @@ const BarcodeScannerPage: React.FC = () => {
     if (!sessionData.isActive) {
       // First scan - initialize session
       try {
-        // Calculate total expected quantity from all job order items with same job order ID and color ID
-        const totalExpectedQuantity = await calculateTotalExpectedQuantity(data.job_order_id, data.color_id);
+        // Always update the batch with the selected phase and status for the session
+        const updateData = {
+          current_phase: sessionData.phase,
+          status: sessionData.status
+        };
         
-        if (totalExpectedQuantity > 0) {
-          // Always update the batch with the selected phase and status for the session
-          const updateData = {
-            current_phase: sessionData.phase,
-            status: sessionData.status
-          };
-          
-          const updatedBatch = await barcodeApi.updateBarcode(barcodeToSubmit, updateData);
-          
-          // Update the barcode data with the updated batch information
-          setBarcodeData(updatedBatch);
-          setCurrentPhase(updatedBatch.current_phase);
-          setStatus(updatedBatch.status);
-          
+        const updatedBatch = await barcodeApi.updateBarcode(barcodeToSubmit, updateData);
+        
+        // Update the barcode data with the updated batch information
+        setBarcodeData(updatedBatch);
+        setCurrentPhase(updatedBatch.current_phase);
+        setStatus(updatedBatch.status);
+        
+        // Calculate remaining quantity AFTER the batch is updated in the database
+        const remainingData = await calculateRemainingQuantity(data.job_order_id, data.color_id, data.size_id, sessionData.phase, sessionData.status);
+        
+        if (remainingData.job_order_item_quantity > 0) {
           setSessionData(prev => ({
             ...prev,
             initialBarcode: barcodeToSubmit,
             jobOrderId: data.job_order_id,
             colorId: data.color_id,
-            expectedQuantity: totalExpectedQuantity,
+            sizeId: data.size_id,
+            expectedQuantity: remainingData.job_order_item_quantity,
             scannedQuantity: data.quantity,
+            remainingQuantity: remainingData.remaining_quantity,
             scannedBarcodes: [barcodeToSubmit],
             isActive: true
           }));
@@ -375,8 +415,8 @@ const BarcodeScannerPage: React.FC = () => {
           return;
         }
         
-        // Check if barcode matches the session (same job order and color)
-        if (data.job_order_id === sessionData.jobOrderId && data.color_id === sessionData.colorId) {
+        // Check if barcode matches the session (same job order, color, and size)
+        if (data.job_order_id === sessionData.jobOrderId && data.color_id === sessionData.colorId && data.size_id === sessionData.sizeId) {
           // Always update the batch with the selected phase and status for the session
           const updateData = {
             current_phase: sessionData.phase,
@@ -390,10 +430,14 @@ const BarcodeScannerPage: React.FC = () => {
           setCurrentPhase(updatedBatch.current_phase);
           setStatus(updatedBatch.status);
           
-          // Barcode matches - increment quantity counter
+          // Calculate remaining quantity AFTER the batch is updated in the database
+          const remainingData = await calculateRemainingQuantity(data.job_order_id, data.color_id, data.size_id, sessionData.phase, sessionData.status);
+          
+          // Barcode matches - increment quantity counter and update remaining quantity
           setSessionData(prev => ({
             ...prev,
             scannedQuantity: prev.scannedQuantity + data.quantity,
+            remainingQuantity: remainingData.remaining_quantity,
             scannedBarcodes: [...prev.scannedBarcodes, barcodeToSubmit]
           }));
           setError('');
@@ -415,6 +459,20 @@ const BarcodeScannerPage: React.FC = () => {
     } catch (err) {
       console.error('Error calculating total expected quantity from batches:', err);
       return 0;
+    }
+  };
+
+  // Helper function to calculate remaining quantity for job order items not in selected phase-status
+  const calculateRemainingQuantity = async (jobOrderId: number, colorId: number, sizeId: number, phaseId: number, status: string): Promise<{ remaining_quantity: number; job_order_item_quantity: number }> => {
+    try {
+      const remainingData = await barcodeApi.getRemainingQuantityForPhaseStatus(jobOrderId, colorId, sizeId, phaseId, status);
+      return {
+        remaining_quantity: remainingData.remaining_quantity,
+        job_order_item_quantity: remainingData.job_order_item_quantity
+      };
+    } catch (err) {
+      console.error('Error calculating remaining quantity:', err);
+      return { remaining_quantity: 0, job_order_item_quantity: 0 };
     }
   };
 
@@ -477,13 +535,8 @@ const BarcodeScannerPage: React.FC = () => {
           if (mode === 'update') {
             // Validate phase selection for non-admin users
             if (user && user.role !== 'Admin') {
-              const roleToPhaseId: { [key: string]: number } = {
-                'Cutting': 1,
-                'Sewing': 2,
-                'Packaging': 3
-              };
-              const allowedPhaseId = roleToPhaseId[user.role];
-              if (selectedPhase !== allowedPhaseId) {
+              const allowedPhases = getAllowedPhasesForRole(user.role);
+              if (!allowedPhases.includes(selectedPhase)) {
                 setError(t('barcode.phaseRestriction', { role: user.role }));
                 return;
               }
@@ -502,6 +555,20 @@ const BarcodeScannerPage: React.FC = () => {
             console.log('Second Degree mode (handleSubmit) - updateData:', updateData);
             console.log('secondDegreeToggle value:', secondDegreeToggle);
             console.log('Current mode:', mode);
+          } else if (mode === 'productionIssues') {
+            // For production issues mode, we need to get the job order item and show the note input
+            try {
+              const jobOrderItem = await barcodeApi.getJobOrderItemByBarcode(currentBarcode);
+              setCurrentJobOrderItem(jobOrderItem);
+              setIssueNote(jobOrderItem.notes || '');
+              setShowIssueNoteDialog(true);
+              // Don't make any batch updates in this mode, just show the interface
+              return;
+            } catch (err) {
+              setError(t('barcode.failedToGetJobOrderItem'));
+              console.error('Failed to get job order item:', err);
+              return;
+            }
           }
           // Note: updateQuantity mode is handled separately in handleQuantityUpdate function
           
@@ -567,6 +634,9 @@ const BarcodeScannerPage: React.FC = () => {
     setStatus('');
     setQuantity(0);
     setSecondDegreeToggle(true);
+    setIssueNote('');
+    setCurrentJobOrderItem(null);
+    setShowIssueNoteDialog(false);
     if (barcodeInputRef.current) {
       barcodeInputRef.current.focus();
     }
@@ -597,7 +667,7 @@ const BarcodeScannerPage: React.FC = () => {
 
   const getPhaseName = (phaseId: number) => {
     const phase = phases.find(p => p.id === phaseId);
-    return phase ? phase.name : 'Unknown';
+    return phase ? phase.name : t('common.unknown');
   };
 
   const getStatusName = (status: string) => {
@@ -606,6 +676,22 @@ const BarcodeScannerPage: React.FC = () => {
     if (status === 'Pending') return t('status.pending');
     if (status === 'Completed') return t('status.completed');
     return status; // fallback
+  };
+
+  // Helper function to get allowed phases for each role
+  const getAllowedPhasesForRole = (role: string): number[] => {
+    switch (role) {
+      case 'Admin':
+        return [1, 2, 3, 4, 7, 8]; // All phases: Cutting, Sewing lines 1-4, Packaging
+      case 'Cutting':
+        return [1]; // Only cutting
+      case 'Sewing':
+        return [2, 3, 4, 7, 8]; // All sewing lines (2,3,4,7) and packaging
+      case 'Packaging':
+        return [8]; // Only packaging
+      default:
+        return [1]; // Default to cutting
+    }
   };
 
   // New function to handle quantity update
@@ -661,10 +747,142 @@ const BarcodeScannerPage: React.FC = () => {
     setQuantity(Math.max(0, value));
   };
 
+  // Production Issues functions
+  const handleSaveIssueNote = async () => {
+    if (!currentJobOrderItem || !issueNote.trim()) {
+      setError(t('barcode.enterIssueNote'));
+      return;
+    }
+
+    setIsAddingIssueNote(true);
+    setError('');
+
+    try {
+      await jobOrderApi.updateItemNotes(currentJobOrderItem.item_id, issueNote);
+      
+      // Show success message
+      setError('');
+      
+      // Clear the form and close dialog
+      setCurrentJobOrderItem(null);
+      setIssueNote('');
+      setShowIssueNoteDialog(false);
+      
+      // Focus back to barcode input for next scan
+      if (barcodeInputRef.current) {
+        barcodeInputRef.current.focus();
+      }
+    } catch (updateErr: any) {
+      if (updateErr.response?.status === 404) {
+        setError(t('barcode.jobOrderItemNotFound'));
+      } else if (updateErr.response?.status === 500) {
+        setError(t('barcode.serverError'));
+      } else {
+        setError(t('barcode.failedToUpdateIssueNote'));
+      }
+      console.error('Failed to update issue note:', updateErr);
+    } finally {
+      setIsAddingIssueNote(false);
+    }
+  };
+
+  const handleClearIssueNote = async () => {
+    if (!currentJobOrderItem) {
+      return;
+    }
+
+    setIsAddingIssueNote(true);
+    setError('');
+
+    try {
+      await jobOrderApi.updateItemNotes(currentJobOrderItem.item_id, '');
+      
+      // Show success message
+      setError('');
+      
+      // Clear the form and close dialog
+      setCurrentJobOrderItem(null);
+      setIssueNote('');
+      setShowIssueNoteDialog(false);
+      
+      // Focus back to barcode input for next scan
+      if (barcodeInputRef.current) {
+        barcodeInputRef.current.focus();
+      }
+    } catch (updateErr: any) {
+      if (updateErr.response?.status === 404) {
+        setError(t('barcode.jobOrderItemNotFound'));
+      } else if (updateErr.response?.status === 500) {
+        setError(t('barcode.serverError'));
+      } else {
+        setError(t('barcode.failedToClearIssueNote'));
+      }
+      console.error('Failed to clear issue note:', updateErr);
+    } finally {
+      setIsAddingIssueNote(false);
+    }
+  };
+
+  const handleCancelIssueNote = () => {
+    setShowIssueNoteDialog(false);
+    setCurrentJobOrderItem(null);
+    setIssueNote('');
+    setError('');
+    // Focus back to barcode input
+    if (barcodeInputRef.current) {
+      barcodeInputRef.current.focus();
+    }
+  };
+
+  // Handle keyboard events for the popup dialog
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (showIssueNoteDialog) {
+        if (e.key === 'Escape') {
+          handleCancelIssueNote();
+        }
+      }
+    };
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (showIssueNoteDialog) {
+        const target = e.target as HTMLElement;
+        if (target.classList.contains('dialog-overlay')) {
+          handleCancelIssueNote();
+        }
+      }
+    };
+
+    // Prevent any keyboard input from being captured by barcode field when dialog is open
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (showIssueNoteDialog) {
+        // Prevent the event from reaching the barcode input field
+        e.stopPropagation();
+      }
+    };
+
+    if (showIssueNoteDialog) {
+      document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleGlobalKeyDown, true); // Use capture phase
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleGlobalKeyDown, true);
+    };
+  }, [showIssueNoteDialog, issueNote, isAddingIssueNote]);
+
   // Reset quantity when mode changes
   useEffect(() => {
     if (mode !== 'updateQuantity') {
       setQuantity(0);
+    }
+    if (mode !== 'productionIssues') {
+      setIssueNote('');
+      setCurrentJobOrderItem(null);
+      setShowIssueNoteDialog(false);
     }
   }, [mode]);
 
@@ -702,7 +920,7 @@ const BarcodeScannerPage: React.FC = () => {
                 >
                   <Eye className="inline-block w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
                   <span className="hidden sm:inline">{t('barcode.viewMode')}</span>
-                  <span className="sm:hidden">View</span>
+                  <span className="sm:hidden">{t('barcode.viewModeShort')}</span>
                 </button>
                 <button
                   onClick={() => {
@@ -720,8 +938,10 @@ const BarcodeScannerPage: React.FC = () => {
                       initialBarcode: '',
                       jobOrderId: null,
                       colorId: null,
+                      sizeId: null,
                       expectedQuantity: 0,
                       scannedQuantity: 0,
+                      remainingQuantity: 0,
                       scannedBarcodes: [],
                       isActive: false
                     });
@@ -734,7 +954,7 @@ const BarcodeScannerPage: React.FC = () => {
                 >
                   <Edit3 className="inline-block w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
                   <span className="hidden sm:inline">{t('barcode.updateMode')}</span>
-                  <span className="sm:hidden">Update</span>
+                  <span className="sm:hidden">{t('barcode.updateModeShort')}</span>
                 </button>
                 <button
                   onClick={() => {
@@ -754,7 +974,7 @@ const BarcodeScannerPage: React.FC = () => {
                 >
                   <Package className="inline-block w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
                   <span className="hidden sm:inline">{t('barcode.updateQuantityMode')}</span>
-                  <span className="sm:hidden">Quantity</span>
+                  <span className="sm:hidden">{t('barcode.updateQuantityShort')}</span>
                 </button>
                 <button
                   onClick={() => {
@@ -774,7 +994,30 @@ const BarcodeScannerPage: React.FC = () => {
                 >
                   <RefreshCw className="inline-block w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
                   <span className="hidden sm:inline">{t('barcode.secondDegreeMode')}</span>
-                  <span className="sm:hidden">2nd Degree</span>
+                  <span className="sm:hidden">{t('barcode.secondDegreeModeShort')}</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setMode('productionIssues');
+                    setBarcode('');
+                    setBarcodeData(null);
+                    setError('');
+                    setScanned(false);
+                    setQuantity(0);
+                    setSecondDegreeToggle(true);
+                    setIssueNote('');
+                    setCurrentJobOrderItem(null);
+                    setShowIssueNoteDialog(false);
+                  }}
+                  className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
+                    mode === 'productionIssues'
+                      ? 'bg-green text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  <AlertTriangle className="inline-block w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">{t('barcode.productionIssuesMode')}</span>
+                  <span className="sm:hidden">{t('barcode.productionIssuesModeShort')}</span>
                 </button>
               </div>
             </div>
@@ -792,6 +1035,12 @@ const BarcodeScannerPage: React.FC = () => {
             {mode === 'secondDegree' && (
               <div className="text-sm text-gray-600">
                 <p>{t('barcode.secondDegreeDescription')}</p>
+              </div>
+            )}
+
+            {mode === 'productionIssues' && (
+              <div className="text-sm text-gray-600">
+                <p>{t('barcode.productionIssuesDescription')}</p>
               </div>
             )}
 
@@ -857,7 +1106,9 @@ const BarcodeScannerPage: React.FC = () => {
                       {t('barcode.phase')}
                     </Label>
                     <div className="flex flex-wrap gap-2">
-                      {phases.map((phase) => (
+                      {phases
+                        .filter(phase => user?.role === 'Admin' || getAllowedPhasesForRole(user?.role || '').includes(phase.id))
+                        .map((phase) => (
                         <button
                           key={phase.id}
                           onClick={() => {
@@ -875,7 +1126,7 @@ const BarcodeScannerPage: React.FC = () => {
                               : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                           }`}
                         >
-                            {phase.name}
+                          {phase.name}
                         </button>
                       ))}
                     </div>
@@ -977,6 +1228,7 @@ const BarcodeScannerPage: React.FC = () => {
               className="input-field flex-grow"
               placeholder={t('barcode.scanOrEnter')}
               autoFocus
+              disabled={showIssueNoteDialog}
             />
             <button
               type="button"
@@ -1109,8 +1361,10 @@ const BarcodeScannerPage: React.FC = () => {
                       initialBarcode: '',
                       jobOrderId: null,
                       colorId: null,
+                      sizeId: null,
                       expectedQuantity: 0,
                       scannedQuantity: 0,
+                      remainingQuantity: 0,
                       scannedBarcodes: []
                     }));
                     }}
@@ -1154,7 +1408,8 @@ const BarcodeScannerPage: React.FC = () => {
                     </div>
                     <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg text-center">
                       <h4 className="text-sm font-medium text-purple-800 mb-2">{t('barcode.remaining')}</h4>
-                      <p className="text-2xl font-bold text-purple-900">{Math.max(0, sessionData.expectedQuantity - sessionData.scannedQuantity)}</p>
+                      <p className="text-2xl font-bold text-purple-900">{sessionData.remainingQuantity}</p>
+                      <p className="text-xs text-purple-600 mt-1">Not in {getPhaseName(sessionData.phase)} - {getStatusName(sessionData.status)}</p>
                     </div>
                   </div>
 
@@ -1162,17 +1417,17 @@ const BarcodeScannerPage: React.FC = () => {
                   <div className="w-full bg-gray-200 rounded-full h-4 relative">
                     <div 
                       className={`h-4 rounded-full transition-all duration-300 ${
-                        sessionData.scannedQuantity >= sessionData.expectedQuantity 
+                        sessionData.remainingQuantity <= 0 
                           ? 'bg-green-600' 
                           : 'bg-blue-600'
                       }`}
                       style={{ 
-                        width: `${Math.min(100, (sessionData.scannedQuantity / sessionData.expectedQuantity) * 100)}%` 
+                        width: `${Math.min(100, ((sessionData.expectedQuantity - sessionData.remainingQuantity) / sessionData.expectedQuantity) * 100)}%` 
                       }}
                     ></div>
-                    {sessionData.scannedQuantity >= sessionData.expectedQuantity && (
+                    {sessionData.remainingQuantity <= 0 && (
                       <div className="absolute inset-0 flex items-center justify-center">
-                        <span className="text-white text-xs font-bold">✓ COMPLETE</span>
+                        <span className="text-white text-xs font-bold">✓ {t('common.complete')}</span>
                       </div>
                     )}
                   </div>
@@ -1184,7 +1439,7 @@ const BarcodeScannerPage: React.FC = () => {
                   </div>
 
                   {/* Session Summary */}
-                  {sessionData.scannedQuantity >= sessionData.expectedQuantity && (
+                  {sessionData.remainingQuantity <= 0 && (
                     <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
                       <div className="flex items-center justify-center">
                         <div className="flex-shrink-0">
@@ -1193,9 +1448,9 @@ const BarcodeScannerPage: React.FC = () => {
                           </svg>
                         </div>
                         <div className="ml-3">
-                          <h4 className="text-lg font-medium text-green-800">Session Complete!</h4>
+                          <h4 className="text-lg font-medium text-green-800">{t('barcode.sessionCompleteTitle')}</h4>
                           <p className="text-sm text-green-700">
-                            Successfully scanned {sessionData.scannedQuantity} out of {sessionData.expectedQuantity} expected quantity.
+                            {t('barcode.sessionCompleteMessage', { scanned: sessionData.scannedQuantity, expected: sessionData.expectedQuantity })}
                           </p>
                         </div>
                       </div>
@@ -1219,6 +1474,42 @@ const BarcodeScannerPage: React.FC = () => {
                   )}
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Second Degree Mode Interface */}
+      {mode === 'secondDegree' && (
+        <div className="mb-6">
+          <Card>
+            <CardContent className="p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('barcode.secondDegreeMode')}</h3>
+              <div className="text-sm text-gray-600 mb-4">
+                <p>{t('barcode.secondDegreeDescription')}</p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Production Issues Mode Interface */}
+      {mode === 'productionIssues' && (
+        <div className="mb-6">
+          <Card>
+            <CardContent className="p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('barcode.productionIssuesMode')}</h3>
+              <div className="text-sm text-gray-600 mb-4">
+                <p>{t('barcode.productionIssuesDescription')}</p>
+              </div>
+              
+              <div className="text-center py-8">
+                <div className="mb-4">
+                  <AlertTriangle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                  <h4 className="text-lg font-medium text-gray-700 mb-2">{t('barcode.scanBarcodeForIssues')}</h4>
+                  <p className="text-sm text-gray-600">{t('barcode.productionIssuesInstructions')}</p>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -1338,6 +1629,91 @@ const BarcodeScannerPage: React.FC = () => {
             </button>
           </div>
         </>
+      )}
+
+      {/* Production Issues Note Dialog */}
+      {showIssueNoteDialog && currentJobOrderItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 dialog-overlay">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">{t('barcode.addIssueNote')}</h3>
+              <button
+                onClick={handleCancelIssueNote}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+                disabled={isAddingIssueNote}
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Job Order Item Info */}
+            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg mb-6">
+              <h4 className="text-sm font-medium text-blue-800 mb-3">{t('barcode.jobOrderItemInfo')}</h4>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="font-medium text-blue-700">{t('barcode.itemId')}:</span>
+                  <span className="ml-2 text-blue-900">{currentJobOrderItem.item_id}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-blue-700">{t('barcode.jobOrderId')}:</span>
+                  <span className="ml-2 text-blue-900">{currentJobOrderItem.job_order_id}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-blue-700">{t('barcode.expectedQuantity')}:</span>
+                  <span className="ml-2 text-blue-900">{currentJobOrderItem.expected_quantity}</span>
+                </div>
+                <div>
+                  <span className="font-medium text-blue-700">{t('barcode.currentNotes')}:</span>
+                  <span className="ml-2 text-blue-900">{currentJobOrderItem.notes || t('common.none')}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Issue Note Input */}
+            <div className="mb-6">
+              <Label className="text-sm font-medium text-gray-700 mb-3 block">
+                {t('barcode.issueNote')}
+              </Label>
+              <textarea
+                value={issueNote}
+                onChange={(e) => setIssueNote(e.target.value)}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 h-32 resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                placeholder={t('barcode.enterIssueNotePlaceholder')}
+                disabled={isAddingIssueNote}
+                autoFocus
+              />
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={handleCancelIssueNote}
+                disabled={isAddingIssueNote}
+                className="px-4 py-2 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                onClick={handleClearIssueNote}
+                disabled={isAddingIssueNote}
+                className="px-4 py-2 text-orange-600 bg-orange-100 rounded-lg hover:bg-orange-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isAddingIssueNote ? t('common.clearing') : t('barcode.clearIssueNote')}
+              </button>
+              <button
+                onClick={handleSaveIssueNote}
+                disabled={!issueNote.trim() || isAddingIssueNote}
+                className="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:bg-gray-400 disabled:text-gray-600 disabled:cursor-not-allowed"
+              >
+                {isAddingIssueNote ? t('common.saving') : t('barcode.saveIssueNote')}
+              </button>
+            </div>
+            
+
+          </div>
+        </div>
       )}
     </Layout>
   );

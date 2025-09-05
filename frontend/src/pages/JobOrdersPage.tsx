@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
@@ -50,6 +51,7 @@ interface JobOrderSummary {
   total_batches: number;
   has_issues: boolean;
   has_high_second_degree: boolean;
+  has_stalled_batches?: boolean;
   completion_percentage: number;
   overproduction_quantity: number;
   notes?: string;
@@ -64,6 +66,7 @@ const JobOrdersPage: React.FC = () => {
   const { user } = useAuth();
   const { t } = useTranslation();
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [openJobOrders, setOpenJobOrders] = useState<any[]>([]);
   const [closedJobOrders, setClosedJobOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -186,6 +189,9 @@ const JobOrdersPage: React.FC = () => {
   // Automatically load open job orders on page load
   const [showOpenOrders, setShowOpenOrders] = useState(true);
   
+  // Add selected job orders state for archiving
+  const [selectedJobOrders, setSelectedJobOrders] = useState<number[]>([]);
+  
   // Fetch open job orders using summary endpoint
   const fetchOpenJobOrders = async () => {
     try {
@@ -197,16 +203,17 @@ const JobOrdersPage: React.FC = () => {
           Object.entries(filters).filter(([_, value]) => value !== '')
         )
       });
-      // Sort so that job orders with issues come first, using hierarchy: P > S > O
+      // Sort so that job orders with issues come first, using hierarchy: P > T > L > S > O
       const sortedOpenItems = [...allOpenResponse.items].sort((a, b) => {
         const aIssues = detectIssues(a);
         const bIssues = detectIssues(b);
         
         // Get highest priority issue for each job order
         const getHighestPriority = (issues: any[]) => {
-          if (issues.some(i => i.type === 'notes')) return 4; // P - highest
-          if (issues.some(i => i.type === 'lost_quantity')) return 3; // L - high
-          if (issues.some(i => i.type === 'high_second_degree')) return 2; // S - medium
+          if (issues.some(i => i.type === 'notes')) return 5; // P - highest
+          if (issues.some(i => i.type === 'stalled')) return 4; // T
+          if (issues.some(i => i.type === 'lost_quantity')) return 3; // L
+          if (issues.some(i => i.type === 'high_second_degree')) return 2; // S
           if (issues.some(i => i.type === 'overproduction')) return 1; // O - lowest
           return 0; // No issues
         };
@@ -653,6 +660,81 @@ const JobOrdersPage: React.FC = () => {
     setTableQuantities([[0]]);
   };
 
+  // Archive-related functions
+  const handleSelectJobOrder = (jobOrderId: number) => {
+    setSelectedJobOrders(prev => {
+      if (prev.includes(jobOrderId)) {
+        return prev.filter(id => id !== jobOrderId);
+      } else {
+        return [...prev, jobOrderId];
+      }
+    });
+  };
+
+  const handleSelectAllJobOrders = () => {
+    if (selectedJobOrders.length === openJobOrders.length) {
+      setSelectedJobOrders([]);
+    } else {
+      setSelectedJobOrders(openJobOrders.map(jo => jo.job_order_id));
+    }
+  };
+
+  const handleArchiveSelected = async () => {
+    if (selectedJobOrders.length === 0) {
+      toast({
+        title: t('common.error'),
+        description: 'Please select job orders to archive',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    const confirmMessage = t('jobOrders.confirmArchiveBulk', { count: selectedJobOrders.length });
+    
+    if (window.confirm(confirmMessage)) {
+      try {
+        await api.post('/job-orders/archive/bulk', { job_order_ids: selectedJobOrders });
+        setSelectedJobOrders([]);
+        await fetchOpenJobOrders(); // Refresh the list
+        
+        toast({
+          title: t('common.success'),
+          description: t('jobOrders.archivedSuccessfullyBulk', { count: selectedJobOrders.length }),
+        });
+      } catch (error: any) {
+        console.error('Error archiving job orders:', error);
+        toast({
+          title: t('common.error'),
+          description: error?.response?.data?.detail || t('jobOrders.failedToArchive'),
+          variant: 'destructive'
+        });
+      }
+    }
+  };
+
+  const handleArchiveSingle = async (jobOrderId: number) => {
+    const confirmMessage = t('jobOrders.confirmArchiveSingle');
+    
+    if (window.confirm(confirmMessage)) {
+      try {
+        await api.post(`/job-orders/${jobOrderId}/archive`);
+        await fetchOpenJobOrders(); // Refresh the list
+        
+        toast({
+          title: t('common.success'),
+          description: t('jobOrders.archivedSuccessfully'),
+        });
+      } catch (error: any) {
+        console.error('Error archiving job order:', error);
+        toast({
+          title: t('common.error'),
+          description: error?.response?.data?.detail || t('jobOrders.failedToArchiveSingle'),
+          variant: 'destructive'
+        });
+      }
+    }
+  };
+
   // Handler to open the view dialog and fetch tracking data
   const handleViewJobOrder = async (jobOrder: JobOrderSummary) => {
     // This function is no longer needed as the view is handled by a Link
@@ -660,7 +742,7 @@ const JobOrdersPage: React.FC = () => {
   };
 
   const handleAddJobOrder = () => {
-    setAddDialogOpen(true);
+    navigate('/add-job-order');
   };
 
   // Helper to detect issues for a specific item
@@ -704,11 +786,34 @@ const JobOrdersPage: React.FC = () => {
       });
     }
     
+    // Case 5: Stalled batches (batches for same item spread across phase groups)
+    if (item.has_stalled_batches) {
+      issues.push({
+        type: 'stalled',
+        message: 'Stalled batches: items not in a single phase group',
+        severity: 'high'
+      });
+    }
+    
     return issues;
   };
 
   // Table columns using summary fields directly
   const columns = [
+    {
+      key: 'selection',
+      header: '',
+      width: 40,
+      render: (item: any) => (
+        <input
+          type="checkbox"
+          checked={selectedJobOrders.includes(item.job_order_id)}
+          onChange={() => handleSelectJobOrder(item.job_order_id)}
+          className="rounded border-gray-300 text-green-600 focus:ring-green-500"
+        />
+      ),
+      hidden: user?.role !== 'Admin'
+    },
     {
       key: 'job_order_number',
       header: t('barcode.jobOrderNumber'),
@@ -828,10 +933,12 @@ const JobOrdersPage: React.FC = () => {
         const secondDegreeIssues = issues.filter(i => i.type === 'high_second_degree').length;
         const notesIssues = issues.filter(i => i.type === 'notes').length;
         const lostQuantityIssues = issues.filter(i => i.type === 'lost_quantity').length;
+        const stalledIssues = issues.filter(i => i.type === 'stalled').length;
         
         let displayText = '';
-        // Hierarchy: P (notes) > L (lost quantity) > S (second degree) > O (overproduction)
+        // Hierarchy: P (notes) > T (stalled) > L (lost quantity) > S (second degree) > O (overproduction)
         if (notesIssues > 0) displayText += 'P';
+        if (stalledIssues > 0) displayText += 'T';
         if (lostQuantityIssues > 0) displayText += 'L';
         if (secondDegreeIssues > 0) displayText += 'S';
         if (overproductionIssues > 0) displayText += 'O';
@@ -850,7 +957,7 @@ const JobOrdersPage: React.FC = () => {
       width: 120,
       render: (item: JobOrderSummary) => (
         <div className="flex gap-1">
-          <Link to={`/job-orders/${item.job_order_id}`} title="View Production Details">
+          <Link to={`/job-orders/${item.job_order_id}`} title={t('jobOrders.viewProductionDetails')}>
             <Button
               variant="ghost"
               size="sm"
@@ -859,6 +966,19 @@ const JobOrdersPage: React.FC = () => {
               <Eye className="w-4 h-4 text-gray-600" />
             </Button>
           </Link>
+          {user?.role === 'Admin' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 hover:bg-orange-100"
+              onClick={() => handleArchiveSingle(item.job_order_id)}
+              title={t('jobOrders.archiveJobOrder')}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-orange-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+              </svg>
+            </Button>
+          )}
         </div>
       ),
       hidden: false
@@ -870,9 +990,9 @@ const JobOrdersPage: React.FC = () => {
   return (
     <Layout>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2 text-gray-800">Job Orders Management</h1>
+        <h1 className="text-2xl font-bold mb-2 text-gray-800">{t('jobOrders.title')}</h1>
         <p className="text-gray-600">
-          Create and manage job orders for production
+          {t('jobOrders.subtitle')}
         </p>
       </div>
 
@@ -880,62 +1000,79 @@ const JobOrdersPage: React.FC = () => {
         {/* Filter Controls */}
         <div className="mb-6">
           <div className="flex justify-between items-center mb-3">
-            <h2 className="text-lg font-semibold">Filters</h2>
+            <h2 className="text-lg font-semibold">{t('barcodeManagement.filters')}</h2>
             <Button
               onClick={handleClearFilters}
               variant="outline"
               size="sm"
               className="text-amber-700 border-amber-400 bg-amber-50 hover:text-amber-800 hover:bg-amber-100 hover:border-amber-500 hover:shadow-md transition-all duration-200 font-medium"
             >
-              Clear Filters
+              {t('barcodeManagement.clearFilters')}
             </Button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
             <div className="form-group">
-              <label htmlFor="job_order_number" className="text-sm font-medium text-gray-700">Job Order Number</label>
+              <label htmlFor="job_order_number" className="text-sm font-medium text-gray-700">{t('jobOrders.jobOrderNumber')}</label>
               <SearchableDropdown
-                label="Job Order"
+                label={t('jobOrders.jobOrderNumber')}
                 options={jobOrderOptions}
                 value={filters.job_order_number}
                 onChange={(value) => handleFilterChange('job_order_number', value)}
-                placeholder="Search job order number..."
+                placeholder={t('jobOrders.placeholders.jobOrderNumber')}
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="model_name" className="text-sm font-medium text-gray-700">Model Name</label>
+              <label htmlFor="model_name" className="text-sm font-medium text-gray-700">{t('jobOrders.modelName')}</label>
               <SearchableDropdown
-                label="Model"
+                label={t('jobOrders.model')}
                 options={modelOptions}
                 value={filters.model_name}
                 onChange={(value) => handleFilterChange('model_name', value)}
-                placeholder="Search model name..."
+                placeholder={t('jobOrders.placeholders.modelName')}
               />
             </div>
             
             <div className="form-group">
-              <label htmlFor="brand_name" className="text-sm font-medium text-gray-700">Brand Name</label>
+              <label htmlFor="brand_name" className="text-sm font-medium text-gray-700">{t('jobOrders.brandName')}</label>
               <SearchableDropdown
-                label="Brand"
+                label={t('bulkBarcode.brand')}
                 options={brandOptions}
                 value={filters.brand_name}
                 onChange={(value) => handleFilterChange('brand_name', value)}
-                placeholder="Search brand name..."
+                placeholder={t('jobOrders.placeholders.brandName')}
               />
             </div>
             
             <div className="form-group">
-              <label className="text-sm font-medium text-gray-700">Actions</label>
+              <label className="text-sm font-medium text-gray-700">{t('common.actions')}</label>
               <Button
                 onClick={handleAddJobOrder}
                 className="w-full text-white font-medium"
                 style={{ backgroundColor: 'rgb(17, 139, 80)', borderColor: 'rgb(17, 139, 80)', color: '#fff', fontWeight: 500 }}
               >
-                Add Job Order
+                {t('jobOrders.addJobOrder')}
               </Button>
             </div>
+            
+
           </div>
         </div>
+        
+        {/* Archive Action Button */}
+        {user?.role === 'Admin' && selectedJobOrders.length > 0 && (
+          <div className="mb-6 text-center">
+            <button
+              onClick={handleArchiveSelected}
+              className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-orange-600 border border-transparent rounded-md hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 transition-all duration-200 ease-in-out"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+              </svg>
+              {t('jobOrders.archiveSelected', { count: selectedJobOrders.length })}
+            </button>
+          </div>
+        )}
         
         {/* Mobile Full View Toggle for Open Job Orders */}
         {isMobile && (
@@ -954,38 +1091,42 @@ const JobOrdersPage: React.FC = () => {
         {showOpenOrders && (
           <div className="mb-8">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-green-700">Open Job Orders</h3>
+              <h3 className="text-lg font-semibold text-green-700">{t('jobOrders.openOrders')}</h3>
               <div className="text-sm text-gray-600">
-                Showing {openJobOrders.length} of {totalOpenJobOrders} open job orders
+                {t('jobOrders.openOrdersShowing', { count: openJobOrders.length, total: totalOpenJobOrders })}
               </div>
             </div>
             
             {/* Issues Legend */}
             <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-              <h4 className="text-sm font-semibold text-gray-700 mb-2">Issue Indicators:</h4>
+              <h4 className="text-sm font-semibold text-gray-700 mb-2">{t('jobOrders.issueIndicators')}</h4>
               <div className="flex flex-wrap gap-4 text-xs">
                 <div className="flex items-center gap-1">
                   <span className="text-red-600 font-bold">P</span>
-                  <span className="text-gray-600">Production Issues (Notes)</span>
+                  <span className="text-gray-600">{t('jobOrders.issueLegend.P')}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-red-600 font-bold">T</span>
+                  <span className="text-gray-600">{t('jobOrders.issueLegend.T')}</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <span className="text-red-600 font-bold">L</span>
-                  <span className="text-gray-600">Lost Quantity (Cut &gt; Working)</span>
+                  <span className="text-gray-600">{t('jobOrders.issueLegend.L')}</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <span className="text-red-600 font-bold">S</span>
-                  <span className="text-gray-600">Second Degree (&gt;3% threshold)</span>
+                  <span className="text-gray-600">{t('jobOrders.issueLegend.S')}</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <span className="text-red-600 font-bold">O</span>
-                  <span className="text-gray-600">Overproduction</span>
+                  <span className="text-gray-600">{t('jobOrders.issueLegend.O')}</span>
                 </div>
               </div>
             </div>
             {loading ? (
               <div className="text-center py-10">
                 <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-                <p className="text-gray-600">Loading open job orders...</p>
+                <p className="text-gray-600">{t('jobOrders.loadingOpenOrders')}</p>
               </div>
             ) : (
               <>
@@ -994,8 +1135,8 @@ const JobOrdersPage: React.FC = () => {
                     {openJobOrders.length === 0 ? (
                       <div className="text-center py-4 text-gray-500">
                         {hasActiveFilters 
-                          ? "No open job orders match your current filters."
-                          : "No open job orders found."
+                          ? t('jobOrders.noOpenOrdersFilteredAlt')
+                          : t('jobOrders.noOpenOrdersAlt')
                         }
                       </div>
                     ) : (
@@ -1064,7 +1205,7 @@ const JobOrdersPage: React.FC = () => {
         <DialogContent className="w-[90vw] max-w-[90vw] h-[90vh] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
-              Edit Job Order: {editingJobOrder?.job_order_number}
+              {t('jobOrders.editJobOrderWithNumber', { jobOrderNumber: editingJobOrder?.job_order_number })}
             </DialogTitle>
           </DialogHeader>
           
@@ -1136,294 +1277,7 @@ const JobOrdersPage: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Add Job Order Dialog */}
-      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
-        <DialogContent className="w-[90vw] max-w-[90vw] h-[90vh] max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{t('jobOrders.addNewJobOrder')}</DialogTitle>
-          </DialogHeader>
-          
-          <div className="space-y-6">
-            {/* Job Order Details */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="job-order-number">{t('jobOrders.jobOrderNumber')} *</Label>
-                <Input
-                  id="job-order-number"
-                  value={newJobOrder.job_order_number}
-                  onChange={(e) => setNewJobOrder(prev => ({ ...prev, job_order_number: e.target.value }))}
-                  placeholder={t('jobOrders.jobOrderNumber')}
-                  disabled={addLoading}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="brand-name">Brand Name *</Label>
-                <EditableDropdown
-                  value={newJobOrder.brand_name}
-                  onValueChange={(value) => setNewJobOrder(prev => ({ ...prev, brand_name: value }))}
-                  options={existingBrands}
-                  placeholder={t('jobOrders.brandName')}
-                  disabled={addLoading}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="model-name">{t('jobOrders.modelName')} *</Label>
-                <EditableDropdown
-                  value={newJobOrder.model_name}
-                  onValueChange={(value) => setNewJobOrder(prev => ({ ...prev, model_name: value }))}
-                  options={existingModels}
-                  placeholder={t('jobOrders.modelName')}
-                  disabled={addLoading}
-                />
-              </div>
-              {/* Material Name Input */}
-              <div className="space-y-2">
-                <Label htmlFor="material-name-input">Material Name</Label>
-                <EditableDropdown
-                  value={materialName}
-                  onValueChange={(val) => setMaterialName(val)}
-                  options={existingMaterials}
-                  placeholder="Material Name"
-                  disabled={addLoading}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="job-order-image">Job Order Image (optional)</Label>
-                <Input
-                  id="job-order-image"
-                  type="file"
-                  accept="image/*"
-                  onChange={e => {
-                    const file = e.target.files?.[0] || null;
-                    setNewJobOrderImage(file);
-                    if (file) {
-                      const reader = new FileReader();
-                      reader.onload = ev => setNewJobOrderImagePreview(ev.target?.result as string);
-                      reader.readAsDataURL(file);
-                    } else {
-                      setNewJobOrderImagePreview(null);
-                    }
-                  }}
-                  disabled={addLoading}
-                />
-                {newJobOrderImagePreview && (
-                  <img src={newJobOrderImagePreview} alt="Preview" className="mt-2 max-h-40 rounded shadow" />
-                )}
-              </div>
-            </div>
 
-            {/* Job Order Items */}
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <h3 className="text-lg font-medium">{t('jobOrders.jobOrderItems')}</h3>
-                <div className="flex gap-2">
-                  <Button type="button" onClick={handleAddColorRow} disabled={addLoading} variant="outline" size="sm">
-                    <Plus className="w-4 h-4 mr-1" /> Add Color Row
-                </Button>
-                  <Button type="button" onClick={handleAddSizeColumn} disabled={addLoading} variant="outline" size="sm">
-                    <Plus className="w-4 h-4 mr-1" /> Add Size Column
-                        </Button>
-                    </div>
-              </div>
-              <div className="min-h-[30vh] max-h-[50vh] overflow-auto">
-                <table className="min-w-full border text-sm">
-                  <thead>
-                    <tr>
-                      <th className="border p-2 text-left min-w-[8rem]">Color / Size</th>
-                      {tableSizes.map((size, colIndex) => (
-                        <th key={colIndex} className="border p-2 min-w-[6rem]">
-                          <div className="flex items-center">
-                        <EditableDropdown
-                              value={size}
-                              onValueChange={(value) => handleUpdateSize(colIndex, value)}
-                              options={existingSizes}
-                          disabled={addLoading}
-                        />
-                            {tableSizes.length > 1 && (
-                              <button type="button" onClick={() => handleRemoveSizeColumn(colIndex)} disabled={addLoading}>
-                                <X className="w-3 h-3 ml-1 text-red-600" />
-                              </button>
-                            )}
-                      </div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tableColors.map((color, rowIndex) => (
-                      <tr key={rowIndex}>
-                        <td className="border p-2 min-w-[8rem]">
-                          <div className="flex items-center">
-                        <EditableDropdown
-                              value={color}
-                              onValueChange={(value) => handleUpdateColor(rowIndex, value)}
-                              options={existingColors}
-                          disabled={addLoading}
-                        />
-                            {tableColors.length > 1 && (
-                              <button type="button" onClick={() => handleRemoveColorRow(rowIndex)} disabled={addLoading}>
-                                <X className="w-3 h-3 ml-1 text-red-600" />
-                              </button>
-                            )}
-                      </div>
-                        </td>
-                        {tableSizes.map((_, colIndex) => (
-                          <td key={colIndex} className="border p-1 min-w-[6rem]">
-                        <Input
-                          type="number"
-                              min="0"
-                              value={tableQuantities[rowIndex]?.[colIndex] ?? 0}
-                              onChange={(e) => handleQuantityTableChange(rowIndex, colIndex, parseInt(e.target.value) || 0)}
-                          disabled={addLoading}
-                              className="w-24"
-                        />
-                          </td>
-                ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Job Order Notes */}
-            <div className="mt-4">
-              <Label htmlFor="order-notes">Notes</Label>
-              <Textarea
-                id="order-notes"
-                value={jobOrderNotes}
-                onChange={e => setJobOrderNotes(e.target.value)}
-                placeholder="Enter any notes for this job order"
-                disabled={addLoading}
-              />
-            </div>
-
-            {/* Consumption Table */}
-            <div className="space-y-4 mt-6">
-              <h3 className="text-lg font-medium">Material Consumption</h3>
-              <div className="overflow-auto border rounded-md">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-50">
-                      <th className="border p-2 min-w-[6rem] text-left">Color</th>
-                      {consumptionCategories.map(cat => (
-                        <th key={cat.key} className="border p-2 min-w-[8rem] text-center space-y-1">
-                          {/* Bulk input */}
-                          <Input
-                            type="number"
-                            step="0.001"
-                            value={bulkConsumption[cat.key] ?? ''}
-                            onChange={e => handleBulkConsumptionChange(cat.key, parseFloat(e.target.value) || 0)}
-                            placeholder={cat.label}
-                            className="text-center"
-                            disabled={addLoading}
-                          />
-                          <div className="mt-1 text-xs text-gray-500">{cat.label}</div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tableColors.map((color, rowIndex) => (
-                      <tr key={rowIndex} className={rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="border p-2">{color}</td>
-                        {consumptionCategories.map(cat => {
-                          const cellKey = `${rowIndex}-${cat.key}`;
-                          return (
-                            <td key={cat.key} className="border p-1 text-center">
-                              <Input
-                                type="number"
-                                step="0.001"
-                                value={consumptionValues[cellKey] ?? ''}
-                                onChange={e => handleConsumptionCellChange(rowIndex, cat.key, parseFloat(e.target.value) || 0)}
-                                placeholder="-"
-                                className="w-24 text-center"
-                                disabled={addLoading}
-                              />
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Add new consumption column */}
-            <div className="flex items-center gap-2 mt-4">
-              <Input
-                value={newCategoryName}
-                onChange={e => setNewCategoryName(e.target.value)}
-                placeholder="Add consumption column"
-                className="w-64"
-                disabled={addLoading}
-              />
-              <Button type="button" onClick={handleAddCategory} disabled={addLoading || !newCategoryName.trim()} size="sm">
-                <Plus className="w-4 h-4 mr-1" /> Add Column
-              </Button>
-            </div>
-
-            {/* Prints Flags */}
-            <div className="space-y-4 mt-6">
-              <Label>Prints (select applicable positions)</Label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {(
-                  [
-                    ['chest', 'Chest'],
-                    ['back', 'Back'],
-                    ['waist', 'Waist'],
-                    ['right_leg', 'Right Leg'],
-                    ['left_leg', 'Left Leg'],
-                    ['pocket', 'Pocket'],
-                    ['hood', 'Hood'],
-                    ['right_arm', 'Right Arm'],
-                    ['left_arm', 'Left Arm'],
-                  ] as [keyof typeof printsFlags, string][]
-                ).map(([key, label]) => (
-                  <label key={key} className="inline-flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      className="form-checkbox h-5 w-5 text-green-600"
-                      checked={printsFlags[key]}
-                      onChange={() => setPrintsFlags(prev => ({ ...prev, [key]: !prev[key] }))}
-                      disabled={addLoading}
-                    />
-                    <span>{label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {/* Total Quantity */}
-            <div className="border-t pt-4">
-              <div className="flex justify-between items-center">
-                <span className="font-medium text-lg">{t('jobOrders.totalQuantityLabel')}</span>
-                <span className="font-bold text-xl text-green-600">
-                  {totalTableQuantity.toLocaleString()}
-                </span>
-              </div>
-            </div>
-          </div>
-          
-          <DialogFooter>
-            <Button
-              onClick={handleCancelAddJobOrder}
-              disabled={addLoading}
-              className="bg-red-600 hover:bg-red-700 text-white"
-            >
-              {t('common.cancel')}
-            </Button>
-            <Button
-              onClick={handleSaveNewJobOrder}
-              disabled={addLoading}
-              className="!bg-green-600 !hover:bg-green-700 !text-white font-bold shadow border border-green-700"
-            >
-              {addLoading ? t('jobOrders.creating') : t('jobOrders.createJobOrder')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </Layout>
   );
 };

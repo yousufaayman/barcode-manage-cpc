@@ -470,6 +470,9 @@ class JobOrderItemUpdate(BaseModel):
     weight: Optional[float] = None
     notes: Optional[str] = None
 
+class JobOrderItemNotesUpdate(BaseModel):
+    notes: str
+
 class JobOrderBase(BaseModel):
     model_id: int
     job_order_number: str
@@ -536,6 +539,7 @@ class JobOrderSummary(BaseModel):
     total_batches: int
     has_issues: bool
     has_high_second_degree: bool
+    has_stalled_batches: bool
     completion_percentage: float
     overproduction_quantity: int
     last_calculated_at: Optional[datetime] = None
@@ -738,7 +742,50 @@ class ArchivedBatchResponse(ArchivedBatchBase):
     phase_name: Optional[str] = None
 
     class Config:
-        from_attributes = True 
+        from_attributes = True
+
+# Archived Job Order schemas
+class ArchivedJobOrderBase(BaseModel):
+    model_id: int
+    job_order_number: str
+    brand_id: Optional[int] = None
+    image_url: Optional[str] = None
+    notes: Optional[str] = None
+    date_created: datetime
+    archived_at: Optional[datetime] = None
+
+class ArchivedJobOrderCreate(ArchivedJobOrderBase):
+    pass
+
+class ArchivedJobOrderResponse(ArchivedJobOrderBase):
+    job_order_id: int
+    model_name: Optional[str] = None
+    brand_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+# Archived Job Order Item schemas
+class ArchivedJobOrderItemBase(BaseModel):
+    job_order_id: int
+    color_id: int
+    size_id: int
+    quantity: int
+    weight: Optional[float] = None
+    notes: Optional[str] = None
+    archived_at: datetime
+
+class ArchivedJobOrderItemCreate(ArchivedJobOrderItemBase):
+    pass
+
+class ArchivedJobOrderItemResponse(ArchivedJobOrderItemBase):
+    item_id: int
+    job_order_number: Optional[str] = None
+    color_name: Optional[str] = None
+    size_value: Optional[str] = None
+
+    class Config:
+        from_attributes = True
 
 # Event-based timeline schemas
 class BarcodeScanEventBase(BaseModel):

@@ -9,6 +9,8 @@ import { Textarea } from '../components/ui/textarea';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { format } from 'date-fns';
+import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../hooks/use-toast';
 
 // Helper to convert backend absolute path to public URL
 const getPublicImageUrl = (path: string): string => {
@@ -25,6 +27,8 @@ const JobOrderDetailsPage: React.FC = () => {
   const { jobOrderId } = useParams<{ jobOrderId: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const { toast } = useToast();
   const [viewJobOrder, setViewJobOrder] = useState<any>(null);
   const [viewTrackingData, setViewTrackingData] = useState<any[]>([]);
   const [materials, setMaterials] = useState<any[]>([]);
@@ -58,6 +62,10 @@ const JobOrderDetailsPage: React.FC = () => {
   ]);
   const [editBulkConsumption, setEditBulkConsumption] = useState<Record<string, number>>({});
   const [editConsumptionValues, setEditConsumptionValues] = useState<Record<string, number>>({});
+
+  // Archive state
+  const [archiving, setArchiving] = useState(false);
+  const [archivingItem, setArchivingItem] = useState<number | null>(null);
 
   const generateKey = (name: string) => name.replace(/\s+/g, '_').toLowerCase();
 
@@ -294,9 +302,42 @@ const JobOrderDetailsPage: React.FC = () => {
       }));
       setEditMaterials(mappedMats);
       setEditMaterialName(materials.length > 0 ? materials[0].material_name : '');
-      // Reset consumption values
-      setEditBulkConsumption({});
-      setEditConsumptionValues({});
+      
+      // Initialize consumption values from existing materials
+      const newConsumptionValues: Record<string, number> = {};
+      const newBulkConsumption: Record<string, number> = {};
+      
+      if (materials.length > 0) {
+        // Group materials by color to calculate consumption per unit
+        const colorGroups: Record<string, { material_name: string; quantity: number; consumption: number }[]> = {};
+        
+        materials.forEach(mat => {
+          if (mat.color_name && mat.consumption !== null && mat.consumption !== undefined) {
+            if (!colorGroups[mat.color_name]) {
+              colorGroups[mat.color_name] = [];
+            }
+            colorGroups[mat.color_name].push({
+              material_name: mat.material_name,
+              quantity: mat.quantity,
+              consumption: mat.consumption
+            });
+          }
+        });
+        
+        // Use per-unit consumption directly from backend
+        Object.entries(colorGroups).forEach(([colorName, colorMats]) => {
+          colorMats.forEach(colorMat => {
+            if (colorMat.consumption !== undefined && colorMat.consumption !== null) {
+              const cellKey = getConsumptionCellKey(colorMat.material_name, colorName, 'body');
+              newConsumptionValues[cellKey] = colorMat.consumption;
+              newBulkConsumption['body'] = colorMat.consumption;
+            }
+          });
+        });
+      }
+      
+      setEditConsumptionValues(newConsumptionValues);
+      setEditBulkConsumption(newBulkConsumption);
       setEditDialogOpen(true);
     } catch (error) {
       console.error('Error fetching job order details:', error);
@@ -367,11 +408,22 @@ const JobOrderDetailsPage: React.FC = () => {
       setEditingJobOrder(null);
       setEditItems([]);
       
+      // Refresh the item summaries to recalculate tracking data
+      await jobOrderApi.refreshItemSummaries(Number(jobOrderId));
+      
+      // Add a small delay to ensure backend has processed the refresh
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
       // Refetch job order data
       const jobOrder = await jobOrderApi.getById(Number(jobOrderId));
       setViewJobOrder(jobOrder);
-      const tracking = await jobOrderApi.getProductionTracking(Number(jobOrderId));
-      setViewTrackingData(tracking.tracking_data || []);
+      
+      // Get item-level production tracking data
+      const itemSummaries = await jobOrderApi.getItemSummaries({
+        job_order_id: Number(jobOrderId)
+      });
+      setViewTrackingData(itemSummaries.items || []);
+      
       const mats = await jobOrderApi.getMaterials(Number(jobOrderId));
       setMaterials(mats);
       // (Toast success handler removed)
@@ -468,25 +520,73 @@ const JobOrderDetailsPage: React.FC = () => {
 
   // When editing a cell, update all items of that color
   const handleEditConsumptionCellChangeUnique = (colorName: string, categoryKey: string, value: number) => {
-    // Update all items of this color for this category
-    setEditConsumptionValues(prev => {
-      const updated = { ...prev };
-      uniqueColors.forEach((color, rowIndex) => {
-        if (color === colorName) {
-          // Update all cells for this color/category
-          editItems.forEach((item, idx) => {
-            if (item.color_name === colorName) {
-              const matName = editConsumptionCategories.find(cat => cat.key === categoryKey)?.usesMaterialName ? editMaterialName || editConsumptionCategories.find(cat => cat.key === categoryKey)?.label : editConsumptionCategories.find(cat => cat.key === categoryKey)?.label;
-              if (matName) {
-                const cellKey = getConsumptionCellKey(matName, colorName, categoryKey);
-                updated[cellKey] = value;
-              }
-            }
-          });
-        }
-      });
-      return updated;
-    });
+    const cellKey = getConsumptionCellKey(editMaterialName || 'body', colorName, categoryKey);
+    setEditConsumptionValues(prev => ({ ...prev, [cellKey]: value }));
+  };
+
+  // Archive handlers
+  const handleArchiveJobOrder = async () => {
+    if (!jobOrderId) return;
+
+    const confirmMessage = 'Are you sure you want to archive this job order? This will also archive all associated items and batches. This action cannot be undone.';
+    
+    if (window.confirm(confirmMessage)) {
+      try {
+        setArchiving(true);
+        await jobOrderApi.archive(parseInt(jobOrderId));
+        
+        toast({
+          title: t('common.success'),
+          description: 'Job order archived successfully',
+        });
+        
+        // Navigate back to job orders page
+        navigate('/job-orders');
+      } catch (error: any) {
+        console.error('Error archiving job order:', error);
+        toast({
+          title: t('common.error'),
+          description: error?.response?.data?.detail || 'Failed to archive job order',
+          variant: 'destructive'
+        });
+      } finally {
+        setArchiving(false);
+      }
+    }
+  };
+
+  const handleArchiveItem = async (itemId: number) => {
+    const confirmMessage = 'Are you sure you want to archive this item? This action cannot be undone.';
+    
+    if (window.confirm(confirmMessage)) {
+      try {
+        setArchivingItem(itemId);
+        await jobOrderApi.archiveItem(itemId);
+        
+        toast({
+          title: t('common.success'),
+          description: 'Item archived successfully',
+        });
+        
+        // Refresh the data
+        const jobOrder = await jobOrderApi.getById(Number(jobOrderId));
+        setViewJobOrder(jobOrder);
+        
+        const itemSummaries = await jobOrderApi.getItemSummaries({
+          job_order_id: Number(jobOrderId)
+        });
+        setViewTrackingData(itemSummaries.items || []);
+      } catch (error: any) {
+        console.error('Error archiving item:', error);
+        toast({
+          title: t('common.error'),
+          description: error?.response?.data?.detail || 'Failed to archive item',
+          variant: 'destructive'
+        });
+      } finally {
+        setArchivingItem(null);
+      }
+    }
   };
 
   // Print options array for the edit dialog
@@ -501,6 +601,19 @@ const JobOrderDetailsPage: React.FC = () => {
     ['right_arm', t('jobOrderDetails.rightArm')],
     ['left_arm', t('jobOrderDetails.leftArm')],
   ];
+
+  // Helper to group items by color
+  const groupItemsByColor = (items: any[]) => {
+    const grouped: Record<string, any[]> = {};
+    items.forEach(item => {
+      const color = item.color_name || 'Unknown';
+      if (!grouped[color]) {
+        grouped[color] = [];
+      }
+      grouped[color].push(item);
+    });
+    return grouped;
+  };
 
   // Helper to detect issues for a specific item
   const detectIssues = (item: any) => {
@@ -584,8 +697,28 @@ const JobOrderDetailsPage: React.FC = () => {
               >
                 <Edit className="w-4 h-4" /> 
                 <span className="hidden sm:inline">{t('common.edit')}</span>
-                <span className="sm:hidden">Edit</span>
+                <span className="sm:hidden">{t('common.edit')}</span>
               </Button>
+              
+              {/* Archive Button - Only for Admin users */}
+              {user?.role === 'Admin' && (
+                <Button
+                  variant="outline"
+                  onClick={handleArchiveJobOrder}
+                  disabled={archiving}
+                  className="flex items-center gap-1 text-sm px-3 py-2 md:px-4 md:py-2 border-orange-300 text-orange-700 hover:bg-orange-50"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                  </svg>
+                  <span className="hidden sm:inline">
+                    {archiving ? t('common.archiving') : t('common.archive')}
+                  </span>
+                  <span className="sm:hidden">
+                    {archiving ? '...' : t('common.archive')}
+                  </span>
+                </Button>
+              )}
             </>
           )}
           {/* Print Controls */}
@@ -649,40 +782,40 @@ const JobOrderDetailsPage: React.FC = () => {
           {/* Summary Section */}
           {viewTrackingData.length > 0 && (
             <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
-              <h3 className="text-lg font-semibold mb-3 text-gray-800">Production Summary</h3>
+              <h3 className="text-lg font-semibold mb-3 text-gray-800">{t('jobOrderDetails.productionSummary')}</h3>
               <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">Expected</div>
+                  <div className="font-medium text-gray-600">{t('jobOrderDetails.expected')}</div>
                   <div className="text-xl font-bold text-gray-800">
                     {viewTrackingData.reduce((sum, item) => sum + item.expected_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">Cut Qty</div>
+                  <div className="font-medium text-gray-600">{t('jobOrderDetails.cutQuantity')}</div>
                   <div className="text-xl font-bold text-purple-600">
                     {viewTrackingData.reduce((sum, item) => sum + item.cut_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">Second Degree</div>
+                  <div className="font-medium text-gray-600">{t('jobOrderDetails.secondDegree')}</div>
                   <div className="text-xl font-bold text-orange-600">
                     {viewTrackingData.reduce((sum, item) => sum + item.second_degree_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">Completed</div>
+                  <div className="font-medium text-gray-600">{t('jobOrderDetails.completed')}</div>
                   <div className="text-xl font-bold text-green-600">
                     {viewTrackingData.reduce((sum, item) => sum + item.completed_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">Remaining</div>
+                  <div className="font-medium text-gray-600">{t('jobOrderDetails.remaining')}</div>
                   <div className="text-xl font-bold text-blue-700">
                     {viewTrackingData.reduce((sum, item) => sum + item.remaining_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">Working Qty</div>
+                  <div className="font-medium text-gray-600">{t('jobOrderDetails.workingQty')}</div>
                   <div className="text-xl font-bold text-blue-700">
                     {viewTrackingData.reduce((sum, item) => sum + item.working_quantity, 0).toLocaleString()}
                   </div>
@@ -725,11 +858,11 @@ const JobOrderDetailsPage: React.FC = () => {
                       </svg>
                       <div className="flex-1">
                         <div className="font-semibold mb-1">
-                          {type === 'overproduction' ? 'Overproduction Issues' : 
-                           type === 'high_second_degree' ? 'High Second Degree Issues' : 
-                           type === 'notes' ? 'Production Issues' :
-                           type === 'lost_quantity' ? 'Lost Quantity Issues' :
-                           'Production Issues'}
+                          {type === 'overproduction' ? t('jobOrderDetails.overproductionIssues') : 
+                           type === 'high_second_degree' ? t('jobOrderDetails.highSecondDegreeIssues') : 
+                           type === 'notes' ? t('jobOrderDetails.productionIssues') :
+                           type === 'lost_quantity' ? t('jobOrderDetails.lostQuantityIssues') :
+                           t('jobOrderDetails.productionIssues')}
                         </div>
                         <div className="text-sm space-y-1">
                           {(issues as any[]).map((issue, idx) => (
@@ -751,58 +884,90 @@ const JobOrderDetailsPage: React.FC = () => {
                 <tr>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.color')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.size')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Expected</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Cut Qty</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Working Qty</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Second Degree</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Lost Quantity</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Remaining Quantity</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Completed</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Cutting Difference</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.expected')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.cutQuantity')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.workingQty')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.secondDegree')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.lostQuantity')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.remainingQuantity')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.completed')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.cuttingDifference')}</th>
+                  {user?.role === 'Admin' && (
+                    <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">Actions</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
-                {viewTrackingData.map((item, idx) => {
-                  const producedColor = item.produced_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
-                  const cutColor = item.cut_quantity > item.produced_quantity ? 'text-purple-600 font-bold' : 'text-blue-600 font-medium';
-                  const secondDegreeColor = item.second_degree_quantity > 0 ? 'text-orange-600 font-medium' : 'text-gray-500';
-                  const completedColor = item.completed_quantity > 0 ? 'text-green-600 font-semibold' : 'text-gray-500';
-                  const remainingColor = item.remaining_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
+                {(() => {
+                  const groupedItems = groupItemsByColor(viewTrackingData);
+                  let rowIndex = 0;
                   
-                  // Detect all issues for this item
-                  const issues = detectIssues(item);
-                  const hasIssues = issues.length > 0;
-                  
-                  let rowBackgroundClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-200 hover:bg-gray-300';
-                  if (hasIssues) {
-                    rowBackgroundClass = 'bg-red-100 hover:bg-red-200 border-l-4 border-l-red-600 shadow-sm';
-                  }
-                  
-                  // Enhanced cut quantity styling for rows with issues
-                  const enhancedCutColor = hasIssues 
-                    ? 'text-red-700 font-bold'
-                    : cutColor;
-                  
-                  // Enhanced cutting difference styling for rows with issues
-                  const enhancedCuttingDiffColor = hasIssues 
-                    ? 'text-red-700 font-bold'
-                    : remainingColor;
-                  
-                  return (
-                    <tr key={idx} className={`${rowBackgroundClass} transition-colors`}>
-                      <td className="px-4 py-2 border-b border-gray-200">{item.color_name}</td>
-                      <td className="px-4 py-2 border-b border-gray-200">{item.size_value}</td>
-                      <td className="px-4 py-2 border-b border-gray-200 text-right font-medium">{item.expected_quantity}</td>
-                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${enhancedCutColor}`}>{item.cut_quantity}</td>
-                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${producedColor}`}>{item.produced_quantity}</td>
-                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${secondDegreeColor}`}>{item.second_degree_quantity}</td>
-                      <td className="px-4 py-2 border-b border-gray-200 text-right font-semibold text-orange-700">{item.cut_quantity > item.produced_quantity ? (item.cut_quantity - item.produced_quantity) : 0}</td>
-                      <td className="px-4 py-2 border-b border-gray-200 text-right font-medium">{item.expected_quantity - item.completed_quantity}</td>
-                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${completedColor}`}>{item.completed_quantity}</td>
-                      <td className={`px-4 py-2 border-b border-gray-200 text-right ${enhancedCuttingDiffColor}`}>{item.cut_quantity - item.expected_quantity > 0 ? '+' : ''}{item.cut_quantity - item.expected_quantity}</td>
-                    </tr>
-                  );
-                })}
+                  return Object.entries(groupedItems).map(([color, items]) => {
+                    const colorRows = items.map((item, itemIdx) => {
+                      const producedColor = item.produced_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
+                      const cutColor = item.cut_quantity > item.produced_quantity ? 'text-purple-600 font-bold' : 'text-blue-600 font-medium';
+                      const secondDegreeColor = item.second_degree_quantity > 0 ? 'text-orange-600 font-medium' : 'text-gray-500';
+                      const completedColor = item.completed_quantity > 0 ? 'text-green-600 font-semibold' : 'text-gray-500';
+                      const remainingColor = item.remaining_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
+                      
+                      // Detect all issues for this item
+                      const issues = detectIssues(item);
+                      const hasIssues = issues.length > 0;
+                      
+                      let rowBackgroundClass = rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-200 hover:bg-gray-300';
+                      if (hasIssues) {
+                        rowBackgroundClass = 'bg-red-100 hover:bg-red-200 border-l-4 border-l-red-600 shadow-sm';
+                      }
+                      
+                      // Enhanced cut quantity styling for rows with issues
+                      const enhancedCutColor = hasIssues 
+                        ? 'text-red-700 font-bold'
+                        : cutColor;
+                      
+                      // Enhanced cutting difference styling for rows with issues
+                      const enhancedCuttingDiffColor = hasIssues 
+                        ? 'text-red-700 font-bold'
+                        : remainingColor;
+                      
+                      rowIndex++;
+                      
+                      return (
+                        <tr key={`${item.item_id}-${itemIdx}`} className={`${rowBackgroundClass} transition-colors`}>
+                          <td className="px-4 py-2 border-b border-gray-200">
+                            {itemIdx === 0 ? (
+                              <div className="font-semibold text-gray-800">{color}</div>
+                            ) : (
+                              <div className="text-gray-500 text-sm">└─</div>
+                            )}
+                          </td>
+                          <td className="px-4 py-2 border-b border-gray-200">{item.size_value}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right font-medium">{item.expected_quantity}</td>
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${enhancedCutColor}`}>{item.cut_quantity}</td>
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${producedColor}`}>{item.produced_quantity}</td>
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${secondDegreeColor}`}>{item.second_degree_quantity}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right font-semibold text-orange-700">{item.cut_quantity > item.produced_quantity ? (item.cut_quantity - item.produced_quantity) : 0}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right font-medium">{item.expected_quantity - item.completed_quantity}</td>
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${completedColor}`}>{item.completed_quantity}</td>
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${enhancedCuttingDiffColor}`}>{item.cut_quantity - item.expected_quantity > 0 ? '+' : ''}{item.cut_quantity - item.expected_quantity}</td>
+                          {user?.role === 'Admin' && (
+                            <td className="px-4 py-2 border-b border-gray-200 text-center">
+                              <button
+                                onClick={() => handleArchiveItem(item.item_id)}
+                                disabled={archivingItem === item.item_id}
+                                className="px-2 py-1 text-xs bg-orange-100 text-orange-700 border border-orange-300 rounded hover:bg-orange-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                title="Archive this item"
+                              >
+                                {archivingItem === item.item_id ? 'Archiving...' : 'Archive'}
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    });
+                    
+                    return colorRows;
+                  }).flat();
+                })()}
               </tbody>
             </table>
           </div>

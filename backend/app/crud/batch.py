@@ -183,11 +183,28 @@ def get_batches(db: Session, skip: int = 0, limit: int = 100):
 
 
 
-def create_batch(db: Session, batch: schemas.BatchCreate):
+def create_batch(db: Session, batch: schemas.BatchCreate, user_id: Optional[int] = None):
     db_batch = models.Batch(**batch.dict())
     db.add(db_batch)
     db.commit()
     db.refresh(db_batch)
+    
+    # Create initial scan event for the new batch
+    create_scan_event(
+        db=db,
+        batch_id=db_batch.batch_id,
+        action_type='scan_in',
+        phase_id=db_batch.current_phase,
+        old_status=None,
+        new_status=db_batch.status,
+        old_quantity=None,
+        new_quantity=db_batch.quantity,
+        old_phase=None,
+        new_phase=db_batch.current_phase,
+        user_id=user_id,
+        notes="Batch created"
+    )
+    
     return db_batch
 
 def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate, user_id: Optional[int] = None):
@@ -389,58 +406,99 @@ def delete_batch(db: Session, batch_id: int):
     return batch_data
 
 def archive_batch(db: Session, batch_id: int):
-    batch_data = get_batch(db, batch_id)
-    if not batch_data:
+    # Get the actual batch model instead of the response schema
+    batch_model = db.query(models.Batch).filter(models.Batch.batch_id == batch_id).first()
+    if not batch_model:
         return None
+    
     archived_batch = models.ArchivedBatch(
-        batch_id=batch_data.batch_id,
-        job_order_id=batch_data.job_order_id,
-        barcode=batch_data.barcode,
-        brand_id=batch_data.brand_id,
-        model_id=batch_data.model_id,
-        size_id=batch_data.size_id,
-        color_id=batch_data.color_id,
-        quantity=batch_data.quantity,
-        layers=batch_data.layers,
-        serial=batch_data.serial,
-        current_phase=batch_data.current_phase,
-        status=batch_data.status,
-        last_updated_at=batch_data.last_updated_at,
+        batch_id=batch_model.batch_id,
+        job_order_id=batch_model.job_order_id,
+        barcode=batch_model.barcode,
+        size_id=batch_model.size_id,
+        color_id=batch_model.color_id,
+        quantity=batch_model.quantity,
+        layers=batch_model.layers,
+        serial=batch_model.serial,
+        current_phase=batch_model.current_phase,
+        status=batch_model.status,
+        last_updated_at=batch_model.last_updated_at,
+        is_second_degree=batch_model.is_second_degree,
         archived_at=sa_func.now()
     )
     db.add(archived_batch)
     db.query(models.Batch).filter(models.Batch.batch_id == batch_id).delete()
     db.commit()
-    return batch_data
+    return batch_model  # Return the model since the batch is now deleted
 
 def archive_batches_bulk(db: Session, batch_ids: List[int]):
     archived_batches = []
     for batch_id in batch_ids:
-        batch_data = get_batch(db, batch_id)
-        if batch_data:
+        # Get the actual batch model instead of the response schema
+        batch_model = db.query(models.Batch).filter(models.Batch.batch_id == batch_id).first()
+        if batch_model:
             archived_batch = models.ArchivedBatch(
-                batch_id=batch_data.batch_id,
-                job_order_id=batch_data.job_order_id,
-                barcode=batch_data.barcode,
-                brand_id=batch_data.brand_id,
-                model_id=batch_data.model_id,
-                size_id=batch_data.size_id,
-                color_id=batch_data.color_id,
-                quantity=batch_data.quantity,
-                layers=batch_data.layers,
-                serial=batch_data.serial,
-                current_phase=batch_data.current_phase,
-                status=batch_data.status,
-                last_updated_at=batch_data.last_updated_at,
+                batch_id=batch_model.batch_id,
+                job_order_id=batch_model.job_order_id,
+                barcode=batch_model.barcode,
+                size_id=batch_model.size_id,
+                color_id=batch_model.color_id,
+                quantity=batch_model.quantity,
+                layers=batch_model.layers,
+                serial=batch_model.serial,
+                current_phase=batch_model.current_phase,
+                status=batch_model.status,
+                last_updated_at=batch_model.last_updated_at,
+                is_second_degree=batch_model.is_second_degree,
                 archived_at=sa_func.now()
             )
             db.add(archived_batch)
-            archived_batches.append(batch_data)
+            archived_batches.append(archived_batch)
     db.query(models.Batch).filter(models.Batch.batch_id.in_(batch_ids)).delete(synchronize_session=False)
     db.commit()
-    return archived_batches
+    
+    # Convert ArchivedBatch objects to BatchResponse objects
+    response_batches = []
+    for archived_batch in archived_batches:
+        # Get related data for the response
+        job_order = db.query(models.JobOrder).filter(models.JobOrder.job_order_id == archived_batch.job_order_id).first()
+        size = db.query(models.Size).filter(models.Size.size_id == archived_batch.size_id).first()
+        color = db.query(models.Color).filter(models.Color.color_id == archived_batch.color_id).first()
+        phase = db.query(models.ProductionPhase).filter(models.ProductionPhase.phase_id == archived_batch.current_phase).first()
+        
+        response_batch = schemas.BatchResponse(
+            batch_id=archived_batch.batch_id,
+            job_order_id=archived_batch.job_order_id,
+            job_order_number=job_order.job_order_number if job_order else "",
+            barcode=archived_batch.barcode,
+            brand_id=job_order.brand_id if job_order else None,
+            model_id=job_order.model_id if job_order else None,
+            size_id=archived_batch.size_id,
+            color_id=archived_batch.color_id,
+            quantity=archived_batch.quantity,
+            layers=archived_batch.layers,
+            serial=str(archived_batch.serial),
+            current_phase=archived_batch.current_phase,
+            status=archived_batch.status,
+            brand_name=job_order.brand.brand_name if job_order and job_order.brand else "",
+            model_name=job_order.model.model_name if job_order and job_order.model else "",
+            size_value=size.size_value if size else "",
+            color_name=color.color_name if color else "",
+            phase_name=phase.phase_name if phase else "",
+            last_updated_at=archived_batch.last_updated_at,
+            archived_at=archived_batch.archived_at,
+            is_second_degree=bool(archived_batch.is_second_degree)
+        )
+        response_batches.append(response_batch)
+    
+    return response_batches
 
 def delete_archived_batch(db: Session, batch_id: int):
+    """
+    HIERARCHICAL DELETION - BOTTOM LEVEL:
+    Permanently delete ONLY the specific archived batch.
+    This does NOT affect the parent job order or job order item - only deletes the batch itself.
+    """
     archived_batch = db.query(models.ArchivedBatch).filter(
         models.ArchivedBatch.batch_id == batch_id
     ).first()
@@ -449,13 +507,19 @@ def delete_archived_batch(db: Session, batch_id: int):
             models.ArchivedBatch.batch_id == batch_id
         ).delete()
         db.commit()
+        # Get related data for the response before deleting
+        job_order = db.query(models.JobOrder).filter(models.JobOrder.job_order_id == archived_batch.job_order_id).first()
+        size = db.query(models.Size).filter(models.Size.size_id == archived_batch.size_id).first()
+        color = db.query(models.Color).filter(models.Color.color_id == archived_batch.color_id).first()
+        phase = db.query(models.ProductionPhase).filter(models.ProductionPhase.phase_id == archived_batch.current_phase).first()
+        
         return schemas.BatchResponse(
             batch_id=archived_batch.batch_id,
             job_order_id=archived_batch.job_order_id,
-            job_order_number=archived_batch.job_order_number,
+            job_order_number=job_order.job_order_number if job_order else "",
             barcode=archived_batch.barcode,
-            brand_id=archived_batch.brand_id,
-            model_id=archived_batch.model_id,
+            brand_id=job_order.brand_id if job_order else None,
+            model_id=job_order.model_id if job_order else None,
             size_id=archived_batch.size_id,
             color_id=archived_batch.color_id,
             quantity=archived_batch.quantity,
@@ -463,17 +527,22 @@ def delete_archived_batch(db: Session, batch_id: int):
             serial=str(archived_batch.serial),
             current_phase=archived_batch.current_phase,
             status=archived_batch.status,
-            brand_name="",
-            model_name="",
-            size_value="",
-            color_name="",
-            phase_name="",
+            brand_name=job_order.brand.brand_name if job_order and job_order.brand else "",
+            model_name=job_order.model.model_name if job_order and job_order.model else "",
+            size_value=size.size_value if size else "",
+            color_name=color.color_name if color else "",
+            phase_name=phase.phase_name if phase else "",
             last_updated_at=archived_batch.last_updated_at,
-            archived_at=archived_batch.archived_at
+            archived_at=archived_batch.archived_at,
+            is_second_degree=bool(archived_batch.is_second_degree)
         )
     return None
 
 def recover_archived_batch(db: Session, batch_id: int):
+    """
+    Recover an archived batch and restore its associated job order and job order item if they are archived.
+    This ensures complete restoration of the production chain.
+    """
     archived_batch = db.query(models.ArchivedBatch).filter(
         models.ArchivedBatch.batch_id == batch_id
     ).first()
@@ -484,11 +553,48 @@ def recover_archived_batch(db: Session, batch_id: int):
     ).first()
     if existing_batch:
         raise ValueError(f"A batch with barcode {archived_batch.barcode} already exists in active batches")
+    
+    # Check if the associated job order is archived and restore it if needed
+    job_order_restored = False
+    archived_job_order = db.query(models.ArchivedJobOrder).filter(
+        models.ArchivedJobOrder.job_order_id == archived_batch.job_order_id
+    ).first()
+    
+    if archived_job_order:
+        # Import the restore function
+        from .job_order import restore_job_order
+        try:
+            restored_job_order = restore_job_order(db, archived_batch.job_order_id)
+            if restored_job_order:
+                print(f"Restored archived job order {archived_batch.job_order_id} for batch {batch_id}")
+                job_order_restored = True
+        except Exception as e:
+            print(f"Error restoring job order {archived_batch.job_order_id}: {str(e)}")
+            # Continue with batch restoration even if job order restoration fails
+    
+    # Check if the associated job order item is archived and restore it if needed
+    # We need to find the job order item based on color_id and size_id
+    archived_item = db.query(models.ArchivedJobOrderItem).filter(
+        models.ArchivedJobOrderItem.job_order_id == archived_batch.job_order_id,
+        models.ArchivedJobOrderItem.color_id == archived_batch.color_id,
+        models.ArchivedJobOrderItem.size_id == archived_batch.size_id
+    ).first()
+    
+    if archived_item:
+        # Import the restore function
+        from .job_order import restore_job_order_item
+        try:
+            restored_item = restore_job_order_item(db, archived_item.item_id)
+            if restored_item:
+                print(f"Restored archived job order item {archived_item.item_id} for batch {batch_id}")
+        except Exception as e:
+            print(f"Error restoring job order item {archived_item.item_id}: {str(e)}")
+            # Continue with batch restoration even if item restoration fails
+    
     active_batch = models.Batch(
         batch_id=archived_batch.batch_id,
+        job_order_id=archived_batch.job_order_id,
         barcode=archived_batch.barcode,
-        brand_id=archived_batch.brand_id,
-        model_id=archived_batch.model_id,
         size_id=archived_batch.size_id,
         color_id=archived_batch.color_id,
         quantity=archived_batch.quantity,
@@ -496,25 +602,28 @@ def recover_archived_batch(db: Session, batch_id: int):
         serial=archived_batch.serial,
         current_phase=archived_batch.current_phase,
         status=archived_batch.status,
-        last_updated_at=sa_func.now()
+        last_updated_at=sa_func.now(),
+        is_second_degree=archived_batch.is_second_degree
     )
     db.add(active_batch)
     db.query(models.ArchivedBatch).filter(
         models.ArchivedBatch.batch_id == batch_id
     ).delete()
     db.commit()
-    brand = db.query(models.Brand).filter(models.Brand.brand_id == active_batch.brand_id).first()
-    model = db.query(models.Model).filter(models.Model.model_id == active_batch.model_id).first()
+    
+    # Get related data for the response
+    job_order = db.query(models.JobOrder).filter(models.JobOrder.job_order_id == active_batch.job_order_id).first()
     size = db.query(models.Size).filter(models.Size.size_id == active_batch.size_id).first()
     color = db.query(models.Color).filter(models.Color.color_id == active_batch.color_id).first()
     phase = db.query(models.ProductionPhase).filter(models.ProductionPhase.phase_id == active_batch.current_phase).first()
+    
     return schemas.BatchResponse(
         batch_id=active_batch.batch_id,
         job_order_id=active_batch.job_order_id,
-        job_order_number=active_batch.job_order_number,
+        job_order_number=job_order.job_order_number if job_order else "",
         barcode=active_batch.barcode,
-        brand_id=active_batch.brand_id,
-        model_id=active_batch.model_id,
+        brand_id=job_order.brand_id if job_order else None,
+        model_id=job_order.model_id if job_order else None,
         size_id=active_batch.size_id,
         color_id=active_batch.color_id,
         quantity=active_batch.quantity,
@@ -522,16 +631,21 @@ def recover_archived_batch(db: Session, batch_id: int):
         serial=str(active_batch.serial),
         current_phase=active_batch.current_phase,
         status=active_batch.status,
-        brand_name=brand.brand_name if brand else "",
-        model_name=model.model_name if model else "",
+        brand_name=job_order.brand.brand_name if job_order and job_order.brand else "",
+        model_name=job_order.model.model_name if job_order and job_order.model else "",
         size_value=size.size_value if size else "",
         color_name=color.color_name if color else "",
         phase_name=phase.phase_name if phase else "",
         last_updated_at=active_batch.last_updated_at,
-        archived_at=None
+        archived_at=None,
+        is_second_degree=bool(active_batch.is_second_degree)
     )
 
 def recover_archived_batches_bulk(db: Session, batch_ids: List[int]):
+    """
+    Recover multiple archived batches and restore their associated job orders and job order items if they are archived.
+    This ensures complete restoration of the production chain for all batches.
+    """
     recovered_batches = []
     for batch_id in batch_ids:
         try:
@@ -543,9 +657,44 @@ def recover_archived_batches_bulk(db: Session, batch_ids: List[int]):
             existing_batch = db.query(models.Batch).filter(
                 models.Batch.barcode == archived_batch.barcode
             ).first()
+            
+            # Check if the associated job order is archived and restore it if needed
+            archived_job_order = db.query(models.ArchivedJobOrder).filter(
+                models.ArchivedJobOrder.job_order_id == archived_batch.job_order_id
+            ).first()
+            
+            if archived_job_order:
+                # Import the restore function
+                from .job_order import restore_job_order
+                try:
+                    restored_job_order = restore_job_order(db, archived_batch.job_order_id)
+                    if restored_job_order:
+                        print(f"Restored archived job order {archived_batch.job_order_id} for batch {batch_id}")
+                except Exception as e:
+                    print(f"Error restoring job order {archived_batch.job_order_id}: {str(e)}")
+                    # Continue with batch restoration even if job order restoration fails
+            
+            # Check if the associated job order item is archived and restore it if needed
+            archived_item = db.query(models.ArchivedJobOrderItem).filter(
+                models.ArchivedJobOrderItem.job_order_id == archived_batch.job_order_id,
+                models.ArchivedJobOrderItem.color_id == archived_batch.color_id,
+                models.ArchivedJobOrderItem.size_id == archived_batch.size_id
+            ).first()
+            
+            if archived_item:
+                # Import the restore function
+                from .job_order import restore_job_order_item
+                try:
+                    restored_item = restore_job_order_item(db, archived_item.item_id)
+                    if restored_item:
+                        print(f"Restored archived job order item {archived_item.item_id} for batch {batch_id}")
+                except Exception as e:
+                    print(f"Error restoring job order item {archived_item.item_id}: {str(e)}")
+                    # Continue with batch restoration even if item restoration fails
+            
             if existing_batch:
-                for field in ['brand_id', 'model_id', 'size_id', 'color_id', 'quantity', 
-                             'layers', 'serial', 'current_phase', 'status', 'last_updated_at']:
+                for field in ['job_order_id', 'size_id', 'color_id', 'quantity', 
+                             'layers', 'serial', 'current_phase', 'status', 'last_updated_at', 'is_second_degree']:
                     if hasattr(archived_batch, field):
                         setattr(existing_batch, field, getattr(archived_batch, field))
                 db.delete(archived_batch)
@@ -553,9 +702,8 @@ def recover_archived_batches_bulk(db: Session, batch_ids: List[int]):
             else:
                 new_batch = models.Batch(
                     batch_id=archived_batch.batch_id,
+                    job_order_id=archived_batch.job_order_id,
                     barcode=archived_batch.barcode,
-                    brand_id=archived_batch.brand_id,
-                    model_id=archived_batch.model_id,
                     size_id=archived_batch.size_id,
                     color_id=archived_batch.color_id,
                     quantity=archived_batch.quantity,
@@ -563,7 +711,8 @@ def recover_archived_batches_bulk(db: Session, batch_ids: List[int]):
                     serial=archived_batch.serial,
                     current_phase=archived_batch.current_phase,
                     status=archived_batch.status,
-                    last_updated_at=archived_batch.last_updated_at
+                    last_updated_at=archived_batch.last_updated_at,
+                    is_second_degree=archived_batch.is_second_degree
                 )
                 db.add(new_batch)
                 db.delete(archived_batch)
@@ -729,3 +878,13 @@ def get_detailed_events_by_batch(db: Session, batch_id: int, limit: int = 100):
     ).order_by(models.BarcodeScanEvent.scanned_at.desc()).limit(limit).all()
     
     return events 
+
+def get_archived_job_order_items(db: Session, job_order_id: int):
+    """Get all archived items for a specific job order"""
+    return db.query(models.ArchivedJobOrderItem).filter(
+        models.ArchivedJobOrderItem.job_order_id == job_order_id
+    ).all()
+
+def get_archived_batches(db: Session, skip: int = 0, limit: int = 100):
+    """Get all archived batches with pagination"""
+    return db.query(models.ArchivedBatch).offset(skip).limit(limit).all() 

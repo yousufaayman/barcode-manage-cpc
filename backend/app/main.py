@@ -52,6 +52,10 @@ async def startup_event():
 def read_root():
     return {"message": "Welcome to the Barcode Management API"}
 
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "message": "Service is running"}
+
 if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",

@@ -85,7 +85,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
             <NavItem to="/dashboard" label={t('navigation.dashboard')} icon={LayoutDashboard} />
             <NavItem to="/scanner" label={t('navigation.barcodeScanner')} icon={QrCode} />
             <NavItem to="/barcode-management" label={t('navigation.barcodeManagement')} icon={Package} />
-            <NavItem to="/job-orders" label={t('navigation.jobOrders')} icon={FileText} />
+            {user?.role === 'Admin' && (
+              <NavItem to="/job-orders" label={t('navigation.jobOrders')} icon={FileText} />
+            )}
             {(user?.role === 'Admin' || user?.role === 'Creator') && (
               <NavItem to="/bulk-create" label={t('navigation.barcodeCreate')} icon={Package} />
             )}
@@ -99,7 +101,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
               {t('navigation.administration')}
             </h3>
             <div className="space-y-1">
-              <NavItem to="/archived-batches" label={t('navigation.archivedBatches')} icon={Archive} />
+              <NavItem to="/archive" label={t('navigation.archivedBatches')} icon={Archive} />
               <NavItem to="/advanced-statistics" label={t('navigation.advancedStatistics')} icon={BarChart3} />
               <NavItem to="/users" label={t('navigation.userManagement')} icon={Users} />
             </div>

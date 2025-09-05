@@ -9,6 +9,7 @@ type AuthContextType = {
   user: User | null;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
+  clearError: () => void;
   isAuthenticated: boolean;
   isLoading: boolean;
   error: string | null;
@@ -51,8 +52,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       const userData = await authApi.getCurrentUser();
       setUser(userData);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred during login');
+    } catch (err: any) {
+      let errorMessage = 'An error occurred during login';
+      
+      if (err.response) {
+        // Server responded with error status
+        const status = err.response.status;
+        const detail = err.response.data?.detail || err.response.data?.message;
+        
+        switch (status) {
+          case 401:
+            errorMessage = detail || 'Incorrect username or password';
+            break;
+          case 403:
+            errorMessage = detail || 'Account is locked or disabled';
+            break;
+          case 429:
+            errorMessage = detail || 'Too many login attempts. Please try again later.';
+            break;
+          case 500:
+            errorMessage = detail || 'Server error. Please try again later.';
+            break;
+          default:
+            errorMessage = detail || `Login failed (${status})`;
+        }
+      } else if (err.request) {
+        // Network error
+        errorMessage = 'Network error. Please check your connection and try again.';
+      } else {
+        // Other error
+        errorMessage = err.message || 'An unexpected error occurred';
+      }
+      
+      setError(errorMessage);
       console.error('Login error:', err);
     } finally {
       setIsLoading(false);
@@ -61,7 +93,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     setUser(null);
+    setError(null);
     localStorage.removeItem('token');
+  };
+
+  const clearError = () => {
+    setError(null);
   };
 
   return (
@@ -70,6 +107,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         login,
         logout,
+        clearError,
         isAuthenticated: !!user,
         isLoading,
         error,

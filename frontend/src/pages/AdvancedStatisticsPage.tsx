@@ -56,6 +56,11 @@ const AdvancedStatisticsPage: React.FC = () => {
   const [phasesColorSearch, setPhasesColorSearch] = useState('');
   const [jobOrderOptions, setJobOrderOptions] = useState<{ job_order_number: string; model_name: string | null }[]>([]);
 
+  // Debug effect to monitor search state changes
+  useEffect(() => {
+    console.log('Search state changed:', { phasesModelSearch, phasesColorSearch });
+  }, [phasesModelSearch, phasesColorSearch]);
+
   useEffect(() => {
     loadProductionStatistics();
     loadPhasesData();
@@ -79,6 +84,7 @@ const AdvancedStatisticsPage: React.FC = () => {
     try {
       setPhasesLoading(true);
       const data = await barcodeApi.getCurrentBatchesByPhase();
+      console.log('Loaded phases data:', data);
       setPhasesData(data);
     } catch (err: any) {
       console.error('Failed to load phases data:', err);
@@ -152,20 +158,49 @@ const AdvancedStatisticsPage: React.FC = () => {
 
   // Filter phases data by model and color search
   const getFilteredPhasesData = () => {
+    console.log('getFilteredPhasesData called with:', { phasesModelSearch, phasesColorSearch, phasesData });
+    
+    // Validate input data
+    if (!phasesData || typeof phasesData !== 'object') {
+      console.error('Invalid phasesData:', phasesData);
+      return {};
+    }
+    
     if (!phasesModelSearch.trim() && !phasesColorSearch.trim()) {
+      console.log('No search terms, returning all data');
       return phasesData;
     }
 
     const filteredData: typeof phasesData = {};
     
     Object.entries(phasesData).forEach(([phaseName, phaseData]) => {
+      console.log(`Processing phase: ${phaseName}`, phaseData);
+      
+      // Validate phase data structure
+      if (!phaseData || !phaseData.model_color_groups || typeof phaseData.model_color_groups !== 'object') {
+        console.warn(`Phase ${phaseName} has invalid structure:`, phaseData);
+        return;
+      }
+      
       const filteredGroups: typeof phaseData.model_color_groups = {};
       
       Object.entries(phaseData.model_color_groups).forEach(([key, group]) => {
+        // Validate group data structure
+        if (!group || !group.model_name || !group.color_name) {
+          console.warn(`Group ${key} has invalid structure:`, group);
+          return;
+        }
+        
         const modelMatch = !phasesModelSearch.trim() || 
           group.model_name.toLowerCase().includes(phasesModelSearch.toLowerCase());
         const colorMatch = !phasesColorSearch.trim() || 
-          group.color_name.toLowerCase().includes(phasesColorSearch.toLowerCase());
+          group.color_name.toLowerCase().includes(phasesColorSearch.trim().toLowerCase());
+        
+        console.log(`Group ${key}: modelMatch=${modelMatch}, colorMatch=${colorMatch}`, {
+          model_name: group.model_name,
+          color_name: group.color_name,
+          search_terms: { model: phasesModelSearch, color: phasesColorSearch }
+        });
         
         if (modelMatch && colorMatch) {
           filteredGroups[key] = group;
@@ -180,6 +215,7 @@ const AdvancedStatisticsPage: React.FC = () => {
       }
     });
     
+    console.log('Filtered data result:', filteredData);
     return filteredData;
   };
 
@@ -575,56 +611,89 @@ const AdvancedStatisticsPage: React.FC = () => {
                                    const phaseName = batches.find(b => b.current_phase === parseInt(phaseNum))?.phase_name || `Phase ${phaseNum}`;
                                    const total = statusCounts.pending + statusCounts.in_progress + statusCounts.completed;
                                    
+                                   const isPackaging = phaseName.toLowerCase().includes('packaging');
+                                   const isSewing = phaseName.toLowerCase().includes('sewing');
+                                   const isCutting = phaseName.toLowerCase().includes('cutting');
+                                   let cardClass = "bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg p-3 border border-gray-200 shadow-sm";
+                                   let titleClass = "font-medium text-gray-800 text-sm";
+                                   let pendingDot = "w-3 h-3 bg-yellow-400 rounded-full";
+                                   let pendingBar = "bg-yellow-400 h-2 rounded-full transition-all duration-300";
+                                   let pendingText = "text-xs font-medium text-yellow-700 min-w-[60px]";
+                                   let inProgressDot = "w-3 h-3 bg-blue-400 rounded-full";
+                                   let inProgressBar = "bg-blue-400 h-2 rounded-full transition-all duration-300";
+                                   let inProgressText = "text-xs font-medium text-blue-700 min-w-[60px]";
+                                   let completedDot = "w-3 h-3 bg-green-400 rounded-full";
+                                   let completedBar = "bg-green-400 h-2 rounded-full transition-all duration-300";
+                                   let completedText = "text-xs font-medium text-green-700 min-w-[60px]";
+                                   if (isPackaging) {
+                                     cardClass = "bg-orange-50 border-orange-200 text-orange-700 rounded-lg p-3 border shadow-sm";
+                                     titleClass = "font-medium text-orange-700 text-sm";
+                                     pendingDot = "w-3 h-3 bg-orange-400 rounded-full";
+                                     pendingBar = "bg-orange-400 h-2 rounded-full transition-all duration-300";
+                                     pendingText = "text-xs font-medium text-orange-700 min-w-[60px]";
+                                     inProgressDot = "w-3 h-3 bg-orange-500 rounded-full";
+                                     inProgressBar = "bg-orange-500 h-2 rounded-full transition-all duration-300";
+                                     inProgressText = "text-xs font-medium text-orange-800 min-w-[60px]";
+                                     completedDot = "w-3 h-3 bg-orange-600 rounded-full";
+                                     completedBar = "bg-orange-600 h-2 rounded-full transition-all duration-300";
+                                     completedText = "text-xs font-medium text-orange-900 min-w-[60px]";
+                                   } else if (isSewing) {
+                                     cardClass = "bg-yellow-50 border-yellow-200 text-yellow-800 rounded-lg p-3 border shadow-sm";
+                                     titleClass = "font-medium text-yellow-800 text-sm";
+                                     pendingDot = "w-3 h-3 bg-yellow-400 rounded-full";
+                                     pendingBar = "bg-yellow-400 h-2 rounded-full transition-all duration-300";
+                                     pendingText = "text-xs font-medium text-yellow-700 min-w-[60px]";
+                                     inProgressDot = "w-3 h-3 bg-yellow-500 rounded-full";
+                                     inProgressBar = "bg-yellow-500 h-2 rounded-full transition-all duration-300";
+                                     inProgressText = "text-xs font-medium text-yellow-800 min-w-[60px]";
+                                     completedDot = "w-3 h-3 bg-yellow-600 rounded-full";
+                                     completedBar = "bg-yellow-600 h-2 rounded-full transition-all duration-300";
+                                     completedText = "text-xs font-medium text-yellow-900 min-w-[60px]";
+                                   } else if (isCutting) {
+                                     cardClass = "bg-blue-50 border-blue-200 text-blue-800 rounded-lg p-3 border shadow-sm";
+                                     titleClass = "font-medium text-blue-800 text-sm";
+                                     pendingDot = "w-3 h-3 bg-blue-200 rounded-full";
+                                     pendingBar = "bg-blue-200 h-2 rounded-full transition-all duration-300";
+                                     pendingText = "text-xs font-medium text-blue-700 min-w-[60px]";
+                                     inProgressDot = "w-3 h-3 bg-blue-400 rounded-full";
+                                     inProgressBar = "bg-blue-400 h-2 rounded-full transition-all duration-300";
+                                     inProgressText = "text-xs font-medium text-blue-800 min-w-[60px]";
+                                     completedDot = "w-3 h-3 bg-blue-600 rounded-full";
+                                     completedBar = "bg-blue-600 h-2 rounded-full transition-all duration-300";
+                                     completedText = "text-xs font-medium text-blue-900 min-w-[60px]";
+                                   }
                                    return (
-                                     <div key={phaseKey} className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg p-3 border border-gray-200 shadow-sm">
+                                     <div key={phaseKey} className={cardClass}>
                                        <div className="flex items-center justify-between mb-2">
-                                         <div className="font-medium text-gray-800 text-sm">{phaseName}</div>
+                                         <div className={titleClass}>{phaseName}</div>
                                          <div className="text-xs text-gray-500">Total: {total}</div>
                                        </div>
-                                       
                                        <div className="space-y-2">
                                          {statusCounts.pending > 0 && (
                                            <div className="flex items-center gap-2">
-                                             <div className="w-3 h-3 bg-yellow-400 rounded-full"></div>
+                                             <div className={pendingDot}></div>
                                              <div className="flex-1 bg-gray-200 rounded-full h-2">
-                                               <div 
-                                                 className="bg-yellow-400 h-2 rounded-full transition-all duration-300"
-                                                 style={{ width: `${(statusCounts.pending / total) * 100}%` }}
-                                               ></div>
+                                               <div className={pendingBar} style={{ width: `${(statusCounts.pending / total) * 100}%` }}></div>
                                              </div>
-                                             <span className="text-xs font-medium text-yellow-700 min-w-[60px]">
-                                               Pending: {statusCounts.pending}
-                                             </span>
+                                             <span className={pendingText}>Pending: {statusCounts.pending}</span>
                                            </div>
                                          )}
-                                         
                                          {statusCounts.in_progress > 0 && (
                                            <div className="flex items-center gap-2">
-                                             <div className="w-3 h-3 bg-blue-400 rounded-full"></div>
+                                             <div className={inProgressDot}></div>
                                              <div className="flex-1 bg-gray-200 rounded-full h-2">
-                                               <div 
-                                                 className="bg-blue-400 h-2 rounded-full transition-all duration-300"
-                                                 style={{ width: `${(statusCounts.in_progress / total) * 100}%` }}
-                                               ></div>
+                                               <div className={inProgressBar} style={{ width: `${(statusCounts.in_progress / total) * 100}%` }}></div>
                                              </div>
-                                             <span className="text-xs font-medium text-blue-700 min-w-[60px]">
-                                               In Progress: {statusCounts.in_progress}
-                                             </span>
+                                             <span className={inProgressText}>In Progress: {statusCounts.in_progress}</span>
                                            </div>
                                          )}
-                                         
                                          {statusCounts.completed > 0 && (
                                            <div className="flex items-center gap-2">
-                                             <div className="w-3 h-3 bg-green-400 rounded-full"></div>
+                                             <div className={completedDot}></div>
                                              <div className="flex-1 bg-gray-200 rounded-full h-2">
-                                               <div 
-                                                 className="bg-green-400 h-2 rounded-full transition-all duration-300"
-                                                 style={{ width: `${(statusCounts.completed / total) * 100}%` }}
-                                               ></div>
+                                               <div className={completedBar} style={{ width: `${(statusCounts.completed / total) * 100}%` }}></div>
                                              </div>
-                                             <span className="text-xs font-medium text-green-700 min-w-[60px]">
-                                               Completed: {statusCounts.completed}
-                                             </span>
+                                             <span className={completedText}>Completed: {statusCounts.completed}</span>
                                            </div>
                                          )}
                                        </div>

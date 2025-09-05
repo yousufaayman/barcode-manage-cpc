@@ -65,18 +65,15 @@ const BarcodeManagementPage: React.FC = () => {
           job_order_number: ''
         };
       } else {
-        const roleToPhase: { [key: string]: string } = {
-          'Cutting': 'Cutting',
-          'Sewing': 'Sewing',
-          'Packaging': 'Packaging'
-        };
+        // Don't set default phase filter for non-admin users
+        // Let them see all phases and filter manually
         return {
           barcode: '',
           brand: '',
           model: '',
           size: '',
           color: '',
-          phase: roleToPhase[user.role] || '',
+          phase: '',
           status: '',
           job_order_number: ''
         };
@@ -225,6 +222,22 @@ const BarcodeManagementPage: React.FC = () => {
   useEffect(() => {
     api.get('/phases/').then(res => setPhases(res.data));
   }, []);
+
+  // Helper function to get allowed phases for each role
+  const getAllowedPhasesForRole = (role: string): number[] => {
+    switch (role) {
+      case 'Admin':
+        return [1, 2, 3, 4, 7, 8]; // All phases: Cutting, Sewing lines 1-4, Packaging
+      case 'Cutting':
+        return [1]; // Only cutting
+      case 'Sewing':
+        return [2, 3, 4, 7, 8]; // All sewing lines (2,3,4,7) and packaging
+      case 'Packaging':
+        return [8]; // Only packaging
+      default:
+        return [1]; // Default to cutting
+    }
+  };
 
   // Handle changes to filter inputs
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -631,9 +644,14 @@ const BarcodeManagementPage: React.FC = () => {
                 {phases.length === 0 ? (
                   <option value="">{t('common.loading')}</option>
                 ) : (
-                  phases.map(phase => (
-                    <option key={phase.phase_id} value={phase.phase_name}>{phase.phase_name}</option>
-                  ))
+                  phases
+                    .filter(phase => {
+                      if (user?.role === 'Admin') return true;
+                      return getAllowedPhasesForRole(user?.role || '').includes(phase.phase_id);
+                    })
+                    .map(phase => (
+                      <option key={phase.phase_id} value={phase.phase_name}>{phase.phase_name}</option>
+                    ))
                 )}
               </select>
             </div>
@@ -860,7 +878,7 @@ const BarcodeManagementPage: React.FC = () => {
       {/* Archived Batches Link */}
       <div className="mt-6 text-center">
         <Link
-          to="/archived-batches"
+          to="/archive"
           className="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 ease-in-out"
         >
           <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -869,6 +887,21 @@ const BarcodeManagementPage: React.FC = () => {
           {t('barcodeManagement.viewArchivedBatches')}
         </Link>
       </div>
+
+      {/* Archive Action Button */}
+      {user?.role === 'Admin' && selectedBarcodes.length > 0 && (
+        <div className="mt-6 text-center">
+          <button
+            onClick={handleArchiveSelected}
+            className="inline-flex items-center px-6 py-3 text-sm font-medium text-white bg-orange-600 border border-transparent rounded-md hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 transition-all duration-200 ease-in-out"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+            </svg>
+            Archive Selected ({selectedBarcodes.length})
+          </button>
+        </div>
+      )}
     </Layout>
   );
 };

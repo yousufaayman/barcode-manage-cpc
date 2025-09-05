@@ -112,23 +112,49 @@ class ArchivedBatch(Base):
     __tablename__ = "archived_batches"
 
     batch_id = Column(Integer, primary_key=True, index=True)
-    job_order_id = Column(Integer, ForeignKey("job_orders.job_order_id", ondelete="CASCADE"), nullable=False)
+    job_order_id = Column(Integer, nullable=False)  # Remove foreign key constraint for archived table
     barcode = Column(String(255), unique=True, index=True)
-    size_id = Column(Integer, ForeignKey("sizes.size_id", ondelete="RESTRICT"))
-    color_id = Column(Integer, ForeignKey("colors.color_id", ondelete="RESTRICT"))
+    size_id = Column(Integer, nullable=True)  # Remove foreign key constraint for archived table
+    color_id = Column(Integer, nullable=True)  # Remove foreign key constraint for archived table
     quantity = Column(Integer)
     layers = Column(Integer)
     serial = Column(String(3), nullable=False)
-    current_phase = Column(Integer, ForeignKey("production_phases.phase_id", ondelete="RESTRICT"))
+    current_phase = Column(Integer, nullable=True)  # Remove foreign key constraint for archived table
     status = Column(String(50))
-    last_updated_at = Column(DateTime)
+    last_updated_at = Column(DateTime, server_default=func.now())
     archived_at = Column(DateTime)
+    is_second_degree = Column(TINYINT(1), nullable=False, default=0, server_default='0')
     notes = Column(String(length=1000), nullable=True)
 
-    size = relationship("Size")
-    color = relationship("Color")
-    phase = relationship("ProductionPhase")
-    job_order = relationship("JobOrder")
+    # Remove relationships since we don't have foreign key constraints
+
+# Archived Job Orders
+class ArchivedJobOrder(Base):
+    __tablename__ = "archived_job_orders"
+
+    job_order_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    model_id = Column(Integer, nullable=False)  # Remove foreign key constraint for archived table
+    job_order_number = Column(String(100), unique=True, nullable=False, index=True)
+    brand_id = Column(Integer, nullable=True)  # Remove foreign key constraint for archived table
+    image_url = Column(String(255), nullable=True)
+    notes = Column(String(length=1000), nullable=True)
+    date_created = Column(DateTime, nullable=False)
+    archived_at = Column(DateTime, nullable=False, server_default=func.now())
+
+# Archived Job Order Items
+class ArchivedJobOrderItem(Base):
+    __tablename__ = "archived_job_order_items"
+
+    item_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    job_order_id = Column(Integer, nullable=False)  # Remove foreign key constraint for archived table
+    color_id = Column(Integer, nullable=False)  # Remove foreign key constraint for archived table
+    size_id = Column(Integer, nullable=False)  # Remove foreign key constraint for archived table
+    quantity = Column(Integer, nullable=False)
+    weight = Column(DECIMAL(10,2), nullable=True)
+    notes = Column(String(length=1000), nullable=True)
+    archived_at = Column(DateTime, nullable=False, server_default=func.now())
+
+    # Remove relationships since we don't have foreign key constraints
 
 # Job Order model
 class JobOrder(Base):

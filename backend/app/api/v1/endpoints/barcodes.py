@@ -16,6 +16,8 @@ from app.core.deps import get_db
 from app.crud import *
 from app import schemas
 from app.crud.helpers import process_bulk_barcodes as process_bulk_barcodes_helper
+from app.core.deps import get_current_active_user
+from app import models
 
 router = APIRouter()
 
@@ -33,7 +35,6 @@ def get_available_printers():
 
 def print_barcode_zebra(barcode_string: str, brand: str, model_name: str, size_value: str, 
                        color_name: str, quantity: int, printer_name: str):
-    """Print a single barcode using Zebra printer"""
     try:
         z = Zebra(printer_name)
         
@@ -44,9 +45,11 @@ def print_barcode_zebra(barcode_string: str, brand: str, model_name: str, size_v
             ^XA
             ^FO50,50^BY2,2.5,50
             ^BCN,80,Y,N,N
-            ^FD{barcode_string}^FS
+            ^FD47-nl-20h-228-v-5-1-9^FS
             ^FO50,210^A0N,35,35^FD{text_info}^FS
             ^FO50,300^A0N,35,35^FD{text_info2}^FS
+            ^FO675,225^GB50,50,5^FS
+            ^FO635,200^A0N,20,20^FDSecond Degree?^FS
             ^XZ
         """
         
@@ -63,46 +66,35 @@ class PrintBarcodeRequest(BaseModel):
 
 @router.get("/template")
 async def download_barcode_template():
-    """Download the barcode template Excel file"""
     try:
-        # Create empty DataFrame with required columns
         df_template = pd.DataFrame(columns=[
             "size",
             "color",
             "quantity",
-            "layers",
-            "serial"
+            "layers"
         ])
         
-        # Create BytesIO object
         output = BytesIO()
         
-        # Write DataFrame to Excel
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_template.to_excel(writer, index=False, sheet_name='Template')
             
-            # Get the workbook and worksheet
             workbook = writer.book
             worksheet = writer.sheets['Template']
             
-            # Add column descriptions
             descriptions = {
                 'A': 'Size (required)',
                 'B': 'Color (required)',
                 'C': 'Quantity (required, number)',
-                'D': 'Number of layers (required, number)',
-                'E': 'Serial number (required, number)'
+                'D': 'Number of layers (required, number)'
             }
             
-            # Add descriptions as comments
             for col, desc in descriptions.items():
                 cell = worksheet[f'{col}1']
                 cell.comment = openpyxl.comments.Comment(desc, 'System')
         
-        # Reset buffer position
         output.seek(0)
         
-        # Return the Excel file
         return StreamingResponse(
             output,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -185,7 +177,8 @@ async def process_bulk_barcodes_endpoint(
 @router.post("/bulk/submit", response_model=schemas.BulkSubmitResponse)
 async def submit_bulk_barcodes(
     barcodes: List[schemas.BatchCreate],
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user)
 ):
     """Submit processed barcodes to create batches"""
     created_batches = []
@@ -206,8 +199,8 @@ async def submit_bulk_barcodes(
                 "serial": barcode.serial
             })
         else:
-            # Create the batch
-            db_batch = create_batch(db, barcode)
+            # Create the batch with user_id
+            db_batch = create_batch(db, barcode, user_id=current_user.user_id)
             db.refresh(db_batch)  # Ensure all auto fields are loaded
             # Get the batch with all related data using CRUD function
             batch_response = get_batch(db, db_batch.batch_id)

@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional, Union
 from .. import models, schemas
-from sqlalchemy import func
+from sqlalchemy import func, text
 from .brand import get_brand_by_name, create_brand
 from .model import get_model_by_name, create_model
 from .color import get_color_by_name, create_color
@@ -697,4 +697,626 @@ def get_item_level_statistics(db: Session) -> Dict:
         "total_overproduction_quantity": total_overproduction,
         "overall_completion_percentage": round((total_produced / total_expected) * 100, 2) if total_expected > 0 else 0,
         "overall_second_degree_percentage": round((total_second_degree / total_produced) * 100, 2) if total_produced > 0 else 0
-    } 
+    }
+
+# --- Job Order Archival Functions ---
+
+def archive_job_order(db: Session, job_order_id: int):
+    """Archive a job order and all its associated items and batches"""
+    from .batch import archive_batches_bulk
+    
+    job_order = db.query(models.JobOrder).filter(
+        models.JobOrder.job_order_id == job_order_id
+    ).first()
+    
+    if not job_order:
+        return None
+    
+    # Archive all batches first
+    batches = db.query(models.Batch).filter(
+        models.Batch.job_order_id == job_order_id
+    ).all()
+    
+    if batches:
+        batch_ids = [batch.batch_id for batch in batches]
+        archive_batches_bulk(db, batch_ids)
+    
+    # Archive all job order items
+    items = db.query(models.JobOrderItem).filter(
+        models.JobOrderItem.job_order_id == job_order_id
+    ).all()
+    
+    for item in items:
+        archived_item = models.ArchivedJobOrderItem(
+            job_order_id=item.job_order_id,
+            color_id=item.color_id,
+            size_id=item.size_id,
+            quantity=item.quantity,
+            weight=item.weight,
+            notes=item.notes,
+            archived_at=func.now()
+        )
+        db.add(archived_item)
+    
+    # Create archived job order
+    archived_job_order = models.ArchivedJobOrder(
+        job_order_id=job_order.job_order_id,
+        model_id=job_order.model_id,
+        job_order_number=job_order.job_order_number,
+        brand_id=job_order.brand_id,
+        image_url=job_order.image_url,
+        notes=job_order.notes,
+        date_created=job_order.date_created,
+        archived_at=func.now()
+    )
+    db.add(archived_job_order)
+    
+    # Delete the original job order
+    db.delete(job_order)
+    db.commit()
+    
+    return archived_job_order
+
+def archive_job_orders_bulk(db: Session, job_order_ids: List[int]):
+    """Archive multiple job orders and all their associated items and batches"""
+    archived_job_orders = []
+    
+    for job_order_id in job_order_ids:
+        archived_job_order = archive_job_order(db, job_order_id)
+        if archived_job_order:
+            archived_job_orders.append(archived_job_order)
+    
+    return archived_job_orders
+
+def get_archived_job_order(db: Session, job_order_id: int):
+    """Get an archived job order by ID"""
+    return db.query(models.ArchivedJobOrder).filter(
+        models.ArchivedJobOrder.job_order_id == job_order_id
+    ).first()
+
+def get_archived_job_orders(db: Session, skip: int = 0, limit: int = 100):
+    """Get all archived job orders with pagination"""
+    return db.query(models.ArchivedJobOrder).offset(skip).limit(limit).all()
+
+def delete_archived_job_order(db: Session, job_order_id: int) -> bool:
+    """Permanently delete an archived job order"""
+    archived_job_order = db.query(models.ArchivedJobOrder).filter(
+        models.ArchivedJobOrder.job_order_id == job_order_id
+    ).first()
+    
+    if not archived_job_order:
+        return False
+    
+    # Also delete associated archived items
+    db.query(models.ArchivedJobOrderItem).filter(
+        models.ArchivedJobOrderItem.job_order_id == job_order_id
+    ).delete()
+    
+    db.delete(archived_job_order)
+    db.commit()
+    
+    return True
+
+def recover_archived_job_order(db: Session, job_order_id: int):
+    """Recover an archived job order and its items"""
+    archived_job_order = db.query(models.ArchivedJobOrder).filter(
+        models.ArchivedJobOrder.job_order_id == job_order_id
+    ).first()
+    
+    if not archived_job_order:
+        return None
+    
+    # Check if a job order with the same number already exists
+    existing_job_order = db.query(models.JobOrder).filter(
+        models.JobOrder.job_order_number == archived_job_order.job_order_number
+    ).first()
+    
+    if existing_job_order:
+        raise ValueError(f"A job order with number {archived_job_order.job_order_number} already exists")
+    
+    # Create the recovered job order
+    recovered_job_order = models.JobOrder(
+        job_order_id=archived_job_order.job_order_id,
+        model_id=archived_job_order.model_id,
+        job_order_number=archived_job_order.job_order_number,
+        brand_id=archived_job_order.brand_id,
+        image_url=archived_job_order.image_url,
+        notes=archived_job_order.notes,
+        date_created=archived_job_order.date_created
+    )
+    db.add(recovered_job_order)
+    
+    # Recover associated archived items
+    archived_items = db.query(models.ArchivedJobOrderItem).filter(
+        models.ArchivedJobOrderItem.job_order_id == job_order_id
+    ).all()
+    
+    for archived_item in archived_items:
+        recovered_item = models.JobOrderItem(
+            item_id=archived_item.item_id,
+            job_order_id=archived_item.job_order_id,
+            color_id=archived_item.color_id,
+            size_id=archived_item.size_id,
+            quantity=archived_item.quantity,
+            weight=archived_item.weight,
+            notes=archived_item.notes
+        )
+        db.add(recovered_item)
+    
+    # Delete the archived job order and items
+    db.query(models.ArchivedJobOrderItem).filter(
+        models.ArchivedJobOrderItem.job_order_id == job_order_id
+    ).delete()
+    db.delete(archived_job_order)
+    
+    db.commit()
+    db.refresh(recovered_job_order)
+    
+    return recovered_job_order
+
+def recover_archived_job_orders_bulk(db: Session, job_order_ids: List[int]) -> List[models.JobOrder]:
+    """Recover multiple archived job orders"""
+    recovered_job_orders = []
+    
+    for job_order_id in job_order_ids:
+        try:
+            recovered_job_order = recover_archived_job_order(db, job_order_id)
+            if recovered_job_order:
+                recovered_job_orders.append(recovered_job_order)
+        except ValueError as e:
+            # Log the error but continue with other job orders
+            print(f"Error recovering job order {job_order_id}: {e}")
+            continue
+    
+    return recovered_job_orders
+
+# --- Job Order Item Archival Functions ---
+
+def archive_job_order_item(db: Session, item_id: int):
+    """Archive a single job order item"""
+    # Check if item exists
+    item = db.query(models.JobOrderItem).filter(
+        models.JobOrderItem.item_id == item_id
+    ).first()
+    
+    if not item:
+        print(f"Item with ID {item_id} not found")
+        return None
+    
+    # Check if item is already archived
+    existing_archived = db.query(models.ArchivedJobOrderItem).filter(
+        models.ArchivedJobOrderItem.item_id == item_id
+    ).first()
+    
+    if existing_archived:
+        print(f"Item with ID {item_id} is already archived")
+        return None
+    
+    try:
+        # Create archived item
+        archived_item = models.ArchivedJobOrderItem(
+            job_order_id=item.job_order_id,
+            color_id=item.color_id,
+            size_id=item.size_id,
+            quantity=item.quantity,
+            weight=item.weight,
+            notes=item.notes,
+            archived_at=func.now()
+        )
+        db.add(archived_item)
+        
+        # Delete the summary record first (if it exists)
+        summary = db.query(models.JobOrderItemSummary).filter(
+            models.JobOrderItemSummary.item_id == item_id
+        ).first()
+        if summary:
+            db.delete(summary)
+        
+        # Delete the original item
+        db.delete(item)
+        db.commit()
+        
+        return archived_item
+    except Exception as e:
+        db.rollback()
+        print(f"Error archiving item {item_id}: {str(e)}")
+        raise e 
+
+def get_archived_job_order_items(db: Session, job_order_id: int):
+    """Get all archived items for a specific job order"""
+    return db.query(models.ArchivedJobOrderItem).filter(
+        models.ArchivedJobOrderItem.job_order_id == job_order_id
+    ).all()
+
+# --- Job Order Item Restoration Functions ---
+
+def restore_job_order_item(db: Session, item_id: int):
+    """Restore a single archived job order item and restore its associated job order and batches if they are archived"""
+    # Check if archived item exists
+    archived_item = db.query(models.ArchivedJobOrderItem).filter(
+        models.ArchivedJobOrderItem.item_id == item_id
+    ).first()
+    
+    if not archived_item:
+        print(f"Archived item with ID {item_id} not found")
+        return None
+    
+    # Check if item is already restored (exists in main table)
+    existing_item = db.query(models.JobOrderItem).filter(
+        models.JobOrderItem.item_id == item_id
+    ).first()
+    
+    if existing_item:
+        print(f"Item with ID {item_id} is already restored")
+        return None
+    
+    try:
+        # Check if the associated job order is archived and restore it if needed
+        archived_job_order = db.query(models.ArchivedJobOrder).filter(
+            models.ArchivedJobOrder.job_order_id == archived_item.job_order_id
+        ).first()
+        
+        if archived_job_order:
+            # Import the restore function (avoid circular import)
+            from .job_order import restore_job_order
+            try:
+                restored_job_order = restore_job_order(db, archived_item.job_order_id)
+                if restored_job_order:
+                    print(f"Restored archived job order {archived_item.job_order_id} for item {item_id}")
+            except Exception as e:
+                print(f"Error restoring job order {archived_item.job_order_id}: {str(e)}")
+                # Continue with item restoration even if job order restoration fails
+        
+        # Check if there are any archived batches associated with this item and restore them
+        archived_batches = db.query(models.ArchivedBatch).filter(
+            models.ArchivedBatch.job_order_id == archived_item.job_order_id,
+            models.ArchivedBatch.color_id == archived_item.color_id,
+            models.ArchivedBatch.size_id == archived_item.size_id
+        ).all()
+        
+        for archived_batch in archived_batches:
+            # Check if this batch already exists in the main table
+            existing_batch = db.query(models.Batch).filter(
+                models.Batch.batch_id == archived_batch.batch_id
+            ).first()
+            
+            if existing_batch:
+                print(f"Batch {archived_batch.batch_id} already exists, skipping restoration")
+                continue
+            
+            # Check if barcode already exists
+            existing_barcode = db.query(models.Batch).filter(
+                models.Batch.barcode == archived_batch.barcode
+            ).first()
+            
+            if existing_barcode:
+                print(f"Batch with barcode {archived_batch.barcode} already exists, skipping restoration")
+                continue
+            
+            # Create restored batch
+            restored_batch = models.Batch(
+                batch_id=archived_batch.batch_id,
+                job_order_id=archived_batch.job_order_id,
+                barcode=archived_batch.barcode,
+                size_id=archived_batch.size_id,
+                color_id=archived_batch.color_id,
+                quantity=archived_batch.quantity,
+                layers=archived_batch.layers,
+                serial=archived_batch.serial,
+                current_phase=archived_batch.current_phase,
+                status=archived_batch.status,
+                last_updated_at=func.now(),
+                is_second_degree=archived_batch.is_second_degree
+            )
+            db.add(restored_batch)
+            print(f"Restored archived batch {archived_batch.batch_id} for item {item_id}")
+        
+        # Create restored item
+        restored_item = models.JobOrderItem(
+            item_id=archived_item.item_id,
+            job_order_id=archived_item.job_order_id,
+            color_id=archived_item.color_id,
+            size_id=archived_item.size_id,
+            quantity=archived_item.quantity,
+            weight=archived_item.weight,
+            notes=archived_item.notes
+        )
+        db.add(restored_item)
+        
+        # Check if summary already exists
+        existing_summary = db.query(models.JobOrderItemSummary).filter(
+            models.JobOrderItemSummary.item_id == archived_item.item_id
+        ).first()
+        
+        if not existing_summary:
+            # Get color and size information for the summary
+            color = db.query(models.Color).filter(models.Color.color_id == archived_item.color_id).first()
+            size = db.query(models.Size).filter(models.Size.size_id == archived_item.size_id).first()
+            
+            # Create the JobOrderItemSummary record
+            summary = models.JobOrderItemSummary(
+                item_id=archived_item.item_id,
+                job_order_id=archived_item.job_order_id,
+                color_id=archived_item.color_id,
+                size_id=archived_item.size_id,
+                color_name=color.color_name if color else None,
+                size_value=size.size_value if size else None,
+                expected_quantity=archived_item.quantity,
+                produced_quantity=0,
+                cut_quantity=0,
+                second_degree_quantity=0,
+                completed_quantity=0,
+                working_quantity=0,
+                remaining_quantity=archived_item.quantity,
+                total_batches=0,
+                has_issues=False,
+                completion_percentage=0.00,
+                overproduction_quantity=0,
+                production_status='Not Started',
+                notes=archived_item.notes,
+                last_calculated_at=func.now()
+            )
+            db.add(summary)
+        
+        # Delete the archived batches that were restored
+        for archived_batch in archived_batches:
+            db.query(models.ArchivedBatch).filter(
+                models.ArchivedBatch.batch_id == archived_batch.batch_id
+            ).delete()
+        
+        # Delete the archived item
+        db.delete(archived_item)
+        db.commit()
+        
+        return restored_item
+    except Exception as e:
+        db.rollback()
+        print(f"Error restoring item {item_id}: {str(e)}")
+        raise e
+
+def restore_job_order(db: Session, job_order_id: int):
+    """Restore a fully archived job order, all its archived items, and all associated archived batches"""
+    # Check if archived job order exists
+    archived_job_order = db.query(models.ArchivedJobOrder).filter(
+        models.ArchivedJobOrder.job_order_id == job_order_id
+    ).first()
+    
+    if not archived_job_order:
+        print(f"Archived job order with ID {job_order_id} not found")
+        return None
+    
+    # Check if job order is already restored (exists in main table)
+    existing_job_order = db.query(models.JobOrder).filter(
+        models.JobOrder.job_order_id == job_order_id
+    ).first()
+    
+    if existing_job_order:
+        print(f"Job order with ID {job_order_id} is already restored")
+        return None
+    
+    try:
+        # Ensure job_order_number is unique before restoration
+        desired_job_order_number = archived_job_order.job_order_number
+        number_conflict = db.query(models.JobOrder).filter(
+            models.JobOrder.job_order_number == desired_job_order_number
+        ).first()
+
+        if number_conflict:
+            # Generate a unique restored number by suffixing
+            # Keep it deterministic to avoid surprises
+            desired_job_order_number = f"{archived_job_order.job_order_number}-restored-{job_order_id}"
+
+        # Create restored job order
+        restored_job_order = models.JobOrder(
+            job_order_id=archived_job_order.job_order_id,
+            model_id=archived_job_order.model_id,
+            job_order_number=desired_job_order_number,
+            brand_id=archived_job_order.brand_id,
+            image_url=archived_job_order.image_url,
+            notes=archived_job_order.notes,
+            date_created=archived_job_order.date_created
+        )
+        db.add(restored_job_order)
+        
+        # Get all archived items for this job order and restore them
+        archived_items = db.query(models.ArchivedJobOrderItem).filter(
+            models.ArchivedJobOrderItem.job_order_id == job_order_id
+        ).all()
+        
+        for archived_item in archived_items:
+            # Check if this item already exists in the main table (might have been restored individually)
+            existing_item = db.query(models.JobOrderItem).filter(
+                models.JobOrderItem.item_id == archived_item.item_id
+            ).first()
+            
+            if existing_item:
+                print(f"Item {archived_item.item_id} already exists, skipping restoration")
+                continue
+            
+            # Check if summary already exists
+            existing_summary = db.query(models.JobOrderItemSummary).filter(
+                models.JobOrderItemSummary.item_id == archived_item.item_id
+            ).first()
+            
+            if existing_summary:
+                print(f"Summary for item {archived_item.item_id} already exists, skipping")
+                continue
+            
+            restored_item = models.JobOrderItem(
+                item_id=archived_item.item_id,
+                job_order_id=archived_item.job_order_id,
+                color_id=archived_item.color_id,
+                size_id=archived_item.size_id,
+                quantity=archived_item.quantity,
+                weight=archived_item.weight,
+                notes=archived_item.notes
+            )
+            db.add(restored_item)
+            
+            # Get color and size information for the summary
+            color = db.query(models.Color).filter(models.Color.color_id == archived_item.color_id).first()
+            size = db.query(models.Size).filter(models.Size.size_id == archived_item.size_id).first()
+            
+            # Create the JobOrderItemSummary record
+            summary = models.JobOrderItemSummary(
+                item_id=archived_item.item_id,
+                job_order_id=archived_item.job_order_id,
+                color_id=archived_item.color_id,
+                size_id=archived_item.size_id,
+                color_name=color.color_name if color else None,
+                size_value=size.size_value if size else None,
+                expected_quantity=archived_item.quantity,
+                produced_quantity=0,
+                cut_quantity=0,
+                second_degree_quantity=0,
+                completed_quantity=0,
+                working_quantity=0,
+                remaining_quantity=archived_item.quantity,
+                total_batches=0,
+                has_issues=False,
+                completion_percentage=0.00,
+                overproduction_quantity=0,
+                production_status='Not Started',
+                notes=archived_item.notes,
+                last_calculated_at=func.now()
+            )
+            db.add(summary)
+        
+        # Get all archived batches for this job order and restore them
+        archived_batches = db.query(models.ArchivedBatch).filter(
+            models.ArchivedBatch.job_order_id == job_order_id
+        ).all()
+        
+        for archived_batch in archived_batches:
+            # Check if this batch already exists in the main table (might have been restored individually)
+            existing_batch = db.query(models.Batch).filter(
+                models.Batch.batch_id == archived_batch.batch_id
+            ).first()
+            
+            if existing_batch:
+                print(f"Batch {archived_batch.batch_id} already exists, skipping restoration")
+                continue
+            
+            # Check if barcode already exists (shouldn't happen, but safety check)
+            existing_barcode = db.query(models.Batch).filter(
+                models.Batch.barcode == archived_batch.barcode
+            ).first()
+            
+            if existing_barcode:
+                print(f"Batch with barcode {archived_batch.barcode} already exists, skipping restoration")
+                continue
+            
+            # Create restored batch
+            restored_batch = models.Batch(
+                batch_id=archived_batch.batch_id,
+                job_order_id=archived_batch.job_order_id,
+                barcode=archived_batch.barcode,
+                size_id=archived_batch.size_id,
+                color_id=archived_batch.color_id,
+                quantity=archived_batch.quantity,
+                layers=archived_batch.layers,
+                serial=archived_batch.serial,
+                current_phase=archived_batch.current_phase,
+                status=archived_batch.status,
+                last_updated_at=func.now(),
+                is_second_degree=archived_batch.is_second_degree
+            )
+            db.add(restored_batch)
+        
+        # Delete all archived items for this job order
+        db.query(models.ArchivedJobOrderItem).filter(
+            models.ArchivedJobOrderItem.job_order_id == job_order_id
+        ).delete()
+        
+        # Delete all archived batches for this job order
+        db.query(models.ArchivedBatch).filter(
+            models.ArchivedBatch.job_order_id == job_order_id
+        ).delete()
+        
+        # Delete the archived job order
+        db.delete(archived_job_order)
+        db.commit()
+        
+        return restored_job_order
+    except Exception as e:
+        db.rollback()
+        print(f"Error restoring job order {job_order_id}: {str(e)}")
+        raise e
+
+def delete_archived_job_order(db: Session, job_order_id: int):
+    """
+    HIERARCHICAL DELETION - TOP LEVEL:
+    Permanently delete an archived job order and ALL its associated archived items and batches.
+    This is the highest level deletion that cascades down to delete everything.
+    """
+    # Check if archived job order exists
+    archived_job_order = db.query(models.ArchivedJobOrder).filter(
+        models.ArchivedJobOrder.job_order_id == job_order_id
+    ).first()
+    
+    if not archived_job_order:
+        print(f"Archived job order with ID {job_order_id} not found")
+        return None
+    
+    try:
+        # Delete all archived items for this job order
+        deleted_items = db.query(models.ArchivedJobOrderItem).filter(
+            models.ArchivedJobOrderItem.job_order_id == job_order_id
+        ).delete()
+        
+        # Delete all archived batches for this job order
+        deleted_batches = db.query(models.ArchivedBatch).filter(
+            models.ArchivedBatch.job_order_id == job_order_id
+        ).delete()
+        
+        # Delete the archived job order
+        db.delete(archived_job_order)
+        db.commit()
+        
+        print(f"Deleted archived job order {job_order_id} with {deleted_items} items and {deleted_batches} batches")
+        return {
+            "job_order_id": job_order_id,
+            "deleted_items": deleted_items,
+            "deleted_batches": deleted_batches
+        }
+    except Exception as e:
+        db.rollback()
+        print(f"Error deleting archived job order {job_order_id}: {str(e)}")
+        raise e
+
+def delete_archived_job_order_item(db: Session, item_id: int):
+    """
+    HIERARCHICAL DELETION - MIDDLE LEVEL:
+    Permanently delete an archived job order item and all its associated archived batches.
+    This does NOT affect the parent job order - only deletes the item and its batches.
+    """
+    # Check if archived item exists
+    archived_item = db.query(models.ArchivedJobOrderItem).filter(
+        models.ArchivedJobOrderItem.item_id == item_id
+    ).first()
+    
+    if not archived_item:
+        print(f"Archived item with ID {item_id} not found")
+        return None
+    
+    try:
+        # Delete all archived batches associated with this item (matching color/size)
+        deleted_batches = db.query(models.ArchivedBatch).filter(
+            models.ArchivedBatch.job_order_id == archived_item.job_order_id,
+            models.ArchivedBatch.color_id == archived_item.color_id,
+            models.ArchivedBatch.size_id == archived_item.size_id
+        ).delete()
+        
+        # Delete the archived item
+        db.delete(archived_item)
+        db.commit()
+        
+        print(f"Deleted archived item {item_id} with {deleted_batches} associated batches")
+        return {
+            "item_id": item_id,
+            "deleted_batches": deleted_batches
+        }
+    except Exception as e:
+        db.rollback()
+        print(f"Error deleting archived item {item_id}: {str(e)}")
+        raise e 

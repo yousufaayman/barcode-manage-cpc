@@ -2,12 +2,13 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
-import api from '../services/api';
+import api, { jobOrderApi } from '../services/api';
 import VirtualizedTable from '../components/VirtualizedTable';
 import SearchableDropdown from '../components/SearchableDropdown';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { Link } from 'react-router-dom';
 
-interface Barcode {
+interface ArchivedBatch {
   batch_id: number;
   job_order_id: number;
   job_order_number?: string;
@@ -18,23 +19,74 @@ interface Barcode {
   color_name: string;
   quantity: number;
   layers: number;
-  serial: number;
+  serial: number | string;
   phase_name: string;
   status: 'Pending' | 'In Progress' | 'Completed';
   last_updated_at: string;
   archived_at: string;
 }
 
+interface ArchivedJobOrder {
+  job_order_id: number;
+  model_id: number;
+  job_order_number: string;
+  brand_id?: number | null;
+  image_url?: string | null;
+  notes?: string | null;
+  date_created: string;
+  archived_at?: string | null;
+  model_name?: string | null;
+  brand_name?: string | null;
+}
+
+interface ArchivedJobOrderItem {
+  item_id: number;
+  job_order_id: number;
+  job_order_number?: string | null;
+  color_id: number;
+  size_id: number;
+  quantity: number;
+  weight?: number | null;
+  notes?: string | null;
+  archived_at: string;
+  color_name?: string | null;
+  size_value?: string | null;
+}
+
 const ArchivedBatchesPage: React.FC = () => {
   const { user } = useAuth();
   const { t } = useTranslation();
-  const [barcodes, setBarcodes] = useState<Barcode[]>([]);
-  const [loading, setLoading] = useState(true);
+
+  // Tabs
+  const [activeTab, setActiveTab] = useState<'job-orders' | 'items' | 'batches'>('job-orders');
+
+  // Archived Job Orders state
+  const [archivedJobOrders, setArchivedJobOrders] = useState<ArchivedJobOrder[]>([]);
+  const [loadingJobOrders, setLoadingJobOrders] = useState(false);
+  const [jobOrdersPage, setJobOrdersPage] = useState(1);
+  const jobOrdersPerPage = 50;
+  const [jobOrderFilters, setJobOrderFilters] = useState({
+    job_order_number: '',
+    model_name: '',
+    brand_name: ''
+  });
+  const [jobOrderOptions, setJobOrderOptions] = useState<string[]>([]);
+
+  // Archived Items state
+  const [selectedJobOrderForItems, setSelectedJobOrderForItems] = useState<string | null>(null);
+  const [archivedItems, setArchivedItems] = useState<ArchivedJobOrderItem[]>([]);
+  const [loadingItems, setLoadingItems] = useState(false);
+  const [allArchivedItems, setAllArchivedItems] = useState<ArchivedJobOrderItem[]>([]);
+  const [loadingAllItems, setLoadingAllItems] = useState(false);
+
+  // Archived Batches state
+  const [barcodes, setBarcodes] = useState<ArchivedBatch[]>([]);
+  const [loadingBatches, setLoadingBatches] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalBarcodes, setTotalBarcodes] = useState(0);
   const [selectedBarcodes, setSelectedBarcodes] = useState<number[]>([]);
   
-  // Dropdown options state
+  // Dropdown options state for batches filters
   const [brandOptions, setBrandOptions] = useState<string[]>([]);
   const [sizeOptions, setSizeOptions] = useState<string[]>([]);
   const [colorOptions, setColorOptions] = useState<string[]>([]);
@@ -50,33 +102,42 @@ const ArchivedBatchesPage: React.FC = () => {
     job_order_number: ''
   });
 
-  // Items per page
+  // Items per page for batches
   const itemsPerPage = 50;
 
-  // Fetch dropdown options
+  // Fetch dropdown options (brands/sizes/colors) + archived job order options
   useEffect(() => {
     const fetchDropdownOptions = async () => {
       try {
-        const [brandsResponse, sizesResponse, colorsResponse] = await Promise.all([
+        const [brandsResponse, sizesResponse, colorsResponse, archivedJOs, allArchivedItems] = await Promise.all([
           api.get('/batches/brands/'),
           api.get('/batches/sizes/'),
-          api.get('/batches/colors/')
+          api.get('/batches/colors/'),
+          api.get('/job-orders/archive/job-orders/', { params: { skip: 0, limit: 10000, include_partial: true } }),
+          jobOrderApi.getAllArchivedItems({ skip: 0, limit: 10000 })
         ]);
         
-        // Filter out invalid values
         const filterValidOptions = (items: any[], nameKey: string) => 
           items
             .map(item => item[nameKey])
-            .filter(value => 
-              value && 
-              value.toLowerCase() !== 'none' && 
-              value.toLowerCase() !== 'null' && 
-              value.trim() !== ''
-            );
+            .filter(value => value && value.toLowerCase() !== 'none' && value.toLowerCase() !== 'null' && value.trim() !== '');
         
         setBrandOptions(filterValidOptions(brandsResponse.data, 'brand_name'));
         setSizeOptions(filterValidOptions(sizesResponse.data, 'size_value'));
         setColorOptions(filterValidOptions(colorsResponse.data, 'color_name'));
+
+        // Get job order numbers from both fully archived job orders and job orders with archived items
+        const archivedJONumbers = Array.isArray(archivedJOs.data) ? archivedJOs.data.map((jo: ArchivedJobOrder) => jo.job_order_number) : [];
+        const itemsJONumbers = allArchivedItems.map((item: ArchivedJobOrderItem) => item.job_order_number).filter(Boolean);
+        
+        console.log('Archived job order numbers:', archivedJONumbers);
+        console.log('Items job order numbers:', itemsJONumbers);
+        
+        // Combine and deduplicate
+        const allJONumbers = [...archivedJONumbers, ...itemsJONumbers];
+        const finalOptions = [...new Set(allJONumbers)].sort();
+        console.log('Final job order options:', finalOptions);
+        setJobOrderOptions(finalOptions);
       } catch (error) {
         console.error('Error fetching dropdown options:', error);
       }
@@ -85,54 +146,119 @@ const ArchivedBatchesPage: React.FC = () => {
     fetchDropdownOptions();
   }, []);
 
-  // Fetch archived barcodes from the database with filters and pagination
+  // Fetch archived job orders
+  useEffect(() => {
+    const fetchArchivedJobOrders = async () => {
+      try {
+        setLoadingJobOrders(true);
+        const skip = (jobOrdersPage - 1) * jobOrdersPerPage;
+        const params: any = {
+          skip,
+          limit: jobOrdersPerPage,
+          include_partial: true,
+          ...Object.fromEntries(Object.entries(jobOrderFilters).filter(([_, v]) => v !== ''))
+        };
+        console.log('Fetching archived job orders with params:', params);
+        const response = await api.get('/job-orders/archive/job-orders/', { params });
+        console.log('Archived job orders response:', response.data);
+        console.log('Job orders with archived_at:', response.data.filter((jo: ArchivedJobOrder) => jo.archived_at));
+        console.log('Job orders without archived_at:', response.data.filter((jo: ArchivedJobOrder) => !jo.archived_at));
+        setArchivedJobOrders(response.data);
+      } catch (error) {
+        console.error('Error fetching archived job orders:', error);
+      } finally {
+        setLoadingJobOrders(false);
+      }
+    };
+    fetchArchivedJobOrders();
+  }, [jobOrdersPage, jobOrderFilters]);
+
+  // Fetch archived items for selected job order
+  useEffect(() => {
+    const fetchArchivedItems = async () => {
+      if (!selectedJobOrderForItems) {
+        setArchivedItems([]);
+        return;
+      }
+      try {
+        setLoadingItems(true);
+        // Get all archived items and filter by job order number
+        const response = await jobOrderApi.getAllArchivedItems();
+        const filteredItems = response.filter(item => item.job_order_number === selectedJobOrderForItems);
+        setArchivedItems(filteredItems);
+      } catch (error) {
+        console.error('Error fetching archived job order items:', error);
+      } finally {
+        setLoadingItems(false);
+      }
+    };
+    fetchArchivedItems();
+  }, [selectedJobOrderForItems]);
+
+  // Fetch all archived items
+  useEffect(() => {
+    const fetchAllArchivedItems = async () => {
+      try {
+        setLoadingAllItems(true);
+        console.log('Fetching all archived items...');
+        const response = await jobOrderApi.getAllArchivedItems();
+        console.log('Archived items response:', response);
+        setAllArchivedItems(response);
+      } catch (error) {
+        console.error('Error fetching all archived items:', error);
+      } finally {
+        setLoadingAllItems(false);
+      }
+    };
+    fetchAllArchivedItems();
+  }, []);
+
+  // Fetch archived batches
   useEffect(() => {
     const fetchArchivedBarcodes = async () => {
       try {
-        setLoading(true);
+        setLoadingBatches(true);
         const skip = (currentPage - 1) * itemsPerPage;
+        const activeFilters = Object.fromEntries(Object.entries(filters).filter(([_, value]) => value !== ''));
+        console.log('Current filters:', activeFilters);
+        
         const queryParams = new URLSearchParams({
           skip: skip.toString(),
           limit: itemsPerPage.toString(),
           archived: 'true',
-          ...Object.fromEntries(
-            Object.entries(filters).filter(([_, value]) => value !== '')
-          )
+          ...activeFilters
         });
         
-        console.log('Fetching archived barcodes with params:', queryParams.toString());
+        console.log('Fetching archived batches with query params:', queryParams.toString());
         const response = await api.get(`/batches/?${queryParams.toString()}`);
-        console.log('API response:', response.data);
+        console.log('Archived batches response:', response.data);
+        console.log('Total archived batches:', response.data.total);
+        console.log('Archived batches items:', response.data.items.length);
         setBarcodes(response.data.items);
         setTotalBarcodes(response.data.total);
-        // Clear selections when data changes
         setSelectedBarcodes([]);
       } catch (error) {
         console.error('Error fetching archived barcodes:', error);
       } finally {
-        setLoading(false);
+        setLoadingBatches(false);
       }
     };
 
     fetchArchivedBarcodes();
   }, [currentPage, filters]);
 
-  // Handle changes to filter inputs
+  // Handlers common
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    console.log('Filter change:', name, value);
     setFilters(prev => ({ ...prev, [name]: value }));
-    setCurrentPage(1); // Reset to first page when filters change
+    setCurrentPage(1);
   };
 
-  // Handle SearchableDropdown filter changes
   const handleDropdownFilterChange = (field: string, value: string) => {
-    console.log('Dropdown filter change:', field, value);
     setFilters(prev => ({ ...prev, [field]: value }));
-    setCurrentPage(1); // Reset to first page when filters change
+    setCurrentPage(1);
   };
 
-  // Handle clear filters
   const handleClearFilters = () => {
     setFilters({
       barcode: '',
@@ -144,21 +270,14 @@ const ArchivedBatchesPage: React.FC = () => {
       status: '',
       job_order_number: ''
     });
-    setCurrentPage(1); // Reset to first page when filters are cleared
+    setCurrentPage(1);
   };
 
-  // Handle checkbox selection
+  // Selection in batches
   const handleSelectBarcode = useCallback((id: number) => {
-    setSelectedBarcodes(prev => {
-      if (prev.includes(id)) {
-        return prev.filter(barcodeId => barcodeId !== id);
-      } else {
-        return [...prev, id];
-      }
-    });
+    setSelectedBarcodes(prev => (prev.includes(id) ? prev.filter(barcodeId => barcodeId !== id) : [...prev, id]));
   }, []);
   
-  // Handle "Select All" checkbox
   const handleSelectAll = () => {
     if (selectedBarcodes.length === barcodes.length) {
       setSelectedBarcodes([]);
@@ -167,7 +286,7 @@ const ArchivedBatchesPage: React.FC = () => {
     }
   };
 
-  // Handle bulk delete
+  // Bulk delete archived batches
   const handleBulkDelete = async () => {
     if (selectedBarcodes.length === 0) {
       alert(t('barcodeManagement.selectBarcodesToDelete'));
@@ -181,11 +300,7 @@ const ArchivedBatchesPage: React.FC = () => {
             await api.delete(`/batches/archived/${id}`);
             return { id, success: true };
           } catch (error: any) {
-            return { 
-              id, 
-              success: false, 
-              error: error.response?.data?.detail || error.message || 'Unknown error' 
-            };
+            return { id, success: false, error: error.response?.data?.detail || error.message || 'Unknown error' };
           }
         });
 
@@ -193,16 +308,12 @@ const ArchivedBatchesPage: React.FC = () => {
         const successful = results.filter(r => r.success);
         const failed = results.filter(r => !r.success);
 
-        // Update the UI with successful deletions
         if (successful.length > 0) {
           setBarcodes(prev => prev.filter(barcode => !successful.some(s => s.id === barcode.batch_id)));
-          setTotalBarcodes(prev => prev - successful.length);
         }
 
-        // Clear selections
         setSelectedBarcodes([]);
 
-        // Show results to user
         if (failed.length === 0) {
           alert(`Successfully deleted ${successful.length} archived barcode(s).`);
         } else if (successful.length === 0) {
@@ -211,11 +322,9 @@ const ArchivedBatchesPage: React.FC = () => {
           alert(`Successfully deleted ${successful.length} archived barcode(s). Failed to delete ${failed.length} archived barcode(s).`);
         }
 
-        // Log failed deletions for debugging
         if (failed.length > 0) {
           console.error('Failed deletions:', failed);
         }
-
       } catch (error) {
         console.error('Error during bulk delete:', error);
         alert(t('barcodeManagement.failedToDelete'));
@@ -223,29 +332,22 @@ const ArchivedBatchesPage: React.FC = () => {
     }
   };
 
-  // Handle bulk recovery
+  // Bulk recovery archived batches
   const handleBulkRecovery = async () => {
     if (selectedBarcodes.length === 0) {
       alert(t('barcodeManagement.selectBarcodesToRecover'));
       return;
     }
     
-    const confirmMessage = t('barcodeManagement.confirmBulkRecover', { count: selectedBarcodes.length })
-      .replace('{count}', String(selectedBarcodes.length));
+    const confirmMessage = t('barcodeManagement.confirmBulkRecover', { count: selectedBarcodes.length }).replace('{count}', String(selectedBarcodes.length));
     
     if (window.confirm(confirmMessage)) {
       try {
-        const response = await api.post('/batches/archived/recover/bulk', { 
-          batch_ids: selectedBarcodes 
-        });
-        
-        // Update the UI by removing recovered barcodes
+        await api.post('/batches/archived/recover/bulk', { batch_ids: selectedBarcodes });
         setBarcodes(prev => prev.filter(barcode => !selectedBarcodes.includes(barcode.batch_id)));
-        setTotalBarcodes(prev => prev - selectedBarcodes.length);
         setSelectedBarcodes([]);
         
-        const successMessage = t('barcodeManagement.successfullyRecovered', { count: selectedBarcodes.length })
-          .replace('{count}', String(selectedBarcodes.length));
+        const successMessage = t('barcodeManagement.successfullyRecovered', { count: selectedBarcodes.length }).replace('{count}', String(selectedBarcodes.length));
         alert(successMessage);
       } catch (error: any) {
         console.error('Error during bulk recovery:', error);
@@ -255,16 +357,338 @@ const ArchivedBatchesPage: React.FC = () => {
     }
   };
 
-  // Calculate total pages
-  const totalPages = Math.ceil(totalBarcodes / itemsPerPage);
+  // Restore job order
+  const handleRestoreJobOrder = useCallback(async (jobOrderId: number) => {
+    if (window.confirm('Are you sure you want to restore this job order? This will restore the job order and all its archived items.')) {
+      try {
+        // Disable the button to prevent multiple clicks
+        const button = document.querySelector(`[data-job-order-id="${jobOrderId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Restoring...';
+        }
+        
+        await jobOrderApi.restoreJobOrder(jobOrderId);
+        alert('Job order restored successfully!');
+        // Refresh the data by refetching
+        setJobOrdersPage(1);
+        setArchivedJobOrders([]);
+        setAllArchivedItems([]);
+        // Trigger a refetch
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      } catch (error: any) {
+        console.error('Error restoring job order:', error);
+        const errorMessage = error.response?.data?.detail || error.message || 'Failed to restore job order';
+        alert(`Error: ${errorMessage}`);
+        
+        // Re-enable the button on error
+        const button = document.querySelector(`[data-job-order-id="${jobOrderId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = false;
+          button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>`;
+        }
+      }
+    }
+  }, []);
 
-  // Handle page change
+  // Restore job order item
+  const handleRestoreItem = useCallback(async (itemId: number) => {
+    if (window.confirm('Are you sure you want to restore this item? This will restore the item and all its associated batches.')) {
+      try {
+        // Disable the button to prevent multiple clicks
+        const button = document.querySelector(`[data-item-id="${itemId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Restoring...';
+        }
+        
+        await jobOrderApi.restoreItem(itemId);
+        alert('Item restored successfully!');
+        // Refresh the data by refetching
+        setAllArchivedItems([]);
+        // Trigger a refetch
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      } catch (error: any) {
+        console.error('Error restoring item:', error);
+        const errorMessage = error.response?.data?.detail || error.message || 'Failed to restore item';
+        alert(`Error: ${errorMessage}`);
+        
+        // Re-enable the button on error
+        const button = document.querySelector(`[data-item-id="${itemId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = false;
+          button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>`;
+        }
+      }
+    }
+  }, []);
+
+  // Delete job order (TOP LEVEL - deletes job order + all items + all batches)
+  const handleDeleteJobOrder = useCallback(async (jobOrderId: number) => {
+    if (window.confirm('⚠️ PERMANENT DELETION - TOP LEVEL\n\nThis will permanently delete:\n• The job order\n• ALL its job order items\n• ALL associated batches\n\nThis action cannot be undone. Are you sure?')) {
+      try {
+        // Disable the button to prevent multiple clicks
+        const button = document.querySelector(`[data-delete-job-order-id="${jobOrderId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Deleting...';
+        }
+        
+        const result = await jobOrderApi.deleteArchivedJobOrder(jobOrderId);
+        alert(`Job order permanently deleted!\nDeleted: ${result.deleted_items} items, ${result.deleted_batches} batches`);
+        // Refresh the data
+        setJobOrdersPage(1);
+        setArchivedJobOrders([]);
+        setAllArchivedItems([]);
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      } catch (error: any) {
+        console.error('Error deleting job order:', error);
+        const errorMessage = error.response?.data?.detail || error.message || 'Failed to delete job order';
+        alert(`Error: ${errorMessage}`);
+        
+        // Re-enable the button on error
+        const button = document.querySelector(`[data-delete-job-order-id="${jobOrderId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = false;
+          button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>`;
+        }
+      }
+    }
+  }, []);
+
+  // Delete job order item (MIDDLE LEVEL - deletes item + its batches, but NOT job order)
+  const handleDeleteItem = useCallback(async (itemId: number) => {
+    if (window.confirm('⚠️ PERMANENT DELETION - MIDDLE LEVEL\n\nThis will permanently delete:\n• The job order item\n• ALL its associated batches\n\nThis does NOT affect the parent job order.\n\nThis action cannot be undone. Are you sure?')) {
+      try {
+        // Disable the button to prevent multiple clicks
+        const button = document.querySelector(`[data-delete-item-id="${itemId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Deleting...';
+        }
+        
+        const result = await jobOrderApi.deleteArchivedItem(itemId);
+        alert(`Item permanently deleted!\nDeleted: ${result.deleted_batches} associated batches`);
+        // Refresh the data
+        setAllArchivedItems([]);
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      } catch (error: any) {
+        console.error('Error deleting item:', error);
+        const errorMessage = error.response?.data?.detail || error.message || 'Failed to delete item';
+        alert(`Error: ${errorMessage}`);
+        
+        // Re-enable the button on error
+        const button = document.querySelector(`[data-delete-item-id="${itemId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = false;
+          button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>`;
+        }
+      }
+    }
+  }, []);
+
+  // Recover batch (BOTTOM LEVEL - recovers batch + restores parent item/job order if needed)
+  const handleRecoverBatch = useCallback(async (batchId: number) => {
+    if (window.confirm('Are you sure you want to recover this batch? This will restore the batch and its associated job order item and job order if they are archived.')) {
+      try {
+        // Disable the button to prevent multiple clicks
+        const button = document.querySelector(`[data-recover-batch-id="${batchId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Recovering...';
+        }
+        
+        await jobOrderApi.recoverBatch(batchId);
+        alert('Batch recovered successfully!');
+        // Refresh the data
+        setBarcodes([]);
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      } catch (error: any) {
+        console.error('Error recovering batch:', error);
+        const errorMessage = error.response?.data?.detail || error.message || 'Failed to recover batch';
+        alert(`Error: ${errorMessage}`);
+        
+        // Re-enable the button on error
+        const button = document.querySelector(`[data-recover-batch-id="${batchId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = false;
+          button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>`;
+        }
+      }
+    }
+  }, []);
+
+  // Delete batch (BOTTOM LEVEL - deletes only the batch, doesn't affect job order or item)
+  const handleDeleteBatch = useCallback(async (batchId: number) => {
+    if (window.confirm('⚠️ PERMANENT DELETION - BOTTOM LEVEL\n\nThis will permanently delete ONLY this specific batch.\n\nThis does NOT affect:\n• The parent job order\n• The parent job order item\n\nThis action cannot be undone. Are you sure?')) {
+      try {
+        // Disable the button to prevent multiple clicks
+        const button = document.querySelector(`[data-delete-batch-id="${batchId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Deleting...';
+        }
+        
+        await jobOrderApi.deleteArchivedBatch(batchId);
+        alert('Batch permanently deleted!');
+        // Refresh the data
+        setBarcodes([]);
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000);
+      } catch (error: any) {
+        console.error('Error deleting batch:', error);
+        const errorMessage = error.response?.data?.detail || error.message || 'Failed to delete batch';
+        alert(`Error: ${errorMessage}`);
+        
+        // Re-enable the button on error
+        const button = document.querySelector(`[data-delete-batch-id="${batchId}"]`) as HTMLButtonElement;
+        if (button) {
+          button.disabled = false;
+          button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>`;
+        }
+      }
+    }
+  }, []);
+
+  // Pagination for batches
+  const totalPages = Math.ceil(totalBarcodes / itemsPerPage);
   const handlePageChange = (pageNumber: number) => {
     setCurrentPage(pageNumber);
   };
 
-  // Memoize the columns configuration
-  const columns = useMemo(() => {
+  // Columns: Archived Job Orders
+  const jobOrderColumns = useMemo(() => {
+    return [
+      { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 160 },
+      { key: 'brand_name', header: 'Brand', width: 140, render: (item: ArchivedJobOrder) => item.brand_name || '—' },
+      { key: 'model_name', header: t('bulkBarcode.model'), width: 160, render: (item: ArchivedJobOrder) => item.model_name || '—' },
+      { key: 'date_created', header: 'Created', width: 160, render: (item: ArchivedJobOrder) => new Date(item.date_created).toLocaleString() },
+      { 
+        key: 'archived_at', 
+        header: 'Archive Status', 
+        width: 160, 
+        render: (item: ArchivedJobOrder) => {
+          if (item.archived_at) {
+            return (
+              <span className="inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">
+                Fully Archived
+              </span>
+            );
+          } else {
+            return (
+              <span className="inline-block px-2 py-1 text-xs rounded-full bg-orange-100 text-orange-800">
+                Partially Archived
+              </span>
+            );
+          }
+        }
+      },
+      {
+        key: 'actions',
+        header: 'Actions',
+        width: 200,
+        render: (item: ArchivedJobOrder) => {
+          const isDisabled = !item.archived_at;
+          return (
+            <div className="flex space-x-2">
+              <button
+                onClick={() => handleRestoreJobOrder(item.job_order_id)}
+                data-job-order-id={item.job_order_id}
+                className={`px-2 py-1 text-sm rounded transition-colors ${
+                  isDisabled 
+                    ? 'bg-gray-400 text-gray-600 cursor-not-allowed' 
+                    : 'bg-orange-600 text-white hover:bg-orange-700'
+                }`}
+                disabled={isDisabled}
+                title={isDisabled ? 'Only fully archived job orders can be restored' : 'Restore this job order'}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+              <button
+                onClick={() => handleDeleteJobOrder(item.job_order_id)}
+                data-delete-job-order-id={item.job_order_id}
+                className="px-2 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                title="Permanently delete this job order and all its items and batches"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            </div>
+          );
+        }
+      }
+    ];
+  }, [t, handleRestoreJobOrder, handleDeleteJobOrder]);
+
+  // Columns: Archived Items
+  const itemColumns = useMemo(() => {
+    return [
+      { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 160, render: (item: ArchivedJobOrderItem) => item.job_order_number || '—' },
+      { key: 'color_name', header: t('bulkBarcode.color'), width: 120 },
+      { key: 'size_value', header: t('bulkBarcode.size'), width: 120 },
+      { key: 'quantity', header: t('barcode.quantity'), width: 100 },
+      { key: 'notes', header: 'Notes', width: 200, render: (item: ArchivedJobOrderItem) => item.notes || '' },
+      { key: 'archived_at', header: 'Archived At', width: 160, render: (item: ArchivedJobOrderItem) => new Date(item.archived_at).toLocaleString() },
+      {
+        key: 'actions',
+        header: 'Actions',
+        width: 200,
+        render: (item: ArchivedJobOrderItem) => (
+          <div className="flex space-x-2">
+            <button
+              onClick={() => handleRestoreItem(item.item_id)}
+              data-item-id={item.item_id}
+              className="px-2 py-1 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 transition-colors"
+              title="Restore this item"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+            <button
+              onClick={() => handleDeleteItem(item.item_id)}
+              data-delete-item-id={item.item_id}
+              className="px-2 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+              title="Permanently delete this item and its associated batches"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </div>
+        )
+      }
+    ];
+  }, [t, handleRestoreItem, handleDeleteItem]);
+
+  // Columns: Archived Batches
+  const batchColumns = useMemo(() => {
     const baseColumns = [
       {
         key: 'select',
@@ -277,7 +701,7 @@ const ArchivedBatchesPage: React.FC = () => {
           />
         ),
         width: 50,
-        render: (item: Barcode) => (
+        render: (item: ArchivedBatch) => (
           <input
             type="checkbox"
             checked={selectedBarcodes.includes(item.batch_id)}
@@ -296,25 +720,25 @@ const ArchivedBatchesPage: React.FC = () => {
         key: 'quantity',
         header: t('barcode.quantity'),
         width: 100,
-        render: (item: Barcode) => item.quantity
+        render: (item: ArchivedBatch) => item.quantity
       },
       {
         key: 'layers',
         header: t('bulkBarcode.layers'),
         width: 100,
-        render: (item: Barcode) => item.layers
+        render: (item: ArchivedBatch) => item.layers
       },
       {
         key: 'serial',
         header: t('bulkBarcode.serial'),
         width: 100,
-        render: (item: Barcode) => item.serial
+        render: (item: ArchivedBatch) => item.serial
       },
       {
         key: 'phase_name',
         header: t('barcode.phase'),
         width: 120,
-        render: (item: Barcode) => (
+        render: (item: ArchivedBatch) => (
           <span className={`inline-block px-2 py-1 text-xs rounded-full ${
             item.phase_name === 'Cutting' ? 'bg-blue-100 text-blue-800' :
             item.phase_name === 'Sewing' ? 'bg-purple-100 text-purple-800' :
@@ -328,15 +752,13 @@ const ArchivedBatchesPage: React.FC = () => {
         key: 'status',
         header: t('common.status'),
         width: 120,
-        render: (item: Barcode) => (
+        render: (item: ArchivedBatch) => (
           <span className={`inline-block px-2 py-1 text-xs rounded-full ${
             item.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
             item.status === 'In Progress' ? 'bg-blue-100 text-blue-800' :
             'bg-green-100 text-green-800'
           }`}>
-            {item.status === 'In Progress' ? t('status.inProgress') : 
-             item.status === 'Pending' ? t('status.pending') : 
-             t('status.completed')}
+            {item.status === 'In Progress' ? t('status.inProgress') : item.status === 'Pending' ? t('status.pending') : t('status.completed')}
           </span>
         )
       },
@@ -344,30 +766,204 @@ const ArchivedBatchesPage: React.FC = () => {
         key: 'last_updated_at',
         header: t('common.updated'),
         width: 150,
-        render: (item: Barcode) => new Date(item.last_updated_at).toLocaleString()
+        render: (item: ArchivedBatch) => new Date(item.last_updated_at).toLocaleString()
       },
       {
         key: 'archived_at',
         header: 'Archived At',
         width: 150,
-        render: (item: Barcode) => new Date(item.archived_at).toLocaleString()
+        render: (item: ArchivedBatch) => new Date(item.archived_at).toLocaleString()
+      },
+      {
+        key: 'actions',
+        header: 'Actions',
+        width: 200,
+        render: (item: ArchivedBatch) => (
+          <div className="flex space-x-2">
+            <button
+              onClick={() => handleRecoverBatch(item.batch_id)}
+              data-recover-batch-id={item.batch_id}
+              className="px-2 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+              title="Recover this batch"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+            <button
+              onClick={() => handleDeleteBatch(item.batch_id)}
+              data-delete-batch-id={item.batch_id}
+              className="px-2 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+              title="Permanently delete this batch"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </div>
+        )
       }
     ];
 
     return baseColumns;
-  }, [t, selectedBarcodes, barcodes.length, handleSelectBarcode]);
+  }, [t, selectedBarcodes, barcodes.length, handleSelectBarcode, handleRecoverBatch, handleDeleteBatch]);
 
   return (
     <Layout>
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2 text-gray-800">Archived Batches</h1>
-        <p className="text-gray-600">
-          View and search through archived barcodes
-        </p>
+        <h1 className="text-2xl font-bold mb-2 text-gray-800">{t('navigation.archive')}</h1>
+        <p className="text-gray-600">{t('archive.subtitle')}</p>
       </div>
 
       <div className="bg-white rounded-lg shadow-sm p-6">
-        {/* Filter Controls */}
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
+          <TabsList className="mb-4">
+            <TabsTrigger value="job-orders">{t('archive.tabs.jobOrders')}</TabsTrigger>
+            <TabsTrigger value="items">{t('archive.tabs.items')}</TabsTrigger>
+            <TabsTrigger value="batches">{t('archive.tabs.batches')}</TabsTrigger>
+          </TabsList>
+
+          {/* Archived Job Orders Tab */}
+          <TabsContent value="job-orders">
+            <div className="space-y-6">
+              {/* Filters Section */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold mb-3 text-gray-800">Filters</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <SearchableDropdown
+                    options={jobOrderOptions}
+                    value={jobOrderFilters.job_order_number}
+                    onChange={(val) => { setJobOrderFilters(prev => ({ ...prev, job_order_number: val })); setJobOrdersPage(1); }}
+                    placeholder="Job Order Number"
+                    label="Job Order Number"
+                  />
+                  <SearchableDropdown
+                    options={[...new Set(archivedJobOrders.map(jo => jo.model_name || '').filter(Boolean))] as string[]}
+                    value={jobOrderFilters.model_name}
+                    onChange={(val) => { setJobOrderFilters(prev => ({ ...prev, model_name: val })); setJobOrdersPage(1); }}
+                    placeholder={t('bulkBarcode.model')}
+                    label={t('bulkBarcode.model')}
+                  />
+                  <SearchableDropdown
+                    options={[...new Set(archivedJobOrders.map(jo => jo.brand_name || '').filter(Boolean))] as string[]}
+                    value={jobOrderFilters.brand_name}
+                    onChange={(val) => { setJobOrderFilters(prev => ({ ...prev, brand_name: val })); setJobOrdersPage(1); }}
+                    placeholder={t('bulkBarcode.brand')}
+                    label={t('bulkBarcode.brand')}
+                  />
+                </div>
+              </div>
+
+              {/* Table Section */}
+              <div className="bg-white rounded-lg border">
+                {loadingJobOrders ? (
+                  <div className="text-center py-10">
+                    <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+                    <p className="text-gray-600">Loading archived job orders...</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="p-4">
+                      {archivedJobOrders.length === 0 ? (
+                        <div className="text-center py-8 text-gray-600">No archived job orders found.</div>
+                      ) : (
+                        <VirtualizedTable
+                          columns={jobOrderColumns}
+                          data={archivedJobOrders}
+                          height={600}
+                          rowHeight={48}
+                          showAllColumns={true}
+                        />
+                      )}
+                    </div>
+                    
+                    {/* Pagination */}
+                    <div className="border-t bg-gray-50 px-4 py-3">
+                      <div className="flex justify-center space-x-2">
+                        <button 
+                          onClick={() => setJobOrdersPage(p => Math.max(1, p - 1))} 
+                          disabled={jobOrdersPage === 1} 
+                          className="px-3 py-1 rounded border disabled:opacity-50 hover:bg-gray-100"
+                        >
+                          {t('common.previous')}
+                        </button>
+                        <div className="px-3 py-1 rounded border bg-green text-white">{jobOrdersPage}</div>
+                        <button 
+                          onClick={() => setJobOrdersPage(p => (archivedJobOrders.length < jobOrdersPerPage ? p : p + 1))} 
+                          disabled={archivedJobOrders.length < jobOrdersPerPage} 
+                          className="px-3 py-1 rounded border disabled:opacity-50 hover:bg-gray-100"
+                        >
+                          {t('common.next')}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* Archived Items Tab */}
+          <TabsContent value="items">
+            <div className="space-y-6">
+              {/* Selection Section */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold mb-3 text-gray-800">Filter Options</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <SearchableDropdown
+                    options={jobOrderOptions}
+                    value={selectedJobOrderForItems || ''}
+                    onChange={(val) => {
+                      setSelectedJobOrderForItems(val || null);
+                    }}
+                    placeholder="Select Job Order (Optional)"
+                    label="Filter by Job Order"
+                  />
+                </div>
+              </div>
+
+              {/* Table Section */}
+              <div className="bg-white rounded-lg border">
+                {loadingAllItems ? (
+                  <div className="text-center py-10">
+                    <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+                    <p className="text-gray-600">Loading archived items...</p>
+                  </div>
+                ) : (
+                  <div className="p-4">
+                    {(() => {
+                      const displayItems = selectedJobOrderForItems 
+                        ? allArchivedItems.filter(item => item.job_order_number === selectedJobOrderForItems)
+                        : allArchivedItems;
+                      
+                      if (displayItems.length === 0) {
+                        return (
+                          <div className="text-center py-8 text-gray-600">
+                            {selectedJobOrderForItems 
+                              ? "No archived items found for this job order." 
+                              : "No archived items found."}
+                          </div>
+                        );
+                      }
+                      
+                      return (
+                        <VirtualizedTable
+                          columns={itemColumns}
+                          data={displayItems}
+                          height={600}
+                          rowHeight={48}
+                          showAllColumns={true}
+                        />
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* Archived Batches Tab */}
+          <TabsContent value="batches">
         <div className="mb-6">
           <div className="flex justify-between items-center mb-3">
             <h2 className="text-lg font-semibold">{t('barcodeManagement.filters')}</h2>
@@ -520,8 +1116,7 @@ const ArchivedBatchesPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Barcodes Table */}
-        {loading ? (
+            {loadingBatches ? (
           <div className="text-center py-10">
             <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
             <p className="text-gray-600">Loading archived barcodes...</p>
@@ -531,12 +1126,10 @@ const ArchivedBatchesPage: React.FC = () => {
             <div className="table-container mb-4 w-full">
               <div className="overflow-x-auto w-full">
                 {barcodes.length === 0 ? (
-                  <div className="text-center py-4">
-                    No archived barcodes found matching your filters.
-                  </div>
+                      <div className="text-center py-4">No archived barcodes found matching your filters.</div>
                 ) : (
                   <VirtualizedTable
-                    columns={columns}
+                        columns={batchColumns}
                     data={barcodes}
                     height={600}
                     rowHeight={48}
@@ -546,7 +1139,6 @@ const ArchivedBatchesPage: React.FC = () => {
               </div>
             </div>
             
-            {/* Pagination */}
             {totalPages > 0 && (
               <div className="flex justify-center mt-4">
                 <nav className="flex items-center space-x-2">
@@ -569,14 +1161,11 @@ const ArchivedBatchesPage: React.FC = () => {
                     } else {
                       pageNumber = currentPage - 2 + i;
                     }
-                    
                     return (
                       <button
                         key={pageNumber}
                         onClick={() => handlePageChange(pageNumber)}
-                        className={`px-3 py-1 rounded border ${
-                          currentPage === pageNumber ? 'bg-green text-white' : ''
-                        }`}
+                            className={`px-3 py-1 rounded border ${currentPage === pageNumber ? 'bg-green text-white' : ''}`}
                       >
                         {pageNumber}
                       </button>
@@ -595,9 +1184,10 @@ const ArchivedBatchesPage: React.FC = () => {
             )}
           </>
         )}
+          </TabsContent>
+        </Tabs>
       </div>
 
-      {/* Back to Barcode Management Link */}
       <div className="mt-6 text-center">
         <Link
           to="/barcode-management"
@@ -606,7 +1196,7 @@ const ArchivedBatchesPage: React.FC = () => {
           <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
           </svg>
-          Back to Barcode Management
+          {t('archive.backToBarcodeManagement')}
         </Link>
       </div>
     </Layout>
