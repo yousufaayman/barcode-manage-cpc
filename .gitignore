@@ -126,3 +126,4 @@ instance/
 /backend/app/__pycache__
 /static
 JOB_ORDER_MODIFICATIONS_SUMMARY.md
+*.pyc
