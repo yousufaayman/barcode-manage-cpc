@@ -122,6 +122,16 @@ class BatchBase(BaseModel):
 class BatchCreate(BatchBase):
     is_second_degree: bool = False
 
+class SecondDegreeBatchCreate(BaseModel):
+    job_order_id: int
+    size_id: int
+    color_id: int
+    quantity: int = 0  # Always 0 for second degree
+    layers: int = 1
+    current_phase: int = 1
+    status: str = "In Progress"
+    is_second_degree: bool = True
+
 class BatchUpdate(BaseModel):
     job_order_id: Optional[int] = None
     barcode: Optional[str] = None

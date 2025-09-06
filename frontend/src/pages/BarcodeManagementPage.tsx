@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
 import api from '../services/api';
 import { cn } from '../lib/utils';
+import { zebraPrinterService, BarcodePrintData } from '../services/zebraPrinterService';
 import { Label } from '../components/ui/label';
 import { Button } from '../components/ui/button';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../components/ui/select';
@@ -96,6 +97,7 @@ const BarcodeManagementPage: React.FC = () => {
   const [isPrinting, setIsPrinting] = useState(false);
   const [printers, setPrinters] = useState<string[]>([]);
   const [selectedPrinter, setSelectedPrinter] = useState<string>("");
+  const [allPrinters, setAllPrinters] = useState<{name: string, type: 'server' | 'zebra'}[]>([]);
   const [totalBarcodes, setTotalBarcodes] = useState(0);
   
 
@@ -200,19 +202,46 @@ const BarcodeManagementPage: React.FC = () => {
 
   // Fetch available printers
   useEffect(() => {
-    const fetchPrinters = async () => {
+    const fetchAllPrinters = async () => {
       try {
-        const response = await api.get('/barcodes/printers');
-        setPrinters(response.data.printers);
-        if (response.data.printers.length > 0) {
-          setSelectedPrinter(response.data.printers[0]);
+        // Fetch server printers
+        const serverResponse = await api.get('/barcodes/printers');
+        const serverPrinters = serverResponse.data.printers || [];
+        
+        // Fetch Zebra printers
+        let zebraPrintersList: string[] = [];
+        try {
+          const isZebraAvailable = await zebraPrinterService.checkServiceAvailability();
+          if (isZebraAvailable) {
+            const zebraPrintersData = await zebraPrinterService.getAvailablePrinters();
+            zebraPrintersList = zebraPrintersData.map(p => p.name);
+          }
+        } catch (error) {
+          console.log('Zebra printers not available:', error);
+        }
+        
+        setPrinters(serverPrinters);
+        
+        // Combine all printers with type information
+        const combinedPrinters = [
+          ...zebraPrintersList.map(name => ({ name, type: 'zebra' as const })),
+          ...serverPrinters.map(name => ({ name, type: 'server' as const }))
+        ];
+        
+        setAllPrinters(combinedPrinters);
+        
+        // Default to first Zebra printer, then first server printer
+        if (zebraPrintersList.length > 0) {
+          setSelectedPrinter(zebraPrintersList[0]);
+        } else if (serverPrinters.length > 0) {
+          setSelectedPrinter(serverPrinters[0]);
         }
       } catch (err) {
         console.error('Error fetching printers:', err);
       }
     };
 
-    fetchPrinters();
+    fetchAllPrinters();
   }, []);
 
   // Add state for phases
@@ -375,28 +404,61 @@ const BarcodeManagementPage: React.FC = () => {
           serial: barcode.serial
         }));
 
-      await api.post('/barcodes/print', {
-        barcodes: barcodesToPrint,
-        count: 1,
-        printer_name: selectedPrinter
-      });
+      // Check if selected printer is a Zebra printer
+      const selectedPrinterInfo = allPrinters.find(p => p.name === selectedPrinter);
+      const isZebraPrinter = selectedPrinterInfo?.type === 'zebra';
 
-      const successMessage = t('barcodeManagement.successfullyPrinted', {
-        count: selectedBarcodes.length,
-        times: 1,
-        printer: selectedPrinter
-      })
-      .replace('{count}', String(selectedBarcodes.length))
-      .replace('{times}', '1')
-      .replace('{printer}', selectedPrinter);
+      if (isZebraPrinter) {
+        // Use Zebra Browser Print for client-side printing
+        const zebraPrintData: BarcodePrintData[] = barcodesToPrint.map(item => ({
+          barcode: item.barcode,
+          brand: item.brand,
+          model: item.model,
+          size: item.size,
+          color: item.color,
+          quantity: item.quantity,
+          layers: item.layers,
+          serial: item.serial
+        }));
 
-      alert(successMessage);
+        await zebraPrinterService.printMultipleBarcodes(
+          zebraPrintData,
+          selectedPrinter,
+          1
+        );
+
+        alert(t('zebraPrinter.printSuccess', { printer: selectedPrinter }));
+      } else {
+        // Use server-side printing (existing functionality)
+        await api.post('/barcodes/print', {
+          barcodes: barcodesToPrint,
+          count: 1,
+          printer_name: selectedPrinter
+        });
+
+        const successMessage = t('barcodeManagement.successfullyPrinted', {
+          count: selectedBarcodes.length,
+          times: 1,
+          printer: selectedPrinter
+        })
+        .replace('{count}', String(selectedBarcodes.length))
+        .replace('{times}', '1')
+        .replace('{printer}', selectedPrinter);
+
+        alert(successMessage);
+      }
 
       // Reset selections
       setSelectedBarcodes([]);
     } catch (error) {
       console.error('Error printing barcodes:', error);
-      alert(t('barcodeManagement.failedToPrint'));
+      const selectedPrinterInfo = allPrinters.find(p => p.name === selectedPrinter);
+      const isZebraPrinter = selectedPrinterInfo?.type === 'zebra';
+      
+      const errorMessage = isZebraPrinter
+        ? t('zebraPrinter.printError', { error: error instanceof Error ? error.message : 'Unknown error' })
+        : t('barcodeManagement.failedToPrint');
+      alert(errorMessage);
     } finally {
       setIsPrinting(false);
     }
@@ -748,13 +810,18 @@ const BarcodeManagementPage: React.FC = () => {
                     onValueChange={setSelectedPrinter}
                     disabled={isPrinting}
                   >
-                    <SelectTrigger className="w-[200px]">
+                    <SelectTrigger className="w-[250px]">
                       <SelectValue placeholder={t('barcodeManagement.selectPrinter')} />
                     </SelectTrigger>
                     <SelectContent>
-                      {printers.map((printer) => (
-                        <SelectItem key={printer} value={printer}>
-                          {printer}
+                      {allPrinters.map((printer) => (
+                        <SelectItem key={printer.name} value={printer.name}>
+                          <div className="flex items-center justify-between w-full">
+                            <span>{printer.name}</span>
+                            <span className="ml-2 text-xs text-gray-500">
+                              {printer.type === 'zebra' ? '🖨️ Zebra' : '🖥️ Server'}
+                            </span>
+                          </div>
                         </SelectItem>
                       ))}
                     </SelectContent>

@@ -324,10 +324,11 @@ def delete_batch(
     batch_id: int,
 ):
     """Delete a batch"""
-    batch = get_batch(db, batch_id=batch_id)
+    from app.crud.batch import delete_batch as crud_delete_batch
+    batch = crud_delete_batch(db, batch_id=batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
-    return delete_batch(db=db, batch_id=batch_id)
+    return batch
 
 @router.delete("/archived/{batch_id}", response_model=schemas.BatchResponse)
 def delete_archived_batch(

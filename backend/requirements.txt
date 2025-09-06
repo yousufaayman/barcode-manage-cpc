@@ -30,6 +30,8 @@ python-dotenv==1.0.0
 base36==0.1.1
 psutil==5.9.8
 
-# Testing
-pytest==7.4.0 
+# Barcode Printing
 zebra
+
+# Testing
+pytest==7.4.0

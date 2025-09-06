@@ -267,3 +267,4 @@ Password: $CertPassword
     Write-Host "❌ Error generating certificates: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
+

@@ -187,3 +187,4 @@ export default defineConfig({
 })`;
     fs.writeFileSync(viteConfigPath, originalViteConfig);
 }
+

@@ -484,3 +484,4 @@ Write-Host "  - Services are set to auto-start on boot" -ForegroundColor White
 Write-Host "  - Health monitoring and auto-recovery are enabled" -ForegroundColor White
 Write-Host "  - All services will restart automatically on failure" -ForegroundColor White
 Write-Host "  - Logs are stored in: $logsDir" -ForegroundColor White
+
