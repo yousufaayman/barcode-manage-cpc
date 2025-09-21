@@ -85,10 +85,10 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
             <NavItem to="/dashboard" label={t('navigation.dashboard')} icon={LayoutDashboard} />
             <NavItem to="/scanner" label={t('navigation.barcodeScanner')} icon={QrCode} />
             <NavItem to="/barcode-management" label={t('navigation.barcodeManagement')} icon={Package} />
-            {user?.role === 'Admin' && (
+            {(user?.role === 'Admin' || user?.role === 'Creator') && (
               <NavItem to="/job-orders" label={t('navigation.jobOrders')} icon={FileText} />
             )}
-            {(user?.role === 'Admin' || user?.role === 'Creator') && (
+            {(user?.role === 'Admin' || user?.role === 'Creator' || user?.role === 'Cutting') && (
               <NavItem to="/bulk-create" label={t('navigation.barcodeCreate')} icon={Package} />
             )}
           </div>
@@ -104,6 +104,18 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
               <NavItem to="/archive" label={t('navigation.archivedBatches')} icon={Archive} />
               <NavItem to="/advanced-statistics" label={t('navigation.advancedStatistics')} icon={BarChart3} />
               <NavItem to="/users" label={t('navigation.userManagement')} icon={Users} />
+            </div>
+          </div>
+        )}
+
+        {/* Creator Section */}
+        {user?.role === 'Creator' && (
+          <div className="mb-4">
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2">
+              {t('navigation.additional')}
+            </h3>
+            <div className="space-y-1">
+              <NavItem to="/advanced-statistics" label={t('navigation.advancedStatistics')} icon={BarChart3} />
             </div>
           </div>
         )}

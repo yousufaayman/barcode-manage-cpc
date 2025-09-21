@@ -851,7 +851,8 @@ def get_job_orders_summary(
             models.Batch.size_id.label('size_id'),
             sa_func.count(sa_func.distinct(phase_group_case)).label('group_count')
         ).filter(
-            models.Batch.job_order_id == result.JobOrder.job_order_id
+            models.Batch.job_order_id == result.JobOrder.job_order_id,
+            models.Batch.is_second_degree == 0  # Exclude second degree batches from stalling consideration
         ).group_by(
             models.Batch.color_id,
             models.Batch.size_id

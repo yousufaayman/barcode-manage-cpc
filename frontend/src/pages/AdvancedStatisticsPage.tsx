@@ -6,11 +6,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { statisticsApi, ProductionStatisticsResponse, BrandStatisticsResponse, ModelStatisticsResponse, jobOrderApi, barcodeApi, BarcodeData, JobOrderItemSummary } from '../services/api';
+import { statisticsApi, ProductionStatisticsResponse, BrandStatisticsResponse, ModelStatisticsResponse, jobOrderApi, barcodeApi, BarcodeData, JobOrderItemSummary, ModelHistoryResponse } from '../services/api';
 import { useTranslation } from 'react-i18next';
 import { TrendingUp, TrendingDown, Package, Users, Clock, AlertTriangle, CheckCircle, Activity, Search } from 'lucide-react';
 import ProductionPhasesOverview from './AdvancedStatisticsProductionPhasesOverview';
 import JobOrderStatusSearch from './AdvancedStatisticsJobOrderStatusSearch';
+import ModelHistory from './AdvancedStatisticsModelHistory';
 
 const AdvancedStatisticsPage: React.FC = () => {
   const { t } = useTranslation();
@@ -27,45 +28,63 @@ const AdvancedStatisticsPage: React.FC = () => {
   const [selectedItemForModal, setSelectedItemForModal] = useState<JobOrderItemSummary | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [phasesData, setPhasesData] = useState<{[phaseName: string]: {
-    model_color_groups: {[modelColorKey: string]: {
-      model_name: string;
-      color_name: string;
-      total_quantity: number;
-      expected_quantity: number;
-      batch_count: number;
-      time_in_phase: string;
-      sizes: Array<{
-        size_value: string;
-        quantity: number;
+    [status: string]: {
+      model_color_groups: {[modelColorKey: string]: {
+        model_name: string;
+        color_name: string;
+        total_quantity: number;
         expected_quantity: number;
         batch_count: number;
         time_in_phase: string;
-      }>;
-      second_degree_sizes: Array<{
-        size_value: string;
-        quantity: number;
-        expected_quantity: number;
-        batch_count: number;
-        time_in_phase: string;
-      }>;
-    }};
-    daily_throughput: {scanned_in_not_out: number; completed: number; efficiency_ratio: number};
+        sizes: Array<{
+          size_value: string;
+          quantity: number;
+          expected_quantity: number;
+          batch_count: number;
+          time_in_phase: string;
+        }>;
+        second_degree_sizes: Array<{
+          size_value: string;
+          quantity: number;
+          expected_quantity: number;
+          batch_count: number;
+          time_in_phase: string;
+        }>;
+      }};
+      daily_throughput: {scanned_in: number; completed: number; efficiency_ratio: number};
+    };
   }}>({});
   const [phasesLoading, setPhasesLoading] = useState(false);
-  const [phasesModelSearch, setPhasesModelSearch] = useState('');
   const [phasesColorSearch, setPhasesColorSearch] = useState('');
+  const [phasesModelSearch, setPhasesModelSearch] = useState('');
   const [jobOrderOptions, setJobOrderOptions] = useState<{ job_order_number: string; model_name: string | null }[]>([]);
+  const [modelHistoryData, setModelHistoryData] = useState<ModelHistoryResponse | null>(null);
+  const [modelHistoryLoading, setModelHistoryLoading] = useState(false);
+  const [modelHistoryJobOrderSearch, setModelHistoryJobOrderSearch] = useState('');
+  const [availablePhases, setAvailablePhases] = useState<{ phase_id: number; phase_name: string }[]>([]);
 
   // Debug effect to monitor search state changes
   useEffect(() => {
-    console.log('Search state changed:', { phasesModelSearch, phasesColorSearch });
-  }, [phasesModelSearch, phasesColorSearch]);
+    // Search state monitoring removed
+  }, [phasesColorSearch, phasesModelSearch]);
+
+  // No need to load all phases data when filters change since we're doing phase-level filtering
 
   useEffect(() => {
     loadProductionStatistics();
-    loadPhasesData();
+    loadModelHistory();
     jobOrderApi.getAllSimple().then(setJobOrderOptions);
+    loadAvailablePhases();
   }, []);
+
+  const loadAvailablePhases = async () => {
+    try {
+      const phases = await barcodeApi.getPhases();
+      setAvailablePhases(phases);
+    } catch (err: any) {
+      console.error('Failed to load available phases:', err);
+    }
+  };
 
   const loadProductionStatistics = async () => {
     try {
@@ -80,16 +99,43 @@ const AdvancedStatisticsPage: React.FC = () => {
     }
   };
 
-  const loadPhasesData = async () => {
+  const loadPhasesData = async (phaseName: string) => {
     try {
       setPhasesLoading(true);
       const data = await barcodeApi.getCurrentBatchesByPhase();
-      console.log('Loaded phases data:', data);
-      setPhasesData(data);
+      
+      // Filter data to only include the requested phase
+      const filteredData: {[phaseName: string]: {[status: string]: any}} = {};
+      if (data[phaseName]) {
+        filteredData[phaseName] = data[phaseName];
+      }
+      
+      setPhasesData(filteredData);
+      return filteredData;
     } catch (err: any) {
       console.error('Failed to load phases data:', err);
+      return null;
     } finally {
       setPhasesLoading(false);
+    }
+  };
+
+  const loadAllPhasesData = async () => {
+    // This function is kept for compatibility but not used in the new phase-level filtering approach
+    // await loadPhasesData();
+  };
+
+  const loadModelHistory = async (jobOrderNumber?: string) => {
+    try {
+      setModelHistoryLoading(true);
+      console.log('Loading model history for job order:', jobOrderNumber);
+      const data = await statisticsApi.getModelHistory(jobOrderNumber);
+      console.log('Model history API response:', data);
+      setModelHistoryData(data);
+    } catch (err: any) {
+      console.error('Failed to load model history data:', err);
+    } finally {
+      setModelHistoryLoading(false);
     }
   };
 
@@ -156,68 +202,6 @@ const AdvancedStatisticsPage: React.FC = () => {
     }
   };
 
-  // Filter phases data by model and color search
-  const getFilteredPhasesData = () => {
-    console.log('getFilteredPhasesData called with:', { phasesModelSearch, phasesColorSearch, phasesData });
-    
-    // Validate input data
-    if (!phasesData || typeof phasesData !== 'object') {
-      console.error('Invalid phasesData:', phasesData);
-      return {};
-    }
-    
-    if (!phasesModelSearch.trim() && !phasesColorSearch.trim()) {
-      console.log('No search terms, returning all data');
-      return phasesData;
-    }
-
-    const filteredData: typeof phasesData = {};
-    
-    Object.entries(phasesData).forEach(([phaseName, phaseData]) => {
-      console.log(`Processing phase: ${phaseName}`, phaseData);
-      
-      // Validate phase data structure
-      if (!phaseData || !phaseData.model_color_groups || typeof phaseData.model_color_groups !== 'object') {
-        console.warn(`Phase ${phaseName} has invalid structure:`, phaseData);
-        return;
-      }
-      
-      const filteredGroups: typeof phaseData.model_color_groups = {};
-      
-      Object.entries(phaseData.model_color_groups).forEach(([key, group]) => {
-        // Validate group data structure
-        if (!group || !group.model_name || !group.color_name) {
-          console.warn(`Group ${key} has invalid structure:`, group);
-          return;
-        }
-        
-        const modelMatch = !phasesModelSearch.trim() || 
-          group.model_name.toLowerCase().includes(phasesModelSearch.toLowerCase());
-        const colorMatch = !phasesColorSearch.trim() || 
-          group.color_name.toLowerCase().includes(phasesColorSearch.trim().toLowerCase());
-        
-        console.log(`Group ${key}: modelMatch=${modelMatch}, colorMatch=${colorMatch}`, {
-          model_name: group.model_name,
-          color_name: group.color_name,
-          search_terms: { model: phasesModelSearch, color: phasesColorSearch }
-        });
-        
-        if (modelMatch && colorMatch) {
-          filteredGroups[key] = group;
-        }
-      });
-      
-      if (Object.keys(filteredGroups).length > 0) {
-        filteredData[phaseName] = {
-          model_color_groups: filteredGroups,
-          daily_throughput: phaseData.daily_throughput
-        };
-      }
-    });
-    
-    console.log('Filtered data result:', filteredData);
-    return filteredData;
-  };
 
   if (loading) {
     return (
@@ -281,7 +265,7 @@ const AdvancedStatisticsPage: React.FC = () => {
           <button
             onClick={() => {
               loadProductionStatistics();
-              loadPhasesData();
+              loadModelHistory();
             }}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
           >
@@ -420,12 +404,12 @@ const AdvancedStatisticsPage: React.FC = () => {
         <ProductionPhasesOverview
           phasesData={phasesData}
           phasesLoading={phasesLoading}
-          phasesModelSearch={phasesModelSearch}
-          setPhasesModelSearch={setPhasesModelSearch}
           phasesColorSearch={phasesColorSearch}
           setPhasesColorSearch={setPhasesColorSearch}
+          phasesModelSearch={phasesModelSearch}
+          setPhasesModelSearch={setPhasesModelSearch}
           loadPhasesData={loadPhasesData}
-          getFilteredPhasesData={getFilteredPhasesData}
+          availablePhases={availablePhases}
         />
         
         {/* Job Order Search */}
@@ -438,6 +422,16 @@ const AdvancedStatisticsPage: React.FC = () => {
           jobOrderBatches={jobOrderBatches}
           setSelectedItemForModal={setSelectedItemForModal}
           setIsModalOpen={setIsModalOpen}
+          jobOrderOptions={jobOrderOptions}
+        />
+
+        {/* Model History */}
+        <ModelHistory
+          jobOrderSearch={modelHistoryJobOrderSearch}
+          setJobOrderSearch={setModelHistoryJobOrderSearch}
+          loadModelHistory={loadModelHistory}
+          modelHistoryLoading={modelHistoryLoading}
+          modelHistoryData={modelHistoryData}
           jobOrderOptions={jobOrderOptions}
         />
 

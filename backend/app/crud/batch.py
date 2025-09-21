@@ -279,6 +279,29 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
                 user_id=user_id,
                 notes="Phase completed"
             )
+
+            # Also create an immediate scan_in event to reflect automatic progression
+            # Cutting (1) -> Sewing (2); Sewing (2,3,4,7) -> Packaging (8)
+            next_phase_map = {1: 2, 2: 8, 3: 8, 4: 8, 7: 8}
+            next_phase_id = next_phase_map.get(new_phase)
+            if next_phase_id is not None:
+                try:
+                    create_scan_event(
+                        db=db,
+                        batch_id=db_batch.batch_id,
+                        action_type='scan_in',
+                        phase_id=next_phase_id,
+                        old_status='Completed',
+                        new_status='Pending',
+                        old_phase=new_phase,
+                        new_phase=next_phase_id,
+                        old_quantity=new_quantity,
+                        new_quantity=new_quantity,
+                        user_id=user_id,
+                        notes="Auto-progression to next phase"
+                    )
+                except Exception:
+                    pass
     
     # Only create quantity event if quantity actually changed
     if quantity_changed:

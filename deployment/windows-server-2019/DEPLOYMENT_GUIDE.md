@@ -55,16 +55,37 @@ cd S:\CS_Projects\Projects\barcode-manage-cpc
 ls deployment\windows-server-2019\
 ```
 
-#### 2.2 Create Application Directories
+#### 2.2 Create Complete Directory Structure
 ```powershell
-# Create main application directory
-New-Item -ItemType Directory -Path "C:\barcode-app" -Force
-New-Item -ItemType Directory -Path "C:\barcode-app\backend" -Force
-New-Item -ItemType Directory -Path "C:\barcode-app\monitoring" -Force
-New-Item -ItemType Directory -Path "C:\barcode-app\logs" -Force
-New-Item -ItemType Directory -Path "C:\barcode-app\frontend-network1" -Force
-New-Item -ItemType Directory -Path "C:\barcode-app\frontend-network2" -Force
+# Run the comprehensive directory creation script
+.\deployment\windows-server-2019\scripts\create-directories.ps1
+
+# Verify all directories were created successfully
+.\C:\barcode-app\verify-directories.ps1
 ```
+
+**Directory Structure Created:**
+- **Main Application**: `C:\barcode-app\` (backend, frontend, monitoring, logs, backups, temp)
+- **Backend Specific**: `C:\barcode-app\backend\` (logs, temp, cache)
+- **Static Files**: `C:\barcode-app\static\` and `S:\CS_Projects\Projects\barcode-manage-cpc\static\`
+- **File Uploads**: `C:\barcode-app\uploads\` (barcodes, job-orders, templates, exports)
+- **Nginx**: `C:\nginx\` (conf, logs, ssl, html, temp)
+- **Database**: `C:\barcode-app\database\` (backups, scripts)
+- **Monitoring**: `C:\barcode-app\monitoring\` (reports, alerts, logs, data)
+- **Cache**: `C:\barcode-app\cache\` (sessions, static, api)
+- **Security**: `C:\barcode-app\security\` (keys, certificates)
+- **Development**: `C:\barcode-app\dev\` (test-data, scripts)
+
+**Directory Features:**
+- ✅ Proper Windows permissions (IIS_IUSRS, SYSTEM, Administrators)
+- ✅ Directory inheritance settings
+- ✅ Support for both development and production paths
+- ✅ Comprehensive logging and monitoring directories
+- ✅ File upload and static file handling
+- ✅ SSL certificate storage
+- ✅ Database backup and script directories
+- ✅ Cache and session management
+- ✅ Security key and certificate storage
 
 ### Phase 3: Backend Deployment
 
@@ -77,20 +98,79 @@ New-Item -ItemType Directory -Path "C:\barcode-app\frontend-network2" -Force
 Get-Service | Where-Object {$_.Name -like "*Barcode*"}
 ```
 
-#### 3.2 Configure Environment
+#### 3.2 Configure Environment and Directory Paths
 ```powershell
 # Edit environment file
 notepad C:\barcode-app\.env
 
-# Update with your database credentials:
+# Update with your database credentials and directory paths:
 # MYSQL_HOST=localhost
 # MYSQL_PORT=3306
 # MYSQL_USER=your_username
 # MYSQL_PASSWORD=your_password
 # MYSQL_DATABASE=your_database_name
+
+# Directory Configuration (automatically handled by backend)
+# JOB_ORDER_IMAGE_UPLOAD_DIR=C:\barcode-app\static
+# LOG_DIR=C:\barcode-app\logs
+# TEMP_DIR=C:\barcode-app\temp
+# CACHE_DIR=C:\barcode-app\cache
+# UPLOAD_DIR=C:\barcode-app\uploads
 ```
 
-#### 3.3 Test Backend Services
+**Backend Directory Handling:**
+- ✅ **Static Files**: Backend automatically creates `JOB_ORDER_IMAGE_UPLOAD_DIR` if it doesn't exist
+- ✅ **Logs**: Backend creates log directories as needed
+- ✅ **Uploads**: File upload endpoints handle directory creation automatically
+- ✅ **Cache**: Backend manages cache directories for performance
+- ✅ **Temporary Files**: Backend creates temp directories for processing
+- ✅ **Database**: Backend creates database if it doesn't exist
+- ✅ **Permissions**: All directories created with proper Windows permissions
+
+#### 3.3 Verify Backend Directory Handling
+```powershell
+# Test backend directory creation and access
+cd C:\barcode-app\backend
+
+# Test static file directory creation
+python -c "
+import os
+from app.core.config import settings
+print('JOB_ORDER_IMAGE_UPLOAD_DIR:', settings.JOB_ORDER_IMAGE_UPLOAD_DIR)
+print('Directory exists:', os.path.exists(settings.JOB_ORDER_IMAGE_UPLOAD_DIR))
+print('Directory is writable:', os.access(settings.JOB_ORDER_IMAGE_UPLOAD_DIR, os.W_OK))
+"
+
+# Test database directory access
+python -c "
+from app.database import engine
+from sqlalchemy import text
+try:
+    with engine.connect() as conn:
+        result = conn.execute(text('SELECT 1'))
+        print('Database connection: SUCCESS')
+except Exception as e:
+    print('Database connection: FAILED -', str(e))
+"
+
+# Test file upload directory
+python -c "
+import os
+upload_dirs = [
+    'C:\\barcode-app\\uploads',
+    'C:\\barcode-app\\uploads\\barcodes',
+    'C:\\barcode-app\\uploads\\job-orders',
+    'C:\\barcode-app\\uploads\\templates',
+    'C:\\barcode-app\\uploads\\exports'
+]
+for dir_path in upload_dirs:
+    exists = os.path.exists(dir_path)
+    writable = os.access(dir_path, os.W_OK) if exists else False
+    print(f'{dir_path}: EXISTS={exists}, WRITABLE={writable}')
+"
+```
+
+#### 3.4 Test Backend Services
 ```powershell
 # Start services manually to test
 cd C:\barcode-app\backend
@@ -98,6 +178,12 @@ python run_service_1.py
 
 # In another terminal, test the API
 Invoke-WebRequest -Uri "http://localhost:5000/health/" -UseBasicParsing
+
+# Test file upload endpoint
+Invoke-WebRequest -Uri "http://localhost:5000/api/v1/job-orders/" -UseBasicParsing
+
+# Test directory health check endpoint
+Invoke-WebRequest -Uri "http://localhost:5000/health/directories" -UseBasicParsing
 ```
 
 ### Phase 4: SSL Certificate Generation
@@ -200,7 +286,21 @@ Start-Service -Name "BarcodeNginx"
 
 ### Phase 8: Verification and Testing
 
-#### 8.1 Service Status Check
+#### 8.1 Directory Structure Verification
+```powershell
+# Verify all directories exist and have proper permissions
+.\C:\barcode-app\verify-directories.ps1
+
+# Check directory permissions
+Get-Acl C:\barcode-app | Format-List
+Get-Acl C:\nginx | Format-List
+
+# Verify static file directory
+Test-Path C:\barcode-app\static
+Test-Path S:\CS_Projects\Projects\barcode-manage-cpc\static
+```
+
+#### 8.2 Service Status Check
 ```powershell
 # Check all services are running
 Get-Service | Where-Object {$_.Name -like "*Barcode*"} | Format-Table Name, Status
@@ -209,22 +309,38 @@ Get-Service | Where-Object {$_.Name -like "*Barcode*"} | Format-Table Name, Stat
 .\C:\barcode-app\manage-services.ps1 -Action status
 ```
 
-#### 8.2 Health Check Verification
+#### 8.3 Directory Troubleshooting
+```powershell
+# If directories are missing, recreate them
+.\deployment\windows-server-2019\scripts\create-directories.ps1 -Force
+
+# Check for permission issues
+icacls C:\barcode-app /grant IIS_IUSRS:(OI)(CI)F /T
+icacls C:\nginx /grant IIS_IUSRS:(OI)(CI)F /T
+
+# Verify backend can access directories
+cd C:\barcode-app\backend
+python -c "import os; print('Static dir exists:', os.path.exists('C:\\barcode-app\\static'))"
+```
+
+#### 8.4 Health Check Verification
 ```powershell
 # Test Network 1 health endpoints
 Invoke-WebRequest -Uri "http://192.168.0.106/health/" -UseBasicParsing
 Invoke-WebRequest -Uri "http://192.168.0.106/health/database" -UseBasicParsing
 Invoke-WebRequest -Uri "http://192.168.0.106/health/pool" -UseBasicParsing
+Invoke-WebRequest -Uri "http://192.168.0.106/health/directories" -UseBasicParsing
 Invoke-WebRequest -Uri "http://192.168.0.106/health/full" -UseBasicParsing
 
 # Test Network 2 health endpoints
 Invoke-WebRequest -Uri "http://192.168.0.249/health/" -UseBasicParsing
 Invoke-WebRequest -Uri "http://192.168.0.249/health/database" -UseBasicParsing
 Invoke-WebRequest -Uri "http://192.168.0.249/health/pool" -UseBasicParsing
+Invoke-WebRequest -Uri "http://192.168.0.249/health/directories" -UseBasicParsing
 Invoke-WebRequest -Uri "http://192.168.0.249/health/full" -UseBasicParsing
 ```
 
-#### 8.3 Frontend Access Test
+#### 8.5 Frontend Access Test
 ```powershell
 # Test Network 1 frontend
 Start-Process "http://192.168.0.106"
@@ -237,7 +353,7 @@ Start-Process "http://192.168.0.106/docs"
 Start-Process "http://192.168.0.249/docs"
 ```
 
-#### 8.4 Load Balancing Test
+#### 8.6 Load Balancing Test
 ```powershell
 # Test load balancing by making multiple requests
 for ($i = 1; $i -le 10; $i++) {
@@ -499,12 +615,18 @@ $maintenanceChecklist = @"
 - [ ] Review error logs: .\manage-services.ps1 -Action logs
 - [ ] Verify health endpoints are responding
 - [ ] Check disk space usage
+- [ ] Verify directory structure: .\verify-directories.ps1
+- [ ] Check static file directory permissions
+- [ ] Monitor upload directory disk usage
 
 ## Weekly Tasks
 - [ ] Review health monitoring reports
 - [ ] Check auto-recovery logs
 - [ ] Verify backup completion
 - [ ] Review alerting system status
+- [ ] Clean up temporary files in cache directories
+- [ ] Verify upload directory permissions
+- [ ] Check static file directory integrity
 
 ## Monthly Tasks
 - [ ] Update SSL certificates (if needed)
@@ -512,6 +634,9 @@ $maintenanceChecklist = @"
 - [ ] Check database performance
 - [ ] Update system documentation
 - [ ] Review security configurations
+- [ ] Audit directory permissions and ownership
+- [ ] Clean up old upload files and temporary data
+- [ ] Verify backup directory integrity
 
 ## Quarterly Tasks
 - [ ] Full system backup and restore test
@@ -527,6 +652,10 @@ $maintenanceChecklist = @"
 - [ ] Health check: Invoke-WebRequest -Uri "http://192.168.0.106/health/"
 - [ ] Database connectivity test
 - [ ] Network connectivity test
+- [ ] Directory structure verification: .\verify-directories.ps1
+- [ ] Recreate missing directories: .\create-directories.ps1 -Force
+- [ ] Check file permissions: icacls C:\barcode-app /T
+- [ ] Verify static file access: Test-Path C:\barcode-app\static
 "@
 
 Set-Content -Path "C:\barcode-app\MAINTENANCE_CHECKLIST.md" -Value $maintenanceChecklist
@@ -545,6 +674,10 @@ Your dual network Barcode Management System is now fully deployed and operationa
 - ✅ Windows service management
 - ✅ Performance optimization
 - ✅ Security hardening
+- ✅ Complete directory structure with proper permissions
+- ✅ Backend directory handling and file upload support
+- ✅ Static file serving and cache management
+- ✅ Database directory management and backup support
 
 ### Next Steps:
 1. Test all functionality thoroughly
@@ -555,7 +688,10 @@ Your dual network Barcode Management System is now fully deployed and operationa
 
 ### Support Resources:
 - Service Management: `.\C:\barcode-app\manage-services.ps1`
+- Directory Management: `.\C:\barcode-app\verify-directories.ps1`
+- Directory Creation: `.\deployment\windows-server-2019\scripts\create-directories.ps1`
 - Documentation: `C:\barcode-app\README.md`
+- Directory Structure: `C:\barcode-app\DIRECTORY_STRUCTURE.md`
 - Maintenance Guide: `C:\barcode-app\MAINTENANCE_CHECKLIST.md`
 - Deployment Report: `C:\barcode-app\DEPLOYMENT_REPORT.md`
 

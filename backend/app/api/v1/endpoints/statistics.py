@@ -53,6 +53,31 @@ def get_model_statistics(
         raise HTTPException(status_code=500, detail=f"Error retrieving model statistics: {str(e)}")
 
 # Keep the old endpoint for backward compatibility but mark as deprecated
+@router.get("/model-history", response_model=schemas.ModelHistoryResponse)
+def get_model_history(
+    job_order_number: str = None,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user)
+):
+    """Get model history with phase timing data, optionally filtered by job order"""
+    try:
+        return stats_crud.get_model_history(db, job_order_number)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving model history: {str(e)}")
+
+@router.get("/job-order-item/{item_id}/batch-details", response_model=schemas.JobOrderItemBatchDetails)
+def get_job_order_item_batch_details(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user)
+):
+    """Get detailed batch information for a specific job order item"""
+    try:
+        return stats_crud.get_job_order_item_batch_details(db, item_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving batch details: {str(e)}")
+
+# Keep the old endpoint for backward compatibility but mark as deprecated
 @router.get("/advanced", response_model=schemas.AdvancedStatisticsResponse)
 def get_advanced_statistics_endpoint(
     db: Session = Depends(get_db),

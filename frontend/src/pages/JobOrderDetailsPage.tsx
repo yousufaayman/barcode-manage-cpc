@@ -66,6 +66,9 @@ const JobOrderDetailsPage: React.FC = () => {
   // Archive state
   const [archiving, setArchiving] = useState(false);
   const [archivingItem, setArchivingItem] = useState<number | null>(null);
+  
+  // Track if this is the initial page load
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   const generateKey = (name: string) => name.replace(/\s+/g, '_').toLowerCase();
 
@@ -223,9 +226,26 @@ const JobOrderDetailsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchData = async (forceRefresh = false) => {
       setViewLoading(true);
       try {
+        // If force refresh is requested, refresh the summary data first
+        if (forceRefresh) {
+          try {
+            await jobOrderApi.refreshItemSummaries(Number(jobOrderId));
+            // Only show success toast for manual refreshes, not auto-refresh
+            if (!isInitialLoad) {
+              toast({
+                title: t('common.success'),
+                description: 'Data refreshed successfully',
+              });
+            }
+          } catch (refreshError) {
+            console.warn('Failed to refresh summary data:', refreshError);
+            // Continue with fetching even if refresh fails
+          }
+        }
+        
         const jobOrder = await jobOrderApi.getById(Number(jobOrderId));
         setViewJobOrder(jobOrder);
         
@@ -266,12 +286,25 @@ const JobOrderDetailsPage: React.FC = () => {
         console.error('Error fetching job order data:', error);
         setViewJobOrder(null);
         setViewTrackingData([]);
+        setMaterials([]);
+        toast({
+          title: t('common.error'),
+          description: 'Failed to load job order details',
+          variant: 'destructive'
+        });
       } finally {
         setViewLoading(false);
       }
     };
-    if (jobOrderId) fetchData();
-  }, [jobOrderId, editDialogOpen]);
+    if (jobOrderId) {
+      // Only auto-refresh on initial page load, not when edit dialog opens
+      const shouldRefresh = isInitialLoad && !editDialogOpen;
+      fetchData(shouldRefresh);
+      if (isInitialLoad) {
+        setIsInitialLoad(false);
+      }
+    }
+  }, [jobOrderId, editDialogOpen, t, toast, isInitialLoad]);
 
   // Edit logic
   const handleEditJobOrder = async () => {
@@ -341,6 +374,11 @@ const JobOrderDetailsPage: React.FC = () => {
       setEditDialogOpen(true);
     } catch (error) {
       console.error('Error fetching job order details:', error);
+      toast({
+        title: t('common.error'),
+        description: 'Failed to load job order details for editing',
+        variant: 'destructive'
+      });
     } finally {
       setEditLoading(false);
     }
@@ -426,10 +464,18 @@ const JobOrderDetailsPage: React.FC = () => {
       
       const mats = await jobOrderApi.getMaterials(Number(jobOrderId));
       setMaterials(mats);
-      // (Toast success handler removed)
+      
+      toast({
+        title: t('common.success'),
+        description: 'Job order updated successfully',
+      });
     } catch (error) {
       console.error('Error updating job order:', error);
-      // (Toast error handler removed)
+      toast({
+        title: t('common.error'),
+        description: 'Failed to update job order',
+        variant: 'destructive'
+      });
     } finally {
       setEditLoading(false);
     }

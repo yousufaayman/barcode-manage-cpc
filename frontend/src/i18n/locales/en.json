@@ -149,7 +149,10 @@
     },
     "departmentOverview": "{{role}} Department Overview",
     "pendingItems": "Pending Items",
-    "inProgressItems": "In Progress Items"
+    "inProgressItems": "In Progress Items",
+    "noItems": "No items available",
+    "size": "Size:",
+    "quantity": "Quantity:"
   },
   "barcode": {
     "scanning": "Scanning...",
@@ -305,7 +308,20 @@
         "items": "Archived Items",
         "batches": "Archived Batches"
       },
-      "backToBarcodeManagement": "Back to Barcode Management"
+      "backToBarcodeManagement": "Back to Barcode Management",
+      "filters": "Filters",
+      "filterOptions": "Filter Options",
+      "selectJobOrderOptional": "Select Job Order (Optional)",
+      "filterByJobOrder": "Filter by Job Order",
+      "loadingArchivedJobOrders": "Loading archived job orders...",
+      "noArchivedJobOrdersFound": "No archived job orders found.",
+      "loadingArchivedItems": "Loading archived items...",
+      "noArchivedItemsFoundForJobOrder": "No archived items found for this job order.",
+      "noArchivedItemsFound": "No archived items found.",
+      "loadingArchivedBarcodes": "Loading archived barcodes...",
+      "noArchivedBarcodesFound": "No archived barcodes found matching your filters.",
+      "recoverSelected": "Recover Selected",
+      "deleteSelected": "Delete Selected"
     },
     "confirmDelete": "Are you sure you want to delete this barcode?",
     "confirmBulkDelete": "Are you sure you want to delete {count} selected barcodes?",

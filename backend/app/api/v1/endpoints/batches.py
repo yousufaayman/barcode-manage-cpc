@@ -729,7 +729,7 @@ def get_remaining_quantity_for_phase_status(
 
 @router.get("/by-phase/current", response_model=Dict[str, Dict[str, Any]])
 def get_current_batches_by_phase(db: Session = Depends(get_db)):
-    """Get current batches grouped by production phases with model/color grouping"""
+    """Get current batches grouped by production phases and status with model/color grouping"""
     
     # Get all current batches with their related information
     batches = db.query(
@@ -759,18 +759,27 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
         models.Batch.status.in_(['Pending', 'In Progress', 'Completed'])
     ).order_by(
         models.ProductionPhase.phase_id,
+        models.Batch.status,
         models.JobOrder.job_order_number,
         models.Model.model_name,
         models.Color.color_name,
         models.Size.size_value
     ).all()
     
-    # Group batches by phase and model/color combinations
+    # Group batches by phase, status, and model/color combinations
     phases_data = {}
     
     for batch, job_order_number, model_name, color_name, size_value, phase_name, phase_id in batches:
         if phase_name not in phases_data:
             phases_data[phase_name] = {}
+        
+        # Initialize status groups for this phase
+        status = batch.status
+        if status not in phases_data[phase_name]:
+            phases_data[phase_name][status] = {
+                'model_color_groups': {},
+                'daily_throughput': {'scanned_in_not_out': 0, 'completed': 0, 'efficiency_ratio': 0}
+            }
         
         # Clean model_name and color_name (preserve trailing zeros)
         cleaned_model_name = model_name.strip() if model_name else ''
@@ -779,7 +788,7 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
         # Create model-color key (grouping by model + color only, second degree will be handled separately)
         model_color_key = f"{cleaned_model_name}_{cleaned_color_name}"
         
-        if model_color_key not in phases_data[phase_name]:
+        if model_color_key not in phases_data[phase_name][status]['model_color_groups']:
             # Get expected quantity from job order items for this model and color
             job_order_items = db.query(models.JobOrderItem).filter(
                 models.JobOrderItem.job_order_id == batch.job_order_id,
@@ -843,21 +852,24 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
             except (ValueError, TypeError, AttributeError):
                 time_in_phase = "N/A"
             
-            # Calculate total expected quantity for this model-color combination
+            # Calculate total working quantity for this model-color combination
+            # Use sum of all batches for this job order and color combination (excluding second degree items)
             total_expected_quantity = 0
             try:
-                # Get job order items for this specific batch's job order and model-color combination
-                job_order_items = db.query(models.JobOrderItem).filter(
-                    models.JobOrderItem.job_order_id == batch.job_order_id,
-                    models.JobOrderItem.color_id == batch.color_id
+                # Get all batches for this specific job order and color combination (excluding second degree)
+                all_batches_for_model_color = db.query(models.Batch).filter(
+                    models.Batch.job_order_id == batch.job_order_id,
+                    models.Batch.color_id == batch.color_id,
+                    models.Batch.is_second_degree == False
                 ).all()
                 
-                total_expected_quantity = sum(item.quantity for item in job_order_items)
+                # Sum all batch quantities for this model-color combination (working quantity)
+                total_expected_quantity = sum(b.quantity for b in all_batches_for_model_color if b.quantity is not None)
             except Exception as e:
                 total_expected_quantity = 0
             
             # Initialize model-color group with separate tracking for second degree
-            phases_data[phase_name][model_color_key] = {
+            phases_data[phase_name][status]['model_color_groups'][model_color_key] = {
                 'model_name': cleaned_model_name,
                 'color_name': cleaned_color_name,
                 'total_quantity': 0,
@@ -868,16 +880,20 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
                 'second_degree_sizes': []
             }
         
-        # Get expected quantity for this specific model/color/size combination
+        # Get working quantity for this specific model/color/size combination
+        # Use sum of all batches for this job order item instead of job order item quantity (excluding second degree items)
         size_expected_quantity = 0
         try:
-            job_order_item = db.query(models.JobOrderItem).filter(
-                models.JobOrderItem.job_order_id == batch.job_order_id,
-                models.JobOrderItem.color_id == batch.color_id,
-                models.JobOrderItem.size_id == batch.size_id
-            ).first()
+            # Get all batches for this specific job order, color, and size combination (excluding second degree)
+            all_batches_for_size = db.query(models.Batch).filter(
+                models.Batch.job_order_id == batch.job_order_id,
+                models.Batch.color_id == batch.color_id,
+                models.Batch.size_id == batch.size_id,
+                models.Batch.is_second_degree == False
+            ).all()
             
-            size_expected_quantity = job_order_item.quantity if job_order_item else 0
+            # Sum all batch quantities for this size (working quantity)
+            size_expected_quantity = sum(b.quantity for b in all_batches_for_size if b.quantity is not None)
         except (ValueError, TypeError, AttributeError):
             size_expected_quantity = 0
         
@@ -922,7 +938,7 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
             pass
         
         # Check if this size already exists in the appropriate array
-        size_arrays = phases_data[phase_name][model_color_key]['second_degree_sizes'] if batch.is_second_degree else phases_data[phase_name][model_color_key]['sizes']
+        size_arrays = phases_data[phase_name][status]['model_color_groups'][model_color_key]['second_degree_sizes'] if batch.is_second_degree else phases_data[phase_name][status]['model_color_groups'][model_color_key]['sizes']
         existing_size = next((size for size in size_arrays if size['size_value'] == size_value), None)
         
         if existing_size:
@@ -941,76 +957,132 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
         else:
             # Add new size entry
             if batch.is_second_degree:
-                phases_data[phase_name][model_color_key]['second_degree_sizes'].append(size_data)
+                phases_data[phase_name][status]['model_color_groups'][model_color_key]['second_degree_sizes'].append(size_data)
             else:
-                phases_data[phase_name][model_color_key]['sizes'].append(size_data)
+                phases_data[phase_name][status]['model_color_groups'][model_color_key]['sizes'].append(size_data)
         
-        phases_data[phase_name][model_color_key]['total_quantity'] += batch.quantity
-        phases_data[phase_name][model_color_key]['batch_count'] += 1
+        # Only add to total quantity and batch count if it's not a second degree item
+        if not batch.is_second_degree:
+            phases_data[phase_name][status]['model_color_groups'][model_color_key]['total_quantity'] += batch.quantity
+            phases_data[phase_name][status]['model_color_groups'][model_color_key]['batch_count'] += 1
     
-    # Calculate phase-level daily throughput for each phase
+    # Calculate daily throughput for each status within each phase
     for phase_name in phases_data:
-        try:
-            from datetime import datetime
-            from sqlalchemy import func
-            
-            # Get current database date to ensure timezone consistency
-            current_db_date = db.query(func.date(func.now())).scalar()
-            
-            # Get today's scan events for this phase
-            today_scans = db.query(models.BarcodeScanEvent).filter(
-                models.BarcodeScanEvent.phase_id == db.query(models.ProductionPhase.phase_id).filter(
+        for status in phases_data[phase_name]:
+            try:
+                from datetime import datetime
+                from sqlalchemy import func
+                
+                # Get current database date to ensure timezone consistency
+                current_db_date = db.query(func.date(func.now())).scalar()
+                
+                # Get phase ID for this phase
+                phase_id = db.query(models.ProductionPhase.phase_id).filter(
                     models.ProductionPhase.phase_name == phase_name
-                ).scalar(),
-                models.BarcodeScanEvent.scanned_at >= current_db_date
-            ).all()
-            
-            # Count items scanned in but not scanned out (In Progress)
-            scanned_in_not_out = sum(1 for scan in today_scans if scan.new_status == 'In Progress')
-            # Count completed items
-            completed_items = sum(1 for scan in today_scans if scan.new_status == 'Completed')
-            
-            # Store the model_color_groups data before overwriting
-            model_color_groups_data = phases_data[phase_name].copy()
-            
-            # Calculate efficiency ratio
-            if completed_items > 0:
-                efficiency_ratio = scanned_in_not_out / completed_items
-                phases_data[phase_name] = {
-                    'model_color_groups': model_color_groups_data,
-                    'daily_throughput': {
-                        'scanned_in_not_out': scanned_in_not_out,
-                        'completed': completed_items,
-                        'efficiency_ratio': round(efficiency_ratio, 2)
-                    }
+                ).scalar()
+                
+                # Initialize throughput values
+                scanned_in = 0  # Items moved from Pending to In Progress
+                completed_items = 0  # Items moved from In Progress to Completed
+                
+                if status == 'Pending':
+                    # For Pending: 
+                    # 1. Sum quantities of batches that were set to Pending today (scanned_in)
+                    # Use DISTINCT to avoid duplicate batch quantities
+                    set_to_pending_batches = db.query(models.Batch.batch_id, models.Batch.quantity).join(
+                        models.BarcodeScanEvent, models.Batch.batch_id == models.BarcodeScanEvent.batch_id
+                    ).filter(
+                        models.BarcodeScanEvent.phase_id == phase_id,
+                        models.BarcodeScanEvent.new_status == 'Pending',
+                        models.BarcodeScanEvent.scanned_at >= current_db_date
+                    ).distinct().all()
+                    
+                    scanned_in = sum(batch.quantity for batch in set_to_pending_batches if batch.quantity)
+                    
+                    # 2. Sum quantities of batches that moved from Pending to In Progress today (completed_items)
+                    # Use DISTINCT to avoid duplicate batch quantities
+                    pending_to_in_progress_batches = db.query(models.Batch.batch_id, models.Batch.quantity).join(
+                        models.BarcodeScanEvent, models.Batch.batch_id == models.BarcodeScanEvent.batch_id
+                    ).filter(
+                        models.BarcodeScanEvent.phase_id == phase_id,
+                        models.BarcodeScanEvent.old_status == 'Pending',
+                        models.BarcodeScanEvent.new_status == 'In Progress',
+                        models.BarcodeScanEvent.scanned_at >= current_db_date
+                    ).distinct().all()
+                    
+                    completed_items = sum(batch.quantity for batch in pending_to_in_progress_batches if batch.quantity)
+                    
+                elif status == 'In Progress':
+                    # For In Progress: 
+                    # 1. Sum quantities of batches that moved from Pending to In Progress today (scan_in)
+                    # Use DISTINCT to avoid duplicate batch quantities
+                    pending_to_in_progress_batches = db.query(models.Batch.batch_id, models.Batch.quantity).join(
+                        models.BarcodeScanEvent, models.Batch.batch_id == models.BarcodeScanEvent.batch_id
+                    ).filter(
+                        models.BarcodeScanEvent.phase_id == phase_id,
+                        models.BarcodeScanEvent.old_status == 'Pending',
+                        models.BarcodeScanEvent.new_status == 'In Progress',
+                        models.BarcodeScanEvent.scanned_at >= current_db_date
+                    ).distinct().all()
+                    
+                    scanned_in = sum(batch.quantity for batch in pending_to_in_progress_batches if batch.quantity)
+                    
+                    # 2. Sum quantities of batches that moved from In Progress to Completed today
+                    # Use DISTINCT to avoid duplicate batch quantities
+                    in_progress_to_completed_batches = db.query(models.Batch.batch_id, models.Batch.quantity).join(
+                        models.BarcodeScanEvent, models.Batch.batch_id == models.BarcodeScanEvent.batch_id
+                    ).filter(
+                        models.BarcodeScanEvent.phase_id == phase_id,
+                        models.BarcodeScanEvent.old_status == 'In Progress',
+                        models.BarcodeScanEvent.new_status == 'Completed',
+                        models.BarcodeScanEvent.scanned_at >= current_db_date
+                    ).distinct().all()
+                    
+                    completed_items = sum(batch.quantity for batch in in_progress_to_completed_batches if batch.quantity)
+                    
+                elif status == 'Completed':
+                    # For Completed: sum quantities of batches that moved from In Progress to Completed today
+                    # Use DISTINCT to avoid duplicate batch quantities
+                    in_progress_to_completed_batches = db.query(models.Batch.batch_id, models.Batch.quantity).join(
+                        models.BarcodeScanEvent, models.Batch.batch_id == models.BarcodeScanEvent.batch_id
+                    ).filter(
+                        models.BarcodeScanEvent.phase_id == phase_id,
+                        models.BarcodeScanEvent.old_status == 'In Progress',
+                        models.BarcodeScanEvent.new_status == 'Completed',
+                        models.BarcodeScanEvent.scanned_at >= current_db_date
+                    ).distinct().all()
+                    
+                    completed_items = sum(batch.quantity for batch in in_progress_to_completed_batches if batch.quantity)
+                    scanned_in = 0  # Completed doesn't have scanned in items
+                
+                # Calculate efficiency ratio
+                if completed_items > 0 and scanned_in > 0:
+                    efficiency_ratio = completed_items / scanned_in
+                else:
+                    efficiency_ratio = 0
+                
+                # Update daily throughput for this status
+                phases_data[phase_name][status]['daily_throughput'] = {
+                    'scanned_in': scanned_in,
+                    'completed': completed_items,
+                    'efficiency_ratio': round(efficiency_ratio, 2)
                 }
-            else:
-                phases_data[phase_name] = {
-                    'model_color_groups': model_color_groups_data,
-                    'daily_throughput': {
-                        'scanned_in_not_out': scanned_in_not_out,
-                        'completed': completed_items,
-                        'efficiency_ratio': 0
-                    }
-                }
-        except (ValueError, TypeError, AttributeError, KeyError):
-            # Store the model_color_groups data before overwriting
-            model_color_groups_data = phases_data[phase_name].copy()
-            phases_data[phase_name] = {
-                'model_color_groups': model_color_groups_data,
-                'daily_throughput': {
-                    'scanned_in_not_out': 0,
+                
+            except (ValueError, TypeError, AttributeError, KeyError) as e:
+                # Set default values if calculation fails
+                phases_data[phase_name][status]['daily_throughput'] = {
+                    'scanned_in': 0,
                     'completed': 0,
                     'efficiency_ratio': 0
                 }
-            }
     
-    # Sort model-color groups within each phase by model name, then color name
+    # Sort model-color groups within each status of each phase by model name, then color name
     for phase_name in phases_data:
-        if 'model_color_groups' in phases_data[phase_name]:
-            phases_data[phase_name]['model_color_groups'] = dict(
-                sorted(phases_data[phase_name]['model_color_groups'].items(), 
-                       key=lambda x: (x[1]['model_name'], x[1]['color_name']))
-            )
+        for status in phases_data[phase_name]:
+            if 'model_color_groups' in phases_data[phase_name][status]:
+                phases_data[phase_name][status]['model_color_groups'] = dict(
+                    sorted(phases_data[phase_name][status]['model_color_groups'].items(), 
+                           key=lambda x: (x[1]['model_name'], x[1]['color_name']))
+                )
     
     return phases_data

@@ -841,7 +841,55 @@ class TimelineSummaryResponse(BaseModel):
     total_events: int
 
     class Config:
-        from_attributes = True 
+        from_attributes = True
+
+# Job Order Item Batch Details schema
+class JobOrderItemBatchDetails(BaseModel):
+    item_id: int
+    job_order_id: int
+    job_order_number: str
+    model_name: str
+    color_name: str
+    size_value: str
+    expected_quantity: int
+    current_quantity: int
+    batches: List[Dict[str, Any]]
+    total_batches: int
+    completion_percentage: float
+
+    class Config:
+        from_attributes = True
+
+# Model History schemas
+class ModelHistoryEntry(BaseModel):
+    model_name: str
+    color_name: str
+    size_value: str
+    job_order_number: str
+    phase_name: str
+    entry_time: str
+    exit_time: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    status: str
+    quantity: int
+
+class ModelHistorySizeData(BaseModel):
+    size_value: str
+    item_id: int
+    entries: List[ModelHistoryEntry]
+    total_duration_minutes: int
+    entry_count: int
+
+class ModelHistoryGroup(BaseModel):
+    job_order_number: str
+    color_name: str
+    model_name: str
+    total_entries: int
+    total_duration_minutes: int
+    sizes: Dict[str, ModelHistorySizeData]
+
+class ModelHistoryResponse(BaseModel):
+    job_order_color_groups: Dict[str, ModelHistoryGroup] 
 
 class ProductionStatisticsResponse(BaseModel):
     wip_by_phase: List[Dict[str, Any]]

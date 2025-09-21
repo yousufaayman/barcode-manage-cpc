@@ -365,6 +365,72 @@ export interface ModelStatisticsResponse {
   }>;
 }
 
+// Model History interfaces
+export interface ModelHistoryEntry {
+  model_name: string;
+  color_name: string;
+  size_value: string;
+  job_order_number: string;
+  phase_name: string;
+  entry_time: string;
+  exit_time?: string;
+  duration_minutes?: number;
+  status: string;
+  quantity: number;
+}
+
+export interface ModelHistorySizeData {
+  size_value: string;
+  item_id: number;
+  entries: ModelHistoryEntry[];
+  total_duration_minutes: number;
+  entry_count: number;
+}
+
+export interface ModelHistoryGroup {
+  job_order_number: string;
+  color_name: string;
+  model_name: string;
+  total_entries: number;
+  total_duration_minutes: number;
+  sizes: {[sizeValue: string]: ModelHistorySizeData};
+}
+
+export interface ModelHistoryResponse {
+  job_order_color_groups: {[jobOrderColorKey: string]: ModelHistoryGroup};
+}
+
+export interface BatchDetail {
+  batch_id: number;
+  barcode: string;
+  quantity: number;
+  current_phase: number;
+  phase_name: string;
+  status: string;
+  is_second_degree: boolean;
+  last_updated_at?: string | null;
+}
+
+export interface PhaseStatusGroup {
+  phase_name: string;
+  status: string;
+  batches: BatchDetail[];
+  total_quantity: number;
+  batch_count: number;
+}
+
+export interface JobOrderItemBatchDetails {
+  item_id: number;
+  job_order_number: string;
+  model_name: string;
+  color_name: string;
+  size_value: string;
+  expected_quantity: number;
+  total_batch_quantity: number;
+  remaining_quantity: number;
+  phase_status_groups: PhaseStatusGroup[];
+}
+
 // Job Order interfaces
 export interface JobOrderItem {
   item_id: number;
@@ -482,6 +548,7 @@ export interface JobOrderSummary {
   has_stalled_batches: boolean;
   completion_percentage: number;
   overproduction_quantity: number;
+  notes?: string;
   last_calculated_at?: string;
   last_quantity_change?: string;
   last_completion_change?: string;
@@ -770,7 +837,7 @@ export const barcodeApi = {
         };
       };
       daily_throughput: {
-        scanned_in_not_out: number;
+        scanned_in: number;
         completed: number;
         efficiency_ratio: number;
       };
@@ -1011,6 +1078,17 @@ export const statisticsApi = {
 
   getModelStatistics: async (modelId: number): Promise<ModelStatisticsResponse> => {
     const response = await api.get<ModelStatisticsResponse>(`/statistics/model/${modelId}`);
+    return response.data;
+  },
+
+  getModelHistory: async (jobOrderNumber?: string): Promise<ModelHistoryResponse> => {
+    const params = jobOrderNumber ? { job_order_number: jobOrderNumber } : {};
+    const response = await api.get<ModelHistoryResponse>('/statistics/model-history', { params });
+    return response.data;
+  },
+
+  getJobOrderItemBatchDetails: async (itemId: number): Promise<JobOrderItemBatchDetails> => {
+    const response = await api.get<JobOrderItemBatchDetails>(`/statistics/job-order-item/${itemId}/batch-details`);
     return response.data;
   },
 };

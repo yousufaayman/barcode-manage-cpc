@@ -2,56 +2,70 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Activity, Clock, Package, TrendingUp } from 'lucide-react';
+import { Activity, Clock, Package, TrendingUp, Filter } from 'lucide-react';
+import SearchableDropdown from '../components/SearchableDropdown';
 
 export interface ProductionPhasesOverviewProps {
-  phasesData: any;
+  phasesData: {[phaseName: string]: {
+    [status: string]: {
+      model_color_groups: {[modelColorKey: string]: {
+        model_name: string;
+        color_name: string;
+        total_quantity: number;
+        expected_quantity: number;
+        batch_count: number;
+        time_in_phase: string;
+        sizes: Array<{
+          size_value: string;
+          quantity: number;
+          expected_quantity: number;
+          batch_count: number;
+          time_in_phase: string;
+        }>;
+        second_degree_sizes: Array<{
+          size_value: string;
+          quantity: number;
+          expected_quantity: number;
+          batch_count: number;
+          time_in_phase: string;
+        }>;
+      }};
+      daily_throughput: {scanned_in: number; completed: number; efficiency_ratio: number};
+    };
+  }};
   phasesLoading: boolean;
-  phasesModelSearch: string;
-  setPhasesModelSearch: (v: string) => void;
   phasesColorSearch: string;
   setPhasesColorSearch: (v: string) => void;
-  loadPhasesData: () => void;
-  getFilteredPhasesData: () => any;
+  phasesModelSearch: string;
+  setPhasesModelSearch: (v: string) => void;
+  loadPhasesData: (phaseName: string) => void;
+  availablePhases: { phase_id: number; phase_name: string }[];
 }
 
 const ProductionPhasesOverview: React.FC<ProductionPhasesOverviewProps> = ({
   phasesData,
   phasesLoading,
-  phasesModelSearch,
-  setPhasesModelSearch,
   phasesColorSearch,
   setPhasesColorSearch,
+  phasesModelSearch,
+  setPhasesModelSearch,
   loadPhasesData,
-  getFilteredPhasesData,
+  availablePhases,
 }) => {
   const [selectedPhase, setSelectedPhase] = useState<string | null>(null);
+  const [selectedStatus, setSelectedStatus] = useState<string>('Pending');
   const [phaseLoadingStates, setPhaseLoadingStates] = useState<{ [phaseName: string]: boolean }>({});
-  const [loadedPhaseDetails, setLoadedPhaseDetails] = useState<{ [phaseName: string]: any }>({});
-  const [renderCount, setRenderCount] = useState(0);
+  const [phasesLoaded, setPhasesLoaded] = useState(false);
 
-  // Debug effect to monitor search changes
-  useEffect(() => {
-    console.log('Search values changed:', { phasesModelSearch, phasesColorSearch });
-  }, [phasesModelSearch, phasesColorSearch]);
 
-  // Debug effect to monitor all props
-  useEffect(() => {
-    console.log('Component props:', {
-      phasesData,
-      phasesLoading,
-      phasesModelSearch,
-      phasesColorSearch,
-      loadPhasesData: typeof loadPhasesData,
-      getFilteredPhasesData: typeof getFilteredPhasesData
-    });
-  }, [phasesData, phasesLoading, phasesModelSearch, phasesColorSearch, loadPhasesData, getFilteredPhasesData]);
+  // No need to clear loaded phase details when filters change - we do live filtering instead
 
-  // Debug effect to monitor renders
+  // Set phases loaded when we have available phases
   useEffect(() => {
-    setRenderCount(prev => prev + 1);
-    console.log('Component rendered, count:', renderCount + 1);
-  });
+    if (availablePhases && availablePhases.length > 0) {
+      setPhasesLoaded(true);
+    }
+  }, [availablePhases]);
 
   const handlePhaseClick = async (phaseName: string) => {
     if (selectedPhase === phaseName) {
@@ -60,25 +74,13 @@ const ProductionPhasesOverview: React.FC<ProductionPhasesOverviewProps> = ({
     }
 
     setSelectedPhase(phaseName);
+    setSelectedStatus('Pending'); // Reset to default status
     
-    // If phase details are already loaded, don't reload
-    if (loadedPhaseDetails[phaseName]) {
-      return;
-    }
-
-    // Set loading state for this phase
+    // Load all data for this phase
     setPhaseLoadingStates(prev => ({ ...prev, [phaseName]: true }));
 
     try {
-      // Simulate API call - replace with actual API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Get the phase data from the existing data structure
-      const currentFilteredData = getFilteredPhasesData();
-      const phaseData = currentFilteredData[phaseName];
-      if (phaseData) {
-        setLoadedPhaseDetails(prev => ({ ...prev, [phaseName]: phaseData }));
-      }
+      await loadPhasesData(phaseName);
     } catch (error) {
       console.error(`Failed to load details for phase ${phaseName}:`, error);
     } finally {
@@ -100,47 +102,52 @@ const ProductionPhasesOverview: React.FC<ProductionPhasesOverviewProps> = ({
     return 'border-gray-500 bg-gray-50';
   };
 
-  const filteredPhasesData = useMemo(() => {
-    console.log('useMemo triggered for filteredPhasesData');
-    const data = getFilteredPhasesData();
-    console.log('Filtered Phases Data:', data);
-    console.log('Model Search:', phasesModelSearch);
-    console.log('Color Search:', phasesColorSearch);
-    return data;
-  }, [getFilteredPhasesData, phasesModelSearch, phasesColorSearch]);
-  
-  // Validate data structure
-  if (!filteredPhasesData || typeof filteredPhasesData !== 'object') {
-    console.error('Invalid filteredPhasesData:', filteredPhasesData);
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Production Phases Overview</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="text-center py-8 text-red-500">
-            Invalid data structure received
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-  
-  const filteredPhases = useMemo(() => {
-    return Object.keys(filteredPhasesData).filter(phaseName => {
-      const phaseData = filteredPhasesData[phaseName];
-      console.log(`Phase ${phaseName} data:`, phaseData);
-      
-      if (!phaseData || !phaseData.model_color_groups) {
-        console.warn(`Phase ${phaseName} missing model_color_groups:`, phaseData);
-        return false;
+  // No need for filteredPhasesData since we do live filtering on the loaded data
+
+  // Get available colors from current phase and status data
+  const colorOptions = useMemo(() => {
+    if (!selectedPhase || !phasesData[selectedPhase] || !phasesData[selectedPhase][selectedStatus]) return [];
+    
+    const colors = new Set<string>();
+    Object.values(phasesData[selectedPhase][selectedStatus].model_color_groups || {}).forEach((group: any) => {
+      if (group.color_name) {
+        colors.add(group.color_name);
       }
-      
-      const modelColorGroups = Object.values(phaseData.model_color_groups);
-      console.log(`Phase ${phaseName} model_color_groups:`, modelColorGroups);
-      return modelColorGroups.length > 0;
     });
-  }, [filteredPhasesData]);
+    return Array.from(colors).sort();
+  }, [selectedPhase, selectedStatus, phasesData]);
+
+  // Get available models from current phase and status data
+  const modelOptions = useMemo(() => {
+    if (!selectedPhase || !phasesData[selectedPhase] || !phasesData[selectedPhase][selectedStatus]) return [];
+    
+    const models = new Set<string>();
+    Object.values(phasesData[selectedPhase][selectedStatus].model_color_groups || {}).forEach((group: any) => {
+      if (group.model_name) {
+        models.add(group.model_name);
+      }
+    });
+    return Array.from(models).sort();
+  }, [selectedPhase, selectedStatus, phasesData]);
+
+  // Status options
+  const statusOptions = ['Pending', 'In Progress', 'Completed'];
+
+  // Get phases to display
+  const displayPhases = useMemo(() => {
+    return availablePhases.map(phase => phase.phase_name);
+  }, [availablePhases]);
+
+  // Get available statuses for the selected phase
+  const getAvailableStatuses = (phaseName: string) => {
+    if (!phasesData[phaseName]) return ['Pending', 'In Progress'];
+    
+    const availableStatuses = Object.keys(phasesData[phaseName]);
+    if (phaseName === 'Packaging' && availableStatuses.includes('Completed')) {
+      return ['Pending', 'In Progress', 'Completed'];
+    }
+    return ['Pending', 'In Progress'];
+  };
 
   return (
     <Card>
@@ -151,7 +158,7 @@ const ProductionPhasesOverview: React.FC<ProductionPhasesOverviewProps> = ({
             Production Phases Overview
           </div>
           <button
-            onClick={loadPhasesData}
+            onClick={() => selectedPhase && loadPhasesData(selectedPhase)}
             disabled={phasesLoading}
             className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 text-sm"
           >
@@ -165,171 +172,252 @@ const ProductionPhasesOverview: React.FC<ProductionPhasesOverviewProps> = ({
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {/* Search Filters */}
-        <div className="mb-6 p-4 bg-gray-50 rounded-lg">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1">
-              <label htmlFor="model-search" className="block text-sm font-medium text-gray-700 mb-1">
-                Search by Model
-              </label>
-              <Input
-                id="model-search"
-                type="text"
-                placeholder="Enter model name..."
-                value={phasesModelSearch}
-                onChange={(e) => {
-                  console.log('Model search changed:', e.target.value);
-                  setPhasesModelSearch(e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    console.log('Model search Enter pressed');
-                  }
-                }}
-                className="w-full"
-              />
-            </div>
-            <div className="flex-1">
-              <label htmlFor="color-search" className="block text-sm font-medium text-gray-700 mb-1">
-                Search by Color
-              </label>
-              <Input
-                id="color-search"
-                type="text"
-                placeholder="Enter color name..."
-                value={phasesColorSearch}
-                onChange={(e) => {
-                  console.log('Color search changed:', e.target.value);
-                  setPhasesColorSearch(e.target.value);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    console.log('Color search Enter pressed');
-                  }
-                }}
-                className="w-full"
-              />
-            </div>
-            <div className="flex items-end">
-              <Button
-                onClick={() => {
-                  console.log('Clear filters clicked');
-                  setPhasesModelSearch('');
-                  setPhasesColorSearch('');
-                }}
-                variant="outline"
-                className="w-full sm:w-auto"
-              >
-                Clear Filters
-              </Button>
-            </div>
-          </div>
-        </div>
 
         {phasesLoading ? (
           <div className="flex items-center justify-center py-8">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
             <span className="ml-2 text-gray-600">Loading phases data...</span>
           </div>
-        ) : filteredPhases.length === 0 ? (
+        ) : displayPhases.length === 0 ? (
           <div className="text-center py-8 text-gray-500">
-            No production phases data available
+            No phases available
           </div>
         ) : (
           <div className="space-y-4">
             {/* Phase Tabs */}
-            <div className="flex flex-wrap gap-2 border-b border-gray-200 pb-4">
-              {filteredPhases.map((phaseName) => {
-                const phaseData = filteredPhasesData[phaseName];
-                const modelColorGroups = Object.values(phaseData.model_color_groups);
-                const totalGroups = modelColorGroups.length;
-                const isSelected = selectedPhase === phaseName;
-                const isLoading = phaseLoadingStates[phaseName];
-                const isLoaded = !!loadedPhaseDetails[phaseName];
+            <div className="bg-white rounded-lg border border-gray-200 p-1">
+              <div className="flex flex-wrap gap-1">
+                {displayPhases.map((phaseName) => {
+                  const isSelected = selectedPhase === phaseName;
+                  const isLoading = phaseLoadingStates[phaseName];
+                  const isLoaded = !!phasesData[phaseName];
 
-                return (
-                  <button
-                    key={phaseName}
-                    onClick={() => handlePhaseClick(phaseName)}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg border-2 transition-all duration-200 ${
-                      isSelected 
-                        ? getPhaseColor(phaseName) + ' shadow-md'
-                        : 'border-gray-200 bg-white hover:bg-gray-50'
-                    }`}
-                  >
-                    {getPhaseIcon(phaseName)}
-                    <span className={`font-medium ${isSelected ? 'text-gray-900' : 'text-gray-700'}`}>
-                      {phaseName}
-                    </span>
-                    <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full">
-                      {totalGroups}
-                    </span>
-                    {isLoading && (
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-                    )}
-                    {isLoaded && !isLoading && (
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                    )}
-                  </button>
-                );
-              })}
+                  return (
+                    <button
+                      key={phaseName}
+                      onClick={() => handlePhaseClick(phaseName)}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-md font-medium text-sm transition-all duration-200 ${
+                        isSelected
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                      }`}
+                    >
+                      {getPhaseIcon(phaseName)}
+                      <span>{phaseName}</span>
+                      {isLoading && (
+                        <div className={`animate-spin rounded-full h-3 w-3 border-b-2 ${
+                          isSelected ? 'border-white' : 'border-blue-600'
+                        }`}></div>
+                      )}
+                      {isLoaded && !isLoading && (
+                        <div className={`w-2 h-2 rounded-full ${
+                          isSelected ? 'bg-blue-200' : 'bg-green-500'
+                        }`}></div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Selected Phase Content */}
-            {selectedPhase && loadedPhaseDetails[selectedPhase] && (
+            {selectedPhase && phasesData[selectedPhase] && (
               <div className="space-y-4">
-                {/* Phase-Level Daily Throughput */}
-                <div className="p-4 bg-blue-50 rounded-lg">
-                  <h4 className="text-sm font-medium text-blue-900 mb-2">Daily Throughput Summary</h4>
-                  <div className="text-center p-3 bg-white rounded-lg">
-                    <div className="text-sm font-medium text-gray-700">{selectedPhase}</div>
-                    <div className="text-lg font-bold text-blue-600">
-                      {loadedPhaseDetails[selectedPhase].daily_throughput.scanned_in_not_out} → {loadedPhaseDetails[selectedPhase].daily_throughput.completed}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      Efficiency: {loadedPhaseDetails[selectedPhase].daily_throughput.efficiency_ratio}
-                    </div>
+                {/* Status Tabs */}
+                <div className="bg-white rounded-lg border border-gray-200 p-1">
+                  <div className="flex space-x-1">
+                    {getAvailableStatuses(selectedPhase).map((status) => (
+                      <button
+                        key={status}
+                        onClick={() => setSelectedStatus(status)}
+                        className={`relative flex-1 py-2.5 px-4 text-sm font-medium rounded-md transition-all duration-200 ${
+                          selectedStatus === status
+                            ? 'bg-blue-600 text-white shadow-sm'
+                            : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-center gap-2">
+                          <span>{status}</span>
+                          {phasesData[selectedPhase][status] && (
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              selectedStatus === status
+                                ? 'bg-blue-500 text-white'
+                                : 'bg-gray-200 text-gray-600'
+                            }`}>
+                              {Object.keys(phasesData[selectedPhase][status].model_color_groups || {}).length}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    ))}
                   </div>
                 </div>
 
+                {/* Filters for Selected Phase and Status */}
+                {phasesData[selectedPhase][selectedStatus] && (
+                  <div className="bg-white rounded-lg border border-gray-200 p-6">
+                    <div className="flex items-center justify-between mb-6">
+                      <div className="flex items-center gap-2">
+                        <Filter className="h-5 w-5 text-gray-600" />
+                        <h3 className="text-lg font-semibold text-gray-900">
+                          Filters
+                        </h3>
+                        <span className="text-sm text-gray-500">
+                          {selectedPhase} • {selectedStatus}
+                        </span>
+                      </div>
+                      <Button
+                        onClick={() => {
+                          setPhasesColorSearch('');
+                          setPhasesModelSearch('');
+                        }}
+                        variant="outline"
+                        size="sm"
+                        className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
+                      >
+                        <Filter className="h-4 w-4" />
+                        Clear
+                      </Button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-2">
+                        <label htmlFor="color-search" className="block text-sm font-medium text-gray-700">
+                          Color
+                        </label>
+                        <SearchableDropdown
+                          value={phasesColorSearch}
+                          onChange={setPhasesColorSearch}
+                          options={colorOptions}
+                          placeholder="Select or type color..."
+                          label=""
+                          disabled={phasesLoading}
+                          className="h-10"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label htmlFor="model-search" className="block text-sm font-medium text-gray-700">
+                          Model
+                        </label>
+                        <SearchableDropdown
+                          value={phasesModelSearch}
+                          onChange={setPhasesModelSearch}
+                          options={modelOptions}
+                          placeholder="Select or type model..."
+                          label=""
+                          disabled={phasesLoading}
+                          className="h-10"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Phase-Level Daily Throughput */}
+                {phasesData[selectedPhase][selectedStatus] && (
+                  <div className="bg-white rounded-lg border border-gray-200 p-6">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Activity className="h-5 w-5 text-blue-600" />
+                      <h4 className="text-lg font-semibold text-gray-900">Daily Throughput</h4>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="text-center p-4 bg-gray-50 rounded-lg">
+                        <div className="text-2xl font-bold text-blue-600">
+                          {phasesData[selectedPhase][selectedStatus].daily_throughput.scanned_in}
+                        </div>
+                        <div className="text-sm text-gray-600">
+                          {selectedStatus === 'Pending' ? 'Set to Pending' : 
+                           selectedStatus === 'In Progress' ? 'Scanned In' : 'N/A'}
+                        </div>
+                      </div>
+                      <div className="text-center p-4 bg-gray-50 rounded-lg">
+                        <div className="text-2xl font-bold text-green-600">
+                          {phasesData[selectedPhase][selectedStatus].daily_throughput.completed}
+                        </div>
+                        <div className="text-sm text-gray-600">
+                          {selectedStatus === 'Pending' ? 'Moved to In Progress' : 
+                           selectedStatus === 'In Progress' ? 'Moved to Completed' : 'Moved to Completed'}
+                        </div>
+                      </div>
+                      <div className="text-center p-4 bg-gray-50 rounded-lg">
+                        <div className="text-2xl font-bold text-purple-600">
+                          {phasesData[selectedPhase][selectedStatus].daily_throughput.efficiency_ratio}
+                        </div>
+                        <div className="text-sm text-gray-600">Completion Rate</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Model/Color Groups */}
-                <div className="space-y-4">
-                  {Object.entries(loadedPhaseDetails[selectedPhase].model_color_groups).map(([key, group]: any) => (
+                {phasesData[selectedPhase][selectedStatus] && (
+                  <div className="space-y-4">
+                    {(() => {
+                      // Apply filters to the current phase and status data
+                      const statusData = phasesData[selectedPhase][selectedStatus];
+                      if (!statusData || !statusData.model_color_groups) return null;
+                      
+                      let filteredGroups = Object.entries(statusData.model_color_groups);
+                      
+                      // Apply color filter
+                      if (phasesColorSearch.trim()) {
+                        filteredGroups = filteredGroups.filter(([key, group]: any) => 
+                          group.color_name && group.color_name.toLowerCase().includes(phasesColorSearch.toLowerCase())
+                        );
+                      }
+                      
+                      // Apply model filter
+                      if (phasesModelSearch.trim()) {
+                        filteredGroups = filteredGroups.filter(([key, group]: any) => 
+                          group.model_name && group.model_name.toLowerCase().includes(phasesModelSearch.toLowerCase())
+                        );
+                      }
+                      
+                      if (filteredGroups.length === 0 && (phasesColorSearch.trim() || phasesModelSearch.trim())) {
+                        return (
+                          <div className="text-center py-8 text-gray-500">
+                            <Package className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                            <p>No groups match your filter criteria</p>
+                            <p className="text-sm">Try adjusting your filters or clear them to see all data</p>
+                          </div>
+                        );
+                      }
+                    
+                    return filteredGroups.map(([key, group]: any) => (
                     <details key={key} className="group">
-                      <summary className={`p-3 rounded-lg border cursor-pointer hover:bg-opacity-80 transition-all duration-200 list-none ${
+                      <summary className={`p-4 rounded-lg border cursor-pointer hover:shadow-sm transition-all duration-200 list-none ${
                         group.second_degree_sizes.length > 0
-                          ? 'bg-red-50 border-red-200 hover:bg-red-100'
-                          : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                          ? 'bg-white border-red-200 hover:border-red-300'
+                          : 'bg-white border-gray-200 hover:border-gray-300'
                       }`}>
                         {/* Enhanced Group Header */}
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <div>
-                              <h3 className="text-sm font-semibold">
-                                <span className="text-blue-700">{group.model_name}</span>
-                                <span className="text-gray-500 mx-1">-</span>
-                                <span className="text-purple-700">{group.color_name}</span>
+                              <h3 className="text-base font-semibold text-gray-900">
+                                <span className="text-blue-600">{group.model_name}</span>
+                                <span className="text-gray-400 mx-2">•</span>
+                                <span className="text-gray-700">{group.color_name}</span>
                               </h3>
                               {group.second_degree_sizes.length > 0 && (
-                                <span className="text-xs bg-red-100 text-red-800 px-1.5 py-0.5 rounded-full">
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800 mt-1">
                                   2nd Degree
                                 </span>
                               )}
                             </div>
                           </div>
-                          <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-6">
                             <div className="text-right">
-                              <div className="text-sm font-bold text-green-700">
-                                Qty: {group.total_quantity}
-                                {group.expected_quantity > 0 ? `/${group.expected_quantity}` : ''}
+                              <div className="text-lg font-bold text-blue-600 bg-blue-50 px-3 py-1 rounded-lg">
+                                {group.total_quantity}
+                                {group.expected_quantity > 0 ? `/${group.expected_quantity}` : ''} units
                               </div>
-                              <div className="text-sm font-bold text-orange-600">
-                                Time: {group.time_in_phase}
+                              <div className="text-sm font-medium text-orange-600 bg-orange-50 px-3 py-1 rounded-lg mt-2">
+                                {group.time_in_phase}
                               </div>
                             </div>
-                            <div className="flex items-center justify-center w-6 h-6">
-                              <svg className="w-4 h-4 text-gray-500 group-open:rotate-180 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+                            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-100 group-hover:bg-gray-200 transition-colors">
+                              <svg className="w-4 h-4 text-gray-600 group-open:rotate-180 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                               </svg>
                             </div>
                           </div>
@@ -340,32 +428,32 @@ const ProductionPhasesOverview: React.FC<ProductionPhasesOverviewProps> = ({
                         {/* Regular Sizes */}
                         {group.sizes.length > 0 && (
                           <div>
-                            <h4 className="text-sm font-medium text-gray-700 mb-2">Regular Items</h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                            <h4 className="text-sm font-semibold text-gray-900 mb-3">Regular Items</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                               {group.sizes.map((size: any, index: number) => (
-                                <div key={`regular-${index}`} className="p-4 bg-white rounded-lg border border-gray-200">
+                                <div key={`regular-${index}`} className="p-4 bg-gray-50 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors">
                                   <div className="text-center">
-                                    <div className="text-sm font-bold text-blue-700">Size {size.size_value}</div>
-                                    <div className="text-lg font-bold text-gray-900 mt-1">
+                                    <div className="text-sm font-semibold text-gray-900 mb-3">Size {size.size_value}</div>
+                                    <div className="text-2xl font-bold text-blue-600 bg-blue-50 px-3 py-2 rounded-lg mb-2">
                                       {size.quantity}
                                       {size.expected_quantity > 0 && (
-                                        <span className="text-sm font-normal text-gray-500">
+                                        <span className="text-sm font-normal text-blue-500 ml-1">
                                           /{size.expected_quantity}
                                         </span>
                                       )}
                                     </div>
                                     {size.expected_quantity > 0 && (
-                                      <div className={`text-xs ${
-                                        size.quantity >= size.expected_quantity ? 'text-green-600' : 'text-orange-600'
+                                      <div className={`text-xs font-medium mb-2 px-2 py-1 rounded-full ${
+                                        size.quantity >= size.expected_quantity ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
                                       }`}>
-                                        ({Math.round((size.quantity / size.expected_quantity) * 100)}%)
+                                        {Math.round((size.quantity / size.expected_quantity) * 100)}% complete
                                       </div>
                                     )}
-                                    <div className="text-xs text-gray-500 mt-1">
+                                    <div className="text-xs text-gray-500 mb-2">
                                       {size.batch_count} batch{size.batch_count > 1 ? 'es' : ''}
                                     </div>
-                                    <div className="text-xs text-gray-600 mt-2">
-                                      Time: {size.time_in_phase}
+                                    <div className="text-sm font-medium text-orange-600 bg-orange-50 px-2 py-1 rounded-lg">
+                                      {size.time_in_phase}
                                     </div>
                                   </div>
                                 </div>
@@ -376,32 +464,32 @@ const ProductionPhasesOverview: React.FC<ProductionPhasesOverviewProps> = ({
                         {/* Second Degree Sizes */}
                         {group.second_degree_sizes.length > 0 && (
                           <div>
-                            <h4 className="text-sm font-medium text-red-700 mb-2">Second Degree Items</h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                            <h4 className="text-sm font-semibold text-red-700 mb-3">Second Degree Items</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                               {group.second_degree_sizes.map((size: any, index: number) => (
-                                <div key={`second-degree-${index}`} className="p-4 bg-red-50 rounded-lg border-2 border-red-200">
+                                <div key={`second-degree-${index}`} className="p-4 bg-red-50 rounded-lg border border-red-200 hover:border-red-300 transition-colors">
                                   <div className="text-center">
-                                    <div className="text-sm font-bold text-red-700">Size {size.size_value}</div>
-                                    <div className="text-lg font-bold text-red-900 mt-1">
+                                    <div className="text-sm font-semibold text-red-700 mb-3">Size {size.size_value}</div>
+                                    <div className="text-2xl font-bold text-red-600 bg-red-50 px-3 py-2 rounded-lg mb-2">
                                       {size.quantity}
                                       {size.expected_quantity > 0 && (
-                                        <span className="text-sm font-normal text-red-500">
+                                        <span className="text-sm font-normal text-red-500 ml-1">
                                           /{size.expected_quantity}
                                         </span>
                                       )}
                                     </div>
                                     {size.expected_quantity > 0 && (
-                                      <div className={`text-xs ${
-                                        size.quantity >= size.expected_quantity ? 'text-green-600' : 'text-orange-600'
+                                      <div className={`text-xs font-medium mb-2 px-2 py-1 rounded-full ${
+                                        size.quantity >= size.expected_quantity ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
                                       }`}>
-                                        ({Math.round((size.quantity / size.expected_quantity) * 100)}%)
+                                        {Math.round((size.quantity / size.expected_quantity) * 100)}% complete
                                       </div>
                                     )}
-                                    <div className="text-xs text-red-500 mt-1">
+                                    <div className="text-xs text-red-500 mb-2">
                                       {size.batch_count} batch{size.batch_count > 1 ? 'es' : ''}
                                     </div>
-                                    <div className="text-xs text-red-600 mt-2">
-                                      Time: {size.time_in_phase}
+                                    <div className="text-sm font-medium text-orange-600 bg-orange-50 px-2 py-1 rounded-lg">
+                                      {size.time_in_phase}
                                     </div>
                                   </div>
                                 </div>
@@ -411,17 +499,21 @@ const ProductionPhasesOverview: React.FC<ProductionPhasesOverviewProps> = ({
                         )}
                       </div>
                     </details>
-                  ))}
-                </div>
+                  ));
+                    })()}
+                  </div>
+                )}
               </div>
             )}
 
             {/* No Phase Selected */}
             {!selectedPhase && (
-              <div className="text-center py-12 text-gray-500">
-                <Activity className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-                <p className="text-lg font-medium">Select a phase to view details</p>
-                <p className="text-sm">Click on any phase tab above to load its detailed information</p>
+              <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+                <Activity className="h-16 w-16 mx-auto mb-6 text-gray-300" />
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">Select a Phase</h3>
+                <p className="text-gray-500 max-w-md mx-auto">
+                  Click on any phase tab above to load its detailed information
+                </p>
               </div>
             )}
           </div>

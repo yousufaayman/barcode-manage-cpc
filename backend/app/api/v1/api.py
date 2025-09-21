@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from .endpoints import auth, barcodes, batches, statistics, job_orders, phases, archive, health
+from .endpoints import auth, barcodes, batches, statistics, job_orders, phases, archive, health, reports
 
 api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -9,4 +9,5 @@ api_router.include_router(statistics.router, prefix="/statistics", tags=["statis
 api_router.include_router(job_orders.router, prefix="/job-orders", tags=["job-orders"])
 api_router.include_router(phases.router, prefix="/phases", tags=["phases"])
 api_router.include_router(archive.router, prefix="/archive", tags=["archive"])
-api_router.include_router(health.router, prefix="/health", tags=["health"]) 
+api_router.include_router(health.router, prefix="/health", tags=["health"])
+api_router.include_router(reports.router, prefix="/reports", tags=["reports"]) 

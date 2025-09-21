@@ -6,6 +6,8 @@ from .api.v1.api import api_router
 from .db.init_db import init_db, create_initial_admin
 from .core.config import settings
 from .utils.pool_manager import ConnectionPoolManager
+from .utils.directory_manager import ensure_all_directories, get_directory_info
+from .services.scheduler_service import SchedulerService
 import logging
 import uvicorn
 import os
@@ -46,6 +48,12 @@ app.mount('/static', StaticFiles(directory=image_dir), name='static')
 async def startup_event():
     logger.info("Starting up application...")
     
+    # Ensure all required directories exist
+    if ensure_all_directories():
+        logger.info("All application directories verified")
+    else:
+        logger.error("Failed to create some required directories")
+    
     # Test database connection and pool
     if ConnectionPoolManager.test_connection():
         logger.info("Database connection test successful")
@@ -56,6 +64,18 @@ async def startup_event():
     # Initialize database
     init_db()
     create_initial_admin()
+    
+    # Log directory information
+    dir_info = get_directory_info()
+    logger.info(f"Directory structure: {len(dir_info)} directories configured")
+    
+    # Start the report scheduler service
+    try:
+        scheduler_service = SchedulerService()
+        scheduler_service.start_scheduler()
+        logger.info("Report scheduler service started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start report scheduler service: {str(e)}")
     
     # Log final pool status
     ConnectionPoolManager.log_pool_status()
@@ -69,6 +89,39 @@ def read_root():
 def health_check():
     return {"status": "healthy", "message": "Service is running"}
 
+@app.get("/health/directories")
+def health_check_directories():
+    """Health check endpoint for directory status"""
+    from .utils.directory_manager import get_directory_info, verify_directory_permissions
+    
+    dir_info = get_directory_info()
+    permissions = verify_directory_permissions()
+    
+    # Check if all critical directories exist and are writable
+    critical_dirs = ['static', 'uploads', 'logs']
+    all_healthy = True
+    issues = []
+    
+    for dir_name in critical_dirs:
+        if dir_name in dir_info:
+            info = dir_info[dir_name]
+            if not info['exists']:
+                all_healthy = False
+                issues.append(f"{dir_name}: Directory does not exist")
+            elif not info['writable']:
+                all_healthy = False
+                issues.append(f"{dir_name}: Directory not writable")
+    
+    status = "healthy" if all_healthy else "unhealthy"
+    
+    return {
+        "status": status,
+        "message": "Directory health check",
+        "directories": dir_info,
+        "permissions": permissions,
+        "issues": issues if issues else None
+    }
+
 if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
@@ -77,3 +130,4 @@ if __name__ == "__main__":
         reload=True,
         log_level="info"
     ) 
+

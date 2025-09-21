@@ -38,7 +38,7 @@ import { Textarea } from '../components/ui/textarea';
 interface JobOrderSummary {
   job_order_id: number;
   job_order_number: string;
-  model_name: string;
+  model_name?: string;
   brand_name?: string;
   total_items: number;
   total_expected_quantity: number;
@@ -51,7 +51,7 @@ interface JobOrderSummary {
   total_batches: number;
   has_issues: boolean;
   has_high_second_degree: boolean;
-  has_stalled_batches?: boolean;
+  has_stalled_batches: boolean;
   completion_percentage: number;
   overproduction_quantity: number;
   notes?: string;
@@ -192,10 +192,31 @@ const JobOrdersPage: React.FC = () => {
   // Add selected job orders state for archiving
   const [selectedJobOrders, setSelectedJobOrders] = useState<number[]>([]);
   
+  // Track if this is the initial page load
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+  
   // Fetch open job orders using summary endpoint
-  const fetchOpenJobOrders = async () => {
+  const fetchOpenJobOrders = async (forceRefresh = false) => {
     try {
       setLoading(true);
+      
+      // If force refresh is requested, refresh the summary data first
+      if (forceRefresh) {
+        try {
+          await jobOrderApi.refreshItemSummaries();
+          // Only show success toast for manual refreshes, not auto-refresh
+          if (!isInitialLoad) {
+            toast({
+              title: t('common.success'),
+              description: 'Data refreshed successfully',
+            });
+          }
+        } catch (refreshError) {
+          console.warn('Failed to refresh summary data:', refreshError);
+          // Continue with fetching even if refresh fails
+        }
+      }
+      
       // Fetch all open job orders (no skip/limit) - summary aggregates from item-level data
       const allOpenResponse = await jobOrderApi.getSummary({
         limit: 10000,
@@ -203,6 +224,15 @@ const JobOrdersPage: React.FC = () => {
           Object.entries(filters).filter(([_, value]) => value !== '')
         )
       });
+      
+      // Ensure we have valid data
+      if (!allOpenResponse || !allOpenResponse.items) {
+        console.warn('No job orders data received from API');
+        setOpenJobOrders([]);
+        setTotalOpenJobOrders(0);
+        return;
+      }
+      
       // Sort so that job orders with issues come first, using hierarchy: P > T > L > S > O
       const sortedOpenItems = [...allOpenResponse.items].sort((a, b) => {
         const aIssues = detectIssues(a);
@@ -245,8 +275,13 @@ const JobOrdersPage: React.FC = () => {
 
   useEffect(() => {
     if (!showOpenOrders) return;
-    fetchOpenJobOrders();
-  }, [showOpenOrders, currentPage, filters, t, toast]);
+    // Only auto-refresh on initial page load, not on filter changes or pagination
+    const shouldRefresh = isInitialLoad;
+    fetchOpenJobOrders(shouldRefresh);
+    if (isInitialLoad) {
+      setIsInitialLoad(false);
+    }
+  }, [showOpenOrders, currentPage, filters, t, toast, isInitialLoad]);
 
   // Fetch dropdown options
   useEffect(() => {
@@ -812,7 +847,7 @@ const JobOrdersPage: React.FC = () => {
           className="rounded border-gray-300 text-green-600 focus:ring-green-500"
         />
       ),
-      hidden: user?.role !== 'Admin'
+      hidden: user?.role !== 'Admin' && user?.role !== 'Creator'
     },
     {
       key: 'job_order_number',
@@ -827,7 +862,7 @@ const JobOrdersPage: React.FC = () => {
       header: 'Client (Brand)',
       width: 200,
       render: (item: any) => (
-        <span>{item.brand_name || 'Unknown'}</span>
+        <span>{item.brand_name || '-'}</span>
       ),
       hidden: isMobile && !showFullView
     },
@@ -836,7 +871,7 @@ const JobOrdersPage: React.FC = () => {
       header: t('barcode.model'),
       width: 200,
       render: (item: any) => (
-        <span>{item.model_name}</span>
+        <span>{item.model_name || '-'}</span>
       ),
       hidden: false
     },
@@ -966,7 +1001,7 @@ const JobOrdersPage: React.FC = () => {
               <Eye className="w-4 h-4 text-gray-600" />
             </Button>
           </Link>
-          {user?.role === 'Admin' && (
+          {(user?.role === 'Admin' || user?.role === 'Creator') && (
             <Button
               variant="ghost"
               size="sm"
@@ -1060,7 +1095,7 @@ const JobOrdersPage: React.FC = () => {
         </div>
         
         {/* Archive Action Button */}
-        {user?.role === 'Admin' && selectedJobOrders.length > 0 && (
+        {(user?.role === 'Admin' || user?.role === 'Creator') && selectedJobOrders.length > 0 && (
           <div className="mb-6 text-center">
             <button
               onClick={handleArchiveSelected}

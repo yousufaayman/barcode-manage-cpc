@@ -30,6 +30,10 @@ python-dotenv==1.0.0
 base36==0.1.1
 psutil==5.9.8
 
+# PDF Generation and Email
+reportlab==4.0.7
+schedule==1.2.0
+
 # Barcode Printing
 zebra
 

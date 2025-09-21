@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     # Image upload directory
     JOB_ORDER_IMAGE_UPLOAD_DIR: str = "job_order_images"
     
+    # Email Configuration for Reports (Gmail)
+    REPORT_SENDER_EMAIL: str = ""
+    REPORT_SENDER_PASSWORD: str = ""
+    REPORT_RECIPIENT_EMAILS: str = ""
+    COMPANY_NAME: str = "Production Management System"
+    
+    # Report Configuration
+    REPORT_RETENTION_DAYS: int = 30
+    REPORTS_DIR: str = "backend/reports"
+    
     model_config = SettingsConfigDict(case_sensitive=True, env_file=".env")
     
     @property

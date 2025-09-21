@@ -55,17 +55,21 @@ const AppContent: React.FC = () => {
             <Route path="/barcode-details/:batchId" element={<BarcodeDetailsPage />} />
           </Route>
           
+          {/* Admin, Creator, and Cutting Only Routes */}
+          <Route element={<PrivateRoute allowedRoles={['Admin', 'Creator', 'Cutting']} />}>
+            <Route path="/bulk-create" element={<BulkBarcodeCreatePage />} />
+          </Route>
+          
           {/* Admin and Creator Only Routes */}
           <Route element={<PrivateRoute allowedRoles={['Admin', 'Creator']} />}>
-            <Route path="/bulk-create" element={<BulkBarcodeCreatePage />} />
+            <Route path="/job-orders" element={<JobOrdersPage />} />
+            <Route path="/add-job-order" element={<AddJobOrderPage />} />
+            <Route path="/advanced-statistics" element={<AdvancedStatisticsPage />} />
           </Route>
           
           {/* Admin Only Routes */}
           <Route element={<PrivateRoute allowedRoles={['Admin']} />}>
-            <Route path="/job-orders" element={<JobOrdersPage />} />
-            <Route path="/add-job-order" element={<AddJobOrderPage />} />
             <Route path="/archive" element={<ArchivedBatchesPage />} />
-            <Route path="/advanced-statistics" element={<AdvancedStatisticsPage />} />
             <Route path="/users" element={<UserManagementPage />} />
           </Route>
           

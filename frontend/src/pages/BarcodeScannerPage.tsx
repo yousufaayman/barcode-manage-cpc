@@ -369,25 +369,27 @@ const BarcodeScannerPage: React.FC = () => {
     if (!sessionData.isActive) {
       // First scan - initialize session
       try {
-        // Always update the batch with the selected phase and status for the session
-        const updateData = {
+        const updatedBatch = await barcodeApi.updateBarcode(barcodeToSubmit, {
           current_phase: sessionData.phase,
           status: sessionData.status
-        };
-        
-        const updatedBatch = await barcodeApi.updateBarcode(barcodeToSubmit, updateData);
-        
-        // Update the barcode data with the updated batch information
+        });
         setBarcodeData(updatedBatch);
         setCurrentPhase(updatedBatch.current_phase);
         setStatus(updatedBatch.status);
-        
-        // Calculate remaining quantity AFTER the batch is updated in the database
-        const remainingData = await calculateRemainingQuantity(data.job_order_id, data.color_id, data.size_id, sessionData.phase, sessionData.status);
-        
+
+        const remainingData = await calculateRemainingQuantity(
+          data.job_order_id,
+          data.color_id,
+          data.size_id,
+          updatedBatch.current_phase,
+          updatedBatch.status
+        );
+
         if (remainingData.job_order_item_quantity > 0) {
           setSessionData(prev => ({
             ...prev,
+            phase: prev.phase,
+            status: prev.status,
             initialBarcode: barcodeToSubmit,
             jobOrderId: data.job_order_id,
             colorId: data.color_id,
@@ -417,25 +419,27 @@ const BarcodeScannerPage: React.FC = () => {
         
         // Check if barcode matches the session (same job order, color, and size)
         if (data.job_order_id === sessionData.jobOrderId && data.color_id === sessionData.colorId && data.size_id === sessionData.sizeId) {
-          // Always update the batch with the selected phase and status for the session
-          const updateData = {
+          const updatedBatch = await barcodeApi.updateBarcode(barcodeToSubmit, {
             current_phase: sessionData.phase,
             status: sessionData.status
-          };
-          
-          const updatedBatch = await barcodeApi.updateBarcode(barcodeToSubmit, updateData);
-          
-          // Update the barcode data with the updated batch information
+          });
           setBarcodeData(updatedBatch);
           setCurrentPhase(updatedBatch.current_phase);
           setStatus(updatedBatch.status);
           
-          // Calculate remaining quantity AFTER the batch is updated in the database
-          const remainingData = await calculateRemainingQuantity(data.job_order_id, data.color_id, data.size_id, sessionData.phase, sessionData.status);
+          const remainingData = await calculateRemainingQuantity(
+            data.job_order_id,
+            data.color_id,
+            data.size_id,
+            updatedBatch.current_phase,
+            updatedBatch.status
+          );
           
           // Barcode matches - increment quantity counter and update remaining quantity
           setSessionData(prev => ({
             ...prev,
+            phase: prev.phase,
+            status: prev.status,
             scannedQuantity: prev.scannedQuantity + data.quantity,
             remainingQuantity: remainingData.remaining_quantity,
             scannedBarcodes: [...prev.scannedBarcodes, barcodeToSubmit]
@@ -692,6 +696,28 @@ const BarcodeScannerPage: React.FC = () => {
       default:
         return [1]; // Default to cutting
     }
+  };
+
+  // Helper function to get next phase based on current phase and status
+  const getNextPhaseForCompleted = (currentPhase: number, status: string): { nextPhase: number; nextStatus: string } | null => {
+    if (status !== 'Completed') {
+      return null;
+    }
+
+    // Phase progression logic:
+    // Cutting (1) + Completed → Sewing (2) + Pending
+    // Any Sewing (2,3,4,7) + Completed → Packaging (8) + Pending
+    // Packaging (8) + Completed → No progression (stays in Packaging)
+    
+    if (currentPhase === 1) { // Cutting
+      return { nextPhase: 2, nextStatus: 'Pending' };
+    } else if ([2, 3, 4, 7].includes(currentPhase)) { // Any Sewing phase
+      return { nextPhase: 8, nextStatus: 'Pending' };
+    } else if (currentPhase === 8) { // Packaging
+      return null; // No progression from packaging
+    }
+    
+    return null;
   };
 
   // New function to handle quantity update

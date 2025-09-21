@@ -64,6 +64,9 @@ const DashboardPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'job-orders' | 'pending' | 'in-progress'>('pending');
   const [loadedTabs, setLoadedTabs] = useState<Set<string>>(new Set(['pending']));
   
+  // Track if this is the initial page load
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+  
   // Search filters for pending and in-progress items
   const [itemFilters, setItemFilters] = useState<{
     job_order_number: string;
@@ -81,13 +84,23 @@ const DashboardPage: React.FC = () => {
 
   const hasMoreJobOrders = jobOrderSummaries.length < jobOrdersTotal;
 
-  const fetchJobOrders = useCallback(async (reset: boolean = false) => {
+  const fetchJobOrders = useCallback(async (reset: boolean = false, forceRefresh: boolean = false) => {
     if (reset) {
       setLoadingJobOrders(true);
     } else {
       setIsLoadingMore(true);
     }
     try {
+      // If force refresh is requested, refresh the summary data first
+      if (forceRefresh) {
+        try {
+          await jobOrderApi.refreshItemSummaries();
+        } catch (refreshError) {
+          console.warn('Failed to refresh summary data:', refreshError);
+          // Continue with fetching even if refresh fails
+        }
+      }
+      
       const params: {
         skip: number;
         limit: number;
@@ -200,7 +213,12 @@ const DashboardPage: React.FC = () => {
 
         // For non-admin users, fetch job order summaries (limited)
         if (user && user.role !== 'Admin') {
-          fetchJobOrders(true);
+          // Only auto-refresh on initial page load
+          const shouldRefresh = isInitialLoad;
+          fetchJobOrders(true, shouldRefresh);
+          if (isInitialLoad) {
+            setIsInitialLoad(false);
+          }
         }
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
@@ -214,7 +232,8 @@ const DashboardPage: React.FC = () => {
   useEffect(() => {
     if (user && user.role !== 'Admin') {
       setJobOrdersSkip(0);
-      fetchJobOrders(true);
+      // Don't refresh on filter changes, only on initial load
+      fetchJobOrders(true, false);
     }
   }, [joFilters.job_order_number, joFilters.model_name, joFilters.brand_name, user]);
 
@@ -523,11 +542,11 @@ const DashboardPage: React.FC = () => {
                           {Array.from(color.sizes.values()).map((size) => (
                             <div key={size.size_value} className="px-4 py-3 flex items-center justify-between">
                               <div className="flex items-center space-x-4">
-                                <div className="w-16 text-sm text-gray-500">Size:</div>
+                                <div className="w-16 text-sm text-gray-500">{t('dashboard.size')}</div>
                                 <div className="font-medium">{size.size_value}</div>
                               </div>
                               <div className="flex items-center space-x-4">
-                                <div className="text-sm text-gray-500">Quantity:</div>
+                                <div className="text-sm text-gray-500">{t('dashboard.quantity')}</div>
                                 <div className="font-semibold text-gray-900">
                                   {size.total_quantity} / {size.expected_quantity}
                                 </div>

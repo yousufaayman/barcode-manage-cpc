@@ -828,7 +828,7 @@ const ArchivedBatchesPage: React.FC = () => {
             <div className="space-y-6">
               {/* Filters Section */}
               <div className="bg-gray-50 rounded-lg p-4">
-                <h3 className="text-lg font-semibold mb-3 text-gray-800">Filters</h3>
+                <h3 className="text-lg font-semibold mb-3 text-gray-800">{t('archive.filters')}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <SearchableDropdown
                     options={jobOrderOptions}
@@ -859,13 +859,13 @@ const ArchivedBatchesPage: React.FC = () => {
                 {loadingJobOrders ? (
                   <div className="text-center py-10">
                     <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-                    <p className="text-gray-600">Loading archived job orders...</p>
+                    <p className="text-gray-600">{t('archive.loadingArchivedJobOrders')}</p>
                   </div>
                 ) : (
                   <>
                     <div className="p-4">
                       {archivedJobOrders.length === 0 ? (
-                        <div className="text-center py-8 text-gray-600">No archived job orders found.</div>
+                        <div className="text-center py-8 text-gray-600">{t('archive.noArchivedJobOrdersFound')}</div>
                       ) : (
                         <VirtualizedTable
                           columns={jobOrderColumns}
@@ -908,7 +908,7 @@ const ArchivedBatchesPage: React.FC = () => {
             <div className="space-y-6">
               {/* Selection Section */}
               <div className="bg-gray-50 rounded-lg p-4">
-                <h3 className="text-lg font-semibold mb-3 text-gray-800">Filter Options</h3>
+                <h3 className="text-lg font-semibold mb-3 text-gray-800">{t('archive.filterOptions')}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <SearchableDropdown
                     options={jobOrderOptions}
@@ -916,8 +916,8 @@ const ArchivedBatchesPage: React.FC = () => {
                     onChange={(val) => {
                       setSelectedJobOrderForItems(val || null);
                     }}
-                    placeholder="Select Job Order (Optional)"
-                    label="Filter by Job Order"
+                    placeholder={t('archive.selectJobOrderOptional')}
+                    label={t('archive.filterByJobOrder')}
                   />
                 </div>
               </div>
@@ -927,7 +927,7 @@ const ArchivedBatchesPage: React.FC = () => {
                 {loadingAllItems ? (
                   <div className="text-center py-10">
                     <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-                    <p className="text-gray-600">Loading archived items...</p>
+                    <p className="text-gray-600">{t('archive.loadingArchivedItems')}</p>
                   </div>
                 ) : (
                   <div className="p-4">
@@ -940,8 +940,8 @@ const ArchivedBatchesPage: React.FC = () => {
                         return (
                           <div className="text-center py-8 text-gray-600">
                             {selectedJobOrderForItems 
-                              ? "No archived items found for this job order." 
-                              : "No archived items found."}
+                              ? t('archive.noArchivedItemsFoundForJobOrder')
+                              : t('archive.noArchivedItemsFound')}
                           </div>
                         );
                       }
@@ -972,7 +972,7 @@ const ArchivedBatchesPage: React.FC = () => {
                 onClick={handleClearFilters}
                 className="px-3 py-1 text-sm text-purple-700 border-2 border-purple-400 bg-purple-50 rounded-md hover:text-purple-800 hover:bg-purple-100 hover:border-purple-500 hover:shadow-lg hover:scale-105 transition-all duration-200 font-medium"
               >
-                Clear Filters
+{t('barcodeManagement.clearFilters')}
               </button>
             </div>
           </div>
@@ -1092,7 +1092,7 @@ const ArchivedBatchesPage: React.FC = () => {
                       flex: 1
                     }}
                   >
-                    Recover Selected ({selectedBarcodes.length})
+{t('archive.recoverSelected')} ({selectedBarcodes.length})
                   </button>
                   <button
                     onClick={handleBulkDelete}
@@ -1108,7 +1108,7 @@ const ArchivedBatchesPage: React.FC = () => {
                       flex: 1
                     }}
                   >
-                    Delete Selected ({selectedBarcodes.length})
+{t('archive.deleteSelected')} ({selectedBarcodes.length})
                   </button>
                 </div>
               </div>
@@ -1119,14 +1119,14 @@ const ArchivedBatchesPage: React.FC = () => {
             {loadingBatches ? (
           <div className="text-center py-10">
             <div className="w-12 h-12 border-4 border-green border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-            <p className="text-gray-600">Loading archived barcodes...</p>
+            <p className="text-gray-600">{t('archive.loadingArchivedBarcodes')}</p>
           </div>
         ) : (
           <>
             <div className="table-container mb-4 w-full">
               <div className="overflow-x-auto w-full">
                 {barcodes.length === 0 ? (
-                      <div className="text-center py-4">No archived barcodes found matching your filters.</div>
+                      <div className="text-center py-4">{t('archive.noArchivedBarcodesFound')}</div>
                 ) : (
                   <VirtualizedTable
                         columns={batchColumns}
