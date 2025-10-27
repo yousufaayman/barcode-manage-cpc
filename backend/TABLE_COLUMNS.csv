@@ -1,0 +1,282 @@
+"table_schema","table_name","column_name","data_type","is_nullable","column_default"
+"archive","barcode_scan_events","id","integer","NO","nextval('archive.barcode_scan_events_id_seq'::regclass)"
+"archive","barcode_scan_events","batch_id","integer","YES",NULL
+"archive","barcode_scan_events","action_type","character varying","NO",NULL
+"archive","barcode_scan_events","phase_id","integer","YES",NULL
+"archive","barcode_scan_events","old_status","character varying","YES",NULL
+"archive","barcode_scan_events","new_status","character varying","YES",NULL
+"archive","barcode_scan_events","old_quantity","integer","YES",NULL
+"archive","barcode_scan_events","new_quantity","integer","YES",NULL
+"archive","barcode_scan_events","old_phase","integer","YES",NULL
+"archive","barcode_scan_events","new_phase","integer","YES",NULL
+"archive","barcode_scan_events","scanned_at","timestamp without time zone","YES","now()"
+"archive","barcode_scan_events","user_id","integer","YES",NULL
+"archive","barcode_scan_events","notes","text","YES",NULL
+"archive","barcode_scan_events","metadata","jsonb","YES",NULL
+"archive","barcode_scan_events","archived_at","timestamp without time zone","YES","now()"
+"archive","batches","id","integer","NO","nextval('archive.batches_id_seq'::regclass)"
+"archive","batches","batch_id","integer","YES",NULL
+"archive","batches","job_order_id","integer","YES",NULL
+"archive","batches","barcode","character varying","YES",NULL
+"archive","batches","size_id","integer","YES",NULL
+"archive","batches","color_id","integer","YES",NULL
+"archive","batches","quantity","integer","YES",NULL
+"archive","batches","layers","integer","YES",NULL
+"archive","batches","serial","character varying","YES",NULL
+"archive","batches","current_phase","integer","YES",NULL
+"archive","batches","status","character varying","YES",NULL
+"archive","batches","last_updated_at","timestamp without time zone","YES",NULL
+"archive","batches","archived_at","timestamp without time zone","YES","now()"
+"archive","batches","notes","text","YES",NULL
+"archive","batches","is_second_degree","boolean","YES","false"
+"archive","job_order_items","id","integer","NO","nextval('archive.job_order_items_id_seq'::regclass)"
+"archive","job_order_items","item_id","integer","NO",NULL
+"archive","job_order_items","job_order_id","integer","NO",NULL
+"archive","job_order_items","color_id","integer","NO",NULL
+"archive","job_order_items","size_id","integer","NO",NULL
+"archive","job_order_items","quantity","integer","NO",NULL
+"archive","job_order_items","weight","numeric","YES",NULL
+"archive","job_order_items","notes","text","YES",NULL
+"archive","job_order_items","archived_at","timestamp without time zone","YES","now()"
+"archive","job_order_items_summary","item_id","integer","NO",NULL
+"archive","job_order_items_summary","job_order_id","integer","NO",NULL
+"archive","job_order_items_summary","color_id","integer","NO",NULL
+"archive","job_order_items_summary","size_id","integer","NO",NULL
+"archive","job_order_items_summary","color_name","character varying","YES",NULL
+"archive","job_order_items_summary","size_value","character varying","YES",NULL
+"archive","job_order_items_summary","expected_quantity","integer","YES","0"
+"archive","job_order_items_summary","produced_quantity","integer","YES","0"
+"archive","job_order_items_summary","cut_quantity","integer","YES","0"
+"archive","job_order_items_summary","second_degree_quantity","integer","YES","0"
+"archive","job_order_items_summary","completed_quantity","integer","YES","0"
+"archive","job_order_items_summary","working_quantity","integer","YES","0"
+"archive","job_order_items_summary","remaining_quantity","integer","YES","0"
+"archive","job_order_items_summary","total_batches","integer","YES","0"
+"archive","job_order_items_summary","has_issues","boolean","YES","false"
+"archive","job_order_items_summary","completion_percentage","numeric","YES","0.00"
+"archive","job_order_items_summary","overproduction_quantity","integer","YES","0"
+"archive","job_order_items_summary","production_status","character varying","YES","'Not Started'::character varying"
+"archive","job_order_items_summary","notes","text","YES",NULL
+"archive","job_order_items_summary","last_calculated_at","timestamp without time zone","YES","now()"
+"archive","job_order_items_summary","last_quantity_change","timestamp without time zone","YES",NULL
+"archive","job_order_items_summary","last_completion_change","timestamp without time zone","YES",NULL
+"archive","job_order_items_summary","last_new_batch","timestamp without time zone","YES",NULL
+"archive","job_order_items_summary","last_batch_update","timestamp without time zone","YES",NULL
+"archive","job_order_items_summary","archived_at","timestamp without time zone","YES","now()"
+"archive","job_order_materials","id","integer","NO","nextval('archive.job_order_materials_id_seq'::regclass)"
+"archive","job_order_materials","job_order_id","integer","NO",NULL
+"archive","job_order_materials","material_id","integer","NO",NULL
+"archive","job_order_materials","color_id","integer","YES",NULL
+"archive","job_order_materials","quantity","numeric","NO",NULL
+"archive","job_order_materials","consumption","numeric","YES",NULL
+"archive","job_order_materials","archived_at","timestamp without time zone","YES","now()"
+"archive","job_order_prints","job_order_id","integer","NO",NULL
+"archive","job_order_prints","chest","boolean","YES","false"
+"archive","job_order_prints","back","boolean","YES","false"
+"archive","job_order_prints","waist","boolean","YES","false"
+"archive","job_order_prints","right_leg","boolean","YES","false"
+"archive","job_order_prints","left_leg","boolean","YES","false"
+"archive","job_order_prints","pocket","boolean","YES","false"
+"archive","job_order_prints","hood","boolean","YES","false"
+"archive","job_order_prints","right_arm","boolean","YES","false"
+"archive","job_order_prints","left_arm","boolean","YES","false"
+"archive","job_order_prints","archived_at","timestamp without time zone","YES","now()"
+"archive","job_orders","id","integer","NO","nextval('archive.job_orders_id_seq'::regclass)"
+"archive","job_orders","job_order_id","integer","NO",NULL
+"archive","job_orders","model_id","integer","YES",NULL
+"archive","job_orders","order_number","character varying","YES",NULL
+"archive","job_orders","client_id","integer","YES",NULL
+"archive","job_orders","image_url","character varying","YES",NULL
+"archive","job_orders","notes","text","YES",NULL
+"archive","job_orders","date_created","timestamp without time zone","YES",NULL
+"archive","job_orders","archived_at","timestamp without time zone","YES","now()"
+"archive","job_orders_summary","job_order_id","integer","NO",NULL
+"archive","job_orders_summary","job_order_number","character varying","YES",NULL
+"archive","job_orders_summary","model_name","character varying","YES",NULL
+"archive","job_orders_summary","brand_name","character varying","YES",NULL
+"archive","job_orders_summary","total_items","integer","YES","0"
+"archive","job_orders_summary","total_expected_quantity","integer","YES","0"
+"archive","job_orders_summary","total_produced_quantity","integer","YES","0"
+"archive","job_orders_summary","cut_quantity","integer","YES","0"
+"archive","job_orders_summary","second_degree_quantity","integer","YES","0"
+"archive","job_orders_summary","total_batches","integer","YES","0"
+"archive","job_orders_summary","has_issues","boolean","YES","false"
+"archive","job_orders_summary","completion_percentage","numeric","YES","0.00"
+"archive","job_orders_summary","overproduction_quantity","integer","YES","0"
+"archive","job_orders_summary","last_calculated_at","timestamp without time zone","YES","now()"
+"archive","job_orders_summary","last_quantity_change","timestamp without time zone","YES",NULL
+"archive","job_orders_summary","last_completion_change","timestamp without time zone","YES",NULL
+"archive","job_orders_summary","last_new_batch","timestamp without time zone","YES",NULL
+"archive","job_orders_summary","last_batch_update","timestamp without time zone","YES",NULL
+"archive","job_orders_summary","archived_at","timestamp without time zone","YES","now()"
+"core","archive_statistics","metric","text","YES",NULL
+"core","archive_statistics","value","text","YES",NULL
+"core","clients","id","integer","NO","nextval('core.clients_id_seq'::regclass)"
+"core","clients","name","character varying","NO",NULL
+"core","colors","id","integer","NO","nextval('core.colors_id_seq'::regclass)"
+"core","colors","name","character varying","NO",NULL
+"core","job_order_items","id","integer","NO","nextval('core.job_order_items_id_seq'::regclass)"
+"core","job_order_items","job_order_id","integer","NO",NULL
+"core","job_order_items","color_id","integer","NO",NULL
+"core","job_order_items","size_id","integer","NO",NULL
+"core","job_order_items","quantity","integer","NO",NULL
+"core","job_order_items","weight","numeric","YES",NULL
+"core","job_order_items","notes","character varying","YES",NULL
+"core","job_order_materials","id","integer","NO","nextval('core.job_order_materials_id_seq'::regclass)"
+"core","job_order_materials","job_order_id","integer","NO",NULL
+"core","job_order_materials","material_id","integer","NO",NULL
+"core","job_order_materials","color_id","integer","YES",NULL
+"core","job_order_materials","quantity","numeric","NO",NULL
+"core","job_order_materials","consumption","numeric","YES",NULL
+"core","job_order_materials","created_at","timestamp without time zone","YES","now()"
+"core","job_orders","id","integer","NO","nextval('core.job_orders_id_seq'::regclass)"
+"core","job_orders","client_id","integer","NO",NULL
+"core","job_orders","order_number","character varying","YES",NULL
+"core","job_orders","order_date","date","YES","now()"
+"core","job_orders","status","character varying","YES",NULL
+"core","job_orders","model_id","integer","YES",NULL
+"core","job_orders","image_url","character varying","YES",NULL
+"core","job_orders","notes","text","YES",NULL
+"core","job_orders","print_config","jsonb","YES","'{}'::jsonb"
+"core","job_orders_with_archive_status","id","integer","YES",NULL
+"core","job_orders_with_archive_status","order_number","character varying","YES",NULL
+"core","job_orders_with_archive_status","model_id","integer","YES",NULL
+"core","job_orders_with_archive_status","client_id","integer","YES",NULL
+"core","job_orders_with_archive_status","image_url","character varying","YES",NULL
+"core","job_orders_with_archive_status","notes","text","YES",NULL
+"core","job_orders_with_archive_status","date_created","timestamp without time zone","YES",NULL
+"core","job_orders_with_archive_status","status","text","YES",NULL
+"core","job_orders_with_archive_status","archived_at","timestamp without time zone","YES",NULL
+"core","job_orders_with_prints","id","integer","YES",NULL
+"core","job_orders_with_prints","model_id","integer","YES",NULL
+"core","job_orders_with_prints","order_number","character varying","YES",NULL
+"core","job_orders_with_prints","client_id","integer","YES",NULL
+"core","job_orders_with_prints","image_url","character varying","YES",NULL
+"core","job_orders_with_prints","notes","text","YES",NULL
+"core","job_orders_with_prints","order_date","date","YES",NULL
+"core","job_orders_with_prints","print_config","jsonb","YES",NULL
+"core","job_orders_with_prints","active_prints","text","YES",NULL
+"core","materials","id","integer","NO","nextval('core.materials_id_seq'::regclass)"
+"core","materials","name","character varying","NO",NULL
+"core","materials","created_at","timestamp without time zone","YES","now()"
+"core","models","id","integer","NO","nextval('core.models_id_seq'::regclass)"
+"core","models","name","character varying","NO",NULL
+"core","sizes","id","integer","NO","nextval('core.sizes_id_seq'::regclass)"
+"core","sizes","value","character varying","NO",NULL
+"core","systems","id","integer","NO","nextval('core.systems_id_seq'::regclass)"
+"core","systems","name","character varying","NO",NULL
+"core","user_roles","id","integer","NO","nextval('core.user_roles_id_seq'::regclass)"
+"core","user_roles","user_id","integer","NO",NULL
+"core","user_roles","system_id","integer","NO",NULL
+"core","user_roles","role","character varying","NO",NULL
+"core","users","id","integer","NO","nextval('core.users_id_seq'::regclass)"
+"core","users","username","character varying","NO",NULL
+"core","users","password_hash","character varying","NO",NULL
+"ops","barcode_scan_events","id","integer","NO","nextval('ops.barcode_scan_events_id_seq'::regclass)"
+"ops","barcode_scan_events","batch_id","integer","YES",NULL
+"ops","barcode_scan_events","action_type","character varying","NO",NULL
+"ops","barcode_scan_events","phase_id","integer","YES",NULL
+"ops","barcode_scan_events","old_status","character varying","YES",NULL
+"ops","barcode_scan_events","new_status","character varying","YES",NULL
+"ops","barcode_scan_events","old_quantity","integer","YES",NULL
+"ops","barcode_scan_events","new_quantity","integer","YES",NULL
+"ops","barcode_scan_events","old_phase","integer","YES",NULL
+"ops","barcode_scan_events","new_phase","integer","YES",NULL
+"ops","barcode_scan_events","scanned_at","timestamp without time zone","YES","now()"
+"ops","barcode_scan_events","user_id","integer","YES",NULL
+"ops","barcode_scan_events","notes","text","YES",NULL
+"ops","barcode_scan_events","metadata","jsonb","YES",NULL
+"ops","batches","id","integer","NO","nextval('ops.batches_id_seq'::regclass)"
+"ops","batches","job_order_id","integer","YES",NULL
+"ops","batches","barcode","character varying","NO",NULL
+"ops","batches","size_id","integer","NO",NULL
+"ops","batches","color_id","integer","NO",NULL
+"ops","batches","quantity","integer","YES",NULL
+"ops","batches","layers","integer","YES",NULL
+"ops","batches","serial","character varying","NO",NULL
+"ops","batches","current_phase","integer","YES",NULL
+"ops","batches","status","character varying","YES","'Pending'::character varying"
+"ops","batches","is_second_degree","boolean","YES","false"
+"ops","batches","last_updated","timestamp without time zone","YES","now()"
+"ops","batches","created_at","timestamp without time zone","YES","now()"
+"ops","production_phases","id","integer","NO","nextval('ops.production_phases_id_seq'::regclass)"
+"ops","production_phases","name","character varying","NO",NULL
+"ops","production_phases","type","character varying","NO",NULL
+"ops","production_phases","sequence_order","integer","YES","0"
+"ops","production_phases","created_at","timestamp without time zone","YES","now()"
+"reporting","daily_production_summary","production_date","date","YES",NULL
+"reporting","daily_production_summary","job_orders_count","bigint","YES",NULL
+"reporting","daily_production_summary","items_count","bigint","YES",NULL
+"reporting","daily_production_summary","total_expected","bigint","YES",NULL
+"reporting","daily_production_summary","total_produced","bigint","YES",NULL
+"reporting","daily_production_summary","total_completed","bigint","YES",NULL
+"reporting","daily_production_summary","avg_completion_percentage","numeric","YES",NULL
+"reporting","job_order_items_summary","item_id","integer","NO",NULL
+"reporting","job_order_items_summary","job_order_id","integer","NO",NULL
+"reporting","job_order_items_summary","color_id","integer","NO",NULL
+"reporting","job_order_items_summary","size_id","integer","NO",NULL
+"reporting","job_order_items_summary","color_name","character varying","YES",NULL
+"reporting","job_order_items_summary","size_value","character varying","YES",NULL
+"reporting","job_order_items_summary","expected_quantity","integer","YES","0"
+"reporting","job_order_items_summary","produced_quantity","integer","YES","0"
+"reporting","job_order_items_summary","cut_quantity","integer","YES","0"
+"reporting","job_order_items_summary","second_degree_quantity","integer","YES","0"
+"reporting","job_order_items_summary","completed_quantity","integer","YES","0"
+"reporting","job_order_items_summary","working_quantity","integer","YES","0"
+"reporting","job_order_items_summary","remaining_quantity","integer","YES","0"
+"reporting","job_order_items_summary","total_batches","integer","YES","0"
+"reporting","job_order_items_summary","has_issues","boolean","YES","false"
+"reporting","job_order_items_summary","completion_percentage","numeric","YES","0.00"
+"reporting","job_order_items_summary","overproduction_quantity","integer","YES","0"
+"reporting","job_order_items_summary","production_status","character varying","YES","'Not Started'::character varying"
+"reporting","job_order_items_summary","notes","text","YES",NULL
+"reporting","job_order_items_summary","last_calculated_at","timestamp without time zone","YES","now()"
+"reporting","job_order_items_summary","last_quantity_change","timestamp without time zone","YES",NULL
+"reporting","job_order_items_summary","last_completion_change","timestamp without time zone","YES",NULL
+"reporting","job_order_items_summary","last_new_batch","timestamp without time zone","YES",NULL
+"reporting","job_order_items_summary","last_batch_update","timestamp without time zone","YES",NULL
+"reporting","job_orders_summary","job_order_id","integer","NO",NULL
+"reporting","job_orders_summary","job_order_number","character varying","YES",NULL
+"reporting","job_orders_summary","model_name","character varying","YES",NULL
+"reporting","job_orders_summary","brand_name","character varying","YES",NULL
+"reporting","job_orders_summary","total_items","integer","YES","0"
+"reporting","job_orders_summary","total_expected_quantity","integer","YES","0"
+"reporting","job_orders_summary","total_produced_quantity","integer","YES","0"
+"reporting","job_orders_summary","cut_quantity","integer","YES","0"
+"reporting","job_orders_summary","second_degree_quantity","integer","YES","0"
+"reporting","job_orders_summary","total_batches","integer","YES","0"
+"reporting","job_orders_summary","has_issues","boolean","YES","false"
+"reporting","job_orders_summary","completion_percentage","numeric","YES","0.00"
+"reporting","job_orders_summary","overproduction_quantity","integer","YES","0"
+"reporting","job_orders_summary","last_calculated_at","timestamp without time zone","YES","now()"
+"reporting","job_orders_summary","last_quantity_change","timestamp without time zone","YES",NULL
+"reporting","job_orders_summary","last_completion_change","timestamp without time zone","YES",NULL
+"reporting","job_orders_summary","last_new_batch","timestamp without time zone","YES",NULL
+"reporting","job_orders_summary","last_batch_update","timestamp without time zone","YES",NULL
+"reporting","job_orders_summary_view","job_order_id","integer","YES",NULL
+"reporting","job_orders_summary_view","job_order_number","character varying","YES",NULL
+"reporting","job_orders_summary_view","model_name","character varying","YES",NULL
+"reporting","job_orders_summary_view","client_name","character varying","YES",NULL
+"reporting","job_orders_summary_view","total_items","bigint","YES",NULL
+"reporting","job_orders_summary_view","total_expected_quantity","bigint","YES",NULL
+"reporting","job_orders_summary_view","total_produced_quantity","bigint","YES",NULL
+"reporting","job_orders_summary_view","cut_quantity","bigint","YES",NULL
+"reporting","job_orders_summary_view","second_degree_quantity","bigint","YES",NULL
+"reporting","job_orders_summary_view","completed_quantity","bigint","YES",NULL
+"reporting","job_orders_summary_view","working_quantity","bigint","YES",NULL
+"reporting","job_orders_summary_view","remaining_quantity","bigint","YES",NULL
+"reporting","job_orders_summary_view","total_batches","bigint","YES",NULL
+"reporting","job_orders_summary_view","has_issues","boolean","YES",NULL
+"reporting","job_orders_summary_view","completion_percentage","numeric","YES",NULL
+"reporting","job_orders_summary_view","overproduction_quantity","bigint","YES",NULL
+"reporting","job_orders_summary_view","last_calculated_at","timestamp without time zone","YES",NULL
+"reporting","job_orders_summary_view","last_quantity_change","timestamp without time zone","YES",NULL
+"reporting","job_orders_summary_view","last_completion_change","timestamp without time zone","YES",NULL
+"reporting","job_orders_summary_view","last_new_batch","timestamp without time zone","YES",NULL
+"reporting","job_orders_summary_view","last_batch_update","timestamp without time zone","YES",NULL
+"reporting","production_status_summary","production_status","character varying","YES",NULL
+"reporting","production_status_summary","job_order_count","bigint","YES",NULL
+"reporting","production_status_summary","total_expected","bigint","YES",NULL
+"reporting","production_status_summary","total_produced","bigint","YES",NULL
+"reporting","production_status_summary","total_completed","bigint","YES",NULL
+"reporting","production_status_summary","avg_completion_percentage","numeric","YES",NULL
