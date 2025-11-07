@@ -86,7 +86,7 @@ const BarcodeScannerPage: React.FC = () => {
   // Set initial phase based on user role
   useEffect(() => {
     if (user && mode === 'update') {
-      if (user.role === 'Admin') {
+      if (user.role === 'admin') {
         // Admin can use any phase
         setSelectedPhase(1);
         setSessionData(prev => ({ ...prev, phase: 1 }));
@@ -94,13 +94,13 @@ const BarcodeScannerPage: React.FC = () => {
         // Get the default phase for the user's role
         let defaultPhaseId: number;
         switch (user.role) {
-          case 'Cutting':
+          case 'cutting':
             defaultPhaseId = 1; // Cutting
             break;
-          case 'Sewing':
+          case 'sewing':
             defaultPhaseId = 2; // Sewing line 1
             break;
-          case 'Packaging':
+          case 'packaging':
             defaultPhaseId = 8; // Packaging
             break;
           default:
@@ -278,7 +278,7 @@ const BarcodeScannerPage: React.FC = () => {
 
           if (mode === 'update') {
             // Validate phase selection for non-admin users
-            if (user && user.role !== 'Admin') {
+            if (user && user.role !== 'admin') {
               const allowedPhases = getAllowedPhasesForRole(user.role);
               if (!allowedPhases.includes(selectedPhase)) {
                 setError(t('barcode.phaseRestriction', { role: user.role }));
@@ -538,7 +538,7 @@ const BarcodeScannerPage: React.FC = () => {
 
           if (mode === 'update') {
             // Validate phase selection for non-admin users
-            if (user && user.role !== 'Admin') {
+            if (user && user.role !== 'admin') {
               const allowedPhases = getAllowedPhasesForRole(user.role);
               if (!allowedPhases.includes(selectedPhase)) {
                 setError(t('barcode.phaseRestriction', { role: user.role }));
@@ -685,13 +685,13 @@ const BarcodeScannerPage: React.FC = () => {
   // Helper function to get allowed phases for each role
   const getAllowedPhasesForRole = (role: string): number[] => {
     switch (role) {
-      case 'Admin':
+      case 'admin':
         return [1, 2, 3, 4, 7, 8]; // All phases: Cutting, Sewing lines 1-4, Packaging
-      case 'Cutting':
+      case 'cutting':
         return [1]; // Only cutting
-      case 'Sewing':
+      case 'sewing':
         return [2, 3, 4, 7, 8]; // All sewing lines (2,3,4,7) and packaging
-      case 'Packaging':
+      case 'packaging':
         return [8]; // Only packaging
       default:
         return [1]; // Default to cutting
@@ -1133,7 +1133,7 @@ const BarcodeScannerPage: React.FC = () => {
                     </Label>
                     <div className="flex flex-wrap gap-2">
                       {phases
-                        .filter(phase => user?.role === 'Admin' || getAllowedPhasesForRole(user?.role || '').includes(phase.id))
+                        .filter(phase => user?.role === 'admin' || getAllowedPhasesForRole(user?.role || '').includes(phase.id))
                         .map((phase) => (
                         <button
                           key={phase.id}
@@ -1571,8 +1571,8 @@ const BarcodeScannerPage: React.FC = () => {
                   <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('barcode.productDetails')}</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div>
-                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.brand')}</h4>
-                      <p className="text-lg font-semibold text-gray-900">{barcodeData.brand_name}</p>
+                      <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.client')}</h4>
+                      <p className="text-lg font-semibold text-gray-900">{barcodeData.client_name}</p>
                     </div>
                     <div>
                       <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.model')}</h4>

@@ -4,7 +4,7 @@ from typing import List
 from .crud import *
 from . import schemas
 from .database import get_db
-from .core.deps import get_current_active_user
+from .core.deps import get_current_active_user, get_current_user_with_any_role
 from . import models
 import os
 import pandas as pd
@@ -14,18 +14,18 @@ from io import BytesIO
 
 router = APIRouter()
 
-# Brand routes
-@router.get("/brands/", response_model=List[schemas.Brand])
-def read_brands(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    brands = get_brands(db, skip=skip, limit=limit)
-    return brands
+# Client routes (renamed from Brand)
+@router.get("/clients/", response_model=List[schemas.Client])
+def read_clients(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    clients = get_clients(db, skip=skip, limit=limit)
+    return clients
 
-@router.post("/brands/", response_model=schemas.Brand)
-def create_brand(brand: schemas.BrandCreate, db: Session = Depends(get_db)):
-    db_brand = get_brand_by_name(db, brand_name=brand.brand_name)
-    if db_brand:
-        raise HTTPException(status_code=400, detail="Brand already exists")
-    return create_brand(db=db, brand=brand)
+@router.post("/clients/", response_model=schemas.Client)
+def create_client(client: schemas.ClientCreate, db: Session = Depends(get_db)):
+    db_client = get_client_by_name(db, name=client.client_name)
+    if db_client:
+        raise HTTPException(status_code=400, detail="Client already exists")
+    return create_client(db=db, client=client)
 
 # Model routes
 @router.get("/models/", response_model=List[schemas.Model])
@@ -35,7 +35,7 @@ def read_models(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
 
 @router.post("/models/", response_model=schemas.Model)
 def create_model(model: schemas.ModelCreate, db: Session = Depends(get_db)):
-    db_model = get_model_by_name(db, model_name=model.model_name)
+    db_model = get_model_by_name(db, name=model.model_name)
     if db_model:
         raise HTTPException(status_code=400, detail="Model already exists")
     return create_model(db=db, model=model)
@@ -48,7 +48,7 @@ def read_sizes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
 
 @router.post("/sizes/", response_model=schemas.Size)
 def create_size(size: schemas.SizeCreate, db: Session = Depends(get_db)):
-    db_size = get_size_by_value(db, size_value=size.size_value)
+    db_size = get_size_by_value(db, value=size.size_value)
     if db_size:
         raise HTTPException(status_code=400, detail="Size already exists")
     return create_size(db=db, size=size)
@@ -61,7 +61,7 @@ def read_colors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
 
 @router.post("/colors/", response_model=schemas.Color)
 def create_color(color: schemas.ColorCreate, db: Session = Depends(get_db)):
-    db_color = get_color_by_name(db, color_name=color.color_name)
+    db_color = get_color_by_name(db, name=color.color_name)
     if db_color:
         raise HTTPException(status_code=400, detail="Color already exists")
     return create_color(db=db, color=color)
@@ -87,7 +87,7 @@ def create_batch(batch: schemas.BatchCreate, db: Session = Depends(get_db), curr
     db_batch = get_batch_by_barcode(db, barcode=batch.barcode)
     if db_batch:
         raise HTTPException(status_code=400, detail="Batch with this barcode already exists")
-    return create_batch(db=db, batch=batch, user_id=current_user.user_id)
+    return create_batch(db=db, batch=batch, user_id=current_user.id)
 
 @router.get("/batches/{batch_id}", response_model=schemas.BatchResponse)
 def read_batch(batch_id: int, db: Session = Depends(get_db)):
@@ -130,7 +130,7 @@ async def create_bulk_batches(batches: List[schemas.BatchCreate], db: Session = 
     """Create multiple batches from pre-processed data"""
     created_batches = []
     for batch in batches:
-        db_batch = create_batch(db=db, batch=batch, user_id=current_user.user_id)
+        db_batch = create_batch(db=db, batch=batch, user_id=current_user.id)
         created_batches.append(db_batch)
     return created_batches
 
@@ -141,7 +141,7 @@ async def download_barcode_template():
     try:
         # Create a DataFrame with the template structure
         df = pd.DataFrame({
-            'brand': ['Example Brand'],
+            'client': ['Example Client'],
             'model': ['Example Model'],
             'size': ['Example Size'],
             'color': ['Example Color'],
@@ -162,7 +162,7 @@ async def download_barcode_template():
             
             # Add column descriptions
             descriptions = {
-                'A1': 'Brand name (required)',
+                'A1': 'Client name (required)',
                 'B1': 'Model name (required, alphanumeric characters)',
                 'C1': 'Size value (required)',
                 'D1': 'Color name (required)',
@@ -243,6 +243,6 @@ async def submit_bulk_barcodes(
                 status_code=400,
                 detail=f"Barcode {barcode.barcode} already exists"
             )
-        created_batch = create_batch(db, barcode, user_id=current_user.user_id)
+        created_batch = create_batch(db, barcode, user_id=current_user.id)
         created_batches.append(created_batch)
     return created_batches 

@@ -17,7 +17,7 @@ const UserManagementPage: React.FC = () => {
   const [newUser, setNewUser] = useState({
     username: '',
     password: '',
-    role: 'Cutting'
+    role: 'cutting'
   });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -59,7 +59,7 @@ const UserManagementPage: React.FC = () => {
       setNewUser({
         username: '',
         password: '',
-        role: 'Cutting'
+        role: 'cutting'
       });
       fetchUsers();
     } catch (err: any) {
@@ -121,7 +121,7 @@ const UserManagementPage: React.FC = () => {
     setError('');
   };
 
-  if (user?.role !== 'Admin') {
+  if (user?.role !== 'admin') {
     return (
       <Layout>
         <div className="text-center py-12">
@@ -206,11 +206,11 @@ const UserManagementPage: React.FC = () => {
                   onChange={(e) => setNewUser({...newUser, role: e.target.value})}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green focus:border-transparent"
                 >
-                  <option value="Admin">{t('userManagement.admin')}</option>
-                  <option value="Creator">{t('userManagement.creator')}</option>
-                  <option value="Cutting">{t('userManagement.cutting')}</option>
-                  <option value="Sewing">{t('userManagement.sewing')}</option>
-                  <option value="Packaging">{t('userManagement.packaging')}</option>
+                  <option value="admin">{t('userManagement.admin')}</option>
+                  <option value="creator">{t('userManagement.creator')}</option>
+                  <option value="cutting">{t('userManagement.cutting')}</option>
+                  <option value="sewing">{t('userManagement.sewing')}</option>
+                  <option value="packaging">{t('userManagement.packaging')}</option>
                 </select>
               </div>
               

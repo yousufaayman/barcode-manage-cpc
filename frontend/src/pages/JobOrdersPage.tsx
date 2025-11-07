@@ -39,10 +39,9 @@ interface JobOrderSummary {
   job_order_id: number;
   job_order_number: string;
   model_name?: string;
-  brand_name?: string;
+  client_name?: string;
   total_items: number;
   total_expected_quantity: number;
-  total_produced_quantity: number;
   cut_quantity: number;
   second_degree_quantity: number;
   completed_quantity: number;
@@ -56,10 +55,6 @@ interface JobOrderSummary {
   overproduction_quantity: number;
   notes?: string;
   last_calculated_at?: string;
-  last_quantity_change?: string;
-  last_completion_change?: string;
-  last_new_batch?: string;
-  last_batch_update?: string;
 }
 
 const JobOrdersPage: React.FC = () => {
@@ -81,7 +76,7 @@ const JobOrdersPage: React.FC = () => {
   const [filters, setFilters] = useState({
     job_order_number: '',
     model_name: '',
-    brand_name: ''
+    client_name: ''
   });
   
   // Dropdown options
@@ -196,26 +191,9 @@ const JobOrdersPage: React.FC = () => {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   
   // Fetch open job orders using summary endpoint
-  const fetchOpenJobOrders = async (forceRefresh = false) => {
+  const fetchOpenJobOrders = async () => {
     try {
       setLoading(true);
-      
-      // If force refresh is requested, refresh the summary data first
-      if (forceRefresh) {
-        try {
-          await jobOrderApi.refreshItemSummaries();
-          // Only show success toast for manual refreshes, not auto-refresh
-          if (!isInitialLoad) {
-            toast({
-              title: t('common.success'),
-              description: 'Data refreshed successfully',
-            });
-          }
-        } catch (refreshError) {
-          console.warn('Failed to refresh summary data:', refreshError);
-          // Continue with fetching even if refresh fails
-        }
-      }
       
       // Fetch all open job orders (no skip/limit) - summary aggregates from item-level data
       const allOpenResponse = await jobOrderApi.getSummary({
@@ -277,7 +255,7 @@ const JobOrdersPage: React.FC = () => {
     if (!showOpenOrders) return;
     // Only auto-refresh on initial page load, not on filter changes or pagination
     const shouldRefresh = isInitialLoad;
-    fetchOpenJobOrders(shouldRefresh);
+    fetchOpenJobOrders();
     if (isInitialLoad) {
       setIsInitialLoad(false);
     }
@@ -352,7 +330,7 @@ const JobOrdersPage: React.FC = () => {
     setFilters({
       job_order_number: '',
       model_name: '',
-      brand_name: ''
+      client_name: ''
     });
     setCurrentPage(1);
   };
@@ -785,10 +763,10 @@ const JobOrdersPage: React.FC = () => {
     const issues = [];
     
     // Case 1: Overproduction
-    if (item.total_produced_quantity > item.total_expected_quantity) {
+    if (item.working_quantity > item.total_expected_quantity) {
       issues.push({
         type: 'overproduction',
-        message: `Overproduction: ${item.total_produced_quantity} produced vs ${item.total_expected_quantity} expected`,
+        message: `Overproduction: ${item.working_quantity} produced vs ${item.total_expected_quantity} expected`,
         severity: 'high'
       });
     }
@@ -812,11 +790,11 @@ const JobOrdersPage: React.FC = () => {
     }
     
     // Case 4: Lost quantity (working quantity != cut quantity)
-    if (item.cut_quantity > item.total_produced_quantity) {
-      const lostQuantity = item.cut_quantity - item.total_produced_quantity;
+    if (item.cut_quantity > item.working_quantity) {
+      const lostQuantity = item.cut_quantity - item.working_quantity;
       issues.push({
         type: 'lost_quantity',
-        message: `Lost quantity: ${lostQuantity} (${item.cut_quantity} cut vs ${item.total_produced_quantity} working)`,
+        message: `Lost quantity: ${lostQuantity} (${item.cut_quantity} cut vs ${item.working_quantity} working)`,
         severity: 'high'
       });
     }
@@ -847,7 +825,7 @@ const JobOrdersPage: React.FC = () => {
           className="rounded border-gray-300 text-green-600 focus:ring-green-500"
         />
       ),
-      hidden: user?.role !== 'Admin' && user?.role !== 'Creator'
+      hidden: user?.role !== 'admin' && user?.role !== 'creator'
     },
     {
       key: 'job_order_number',
@@ -858,11 +836,11 @@ const JobOrdersPage: React.FC = () => {
       )
     },
     {
-      key: 'brand_name',
-      header: 'Client (Brand)',
+      key: 'client_name',
+      header: 'Client',
       width: 200,
       render: (item: any) => (
-        <span>{item.brand_name || '-'}</span>
+        <span>{item.client_name || '-'}</span>
       ),
       hidden: isMobile && !showFullView
     },
@@ -913,12 +891,12 @@ const JobOrdersPage: React.FC = () => {
       hidden: isMobile && !showFullView
     },
     {
-      key: 'total_produced_quantity',
+      key: 'working_quantity',
       header: 'Working Qty',
       width: 120,
       render: (item: any) => (
         <span className="bg-blue-100 text-blue-800 font-semibold px-2 py-1 rounded">
-          {item.total_produced_quantity?.toLocaleString()}
+          {item.working_quantity?.toLocaleString()}
         </span>
       ),
       hidden: isMobile && !showFullView
@@ -1001,7 +979,7 @@ const JobOrdersPage: React.FC = () => {
               <Eye className="w-4 h-4 text-gray-600" />
             </Button>
           </Link>
-          {(user?.role === 'Admin' || user?.role === 'Creator') && (
+          {(user?.role === 'admin' || user?.role === 'creator') && (
             <Button
               variant="ghost"
               size="sm"
@@ -1069,13 +1047,13 @@ const JobOrdersPage: React.FC = () => {
             </div>
             
             <div className="form-group">
-              <label htmlFor="brand_name" className="text-sm font-medium text-gray-700">{t('jobOrders.brandName')}</label>
+              <label htmlFor="client_name" className="text-sm font-medium text-gray-700">{t('jobOrders.clientName')}</label>
               <SearchableDropdown
-                label={t('bulkBarcode.brand')}
+                label={t('bulkBarcode.client')}
                 options={brandOptions}
-                value={filters.brand_name}
-                onChange={(value) => handleFilterChange('brand_name', value)}
-                placeholder={t('jobOrders.placeholders.brandName')}
+                value={filters.client_name}
+                onChange={(value) => handleFilterChange('client_name', value)}
+                placeholder={t('jobOrders.placeholders.clientName')}
               />
             </div>
             
@@ -1095,7 +1073,7 @@ const JobOrdersPage: React.FC = () => {
         </div>
         
         {/* Archive Action Button */}
-        {(user?.role === 'Admin' || user?.role === 'Creator') && selectedJobOrders.length > 0 && (
+        {(user?.role === 'admin' || user?.role === 'creator') && selectedJobOrders.length > 0 && (
           <div className="mb-6 text-center">
             <button
               onClick={handleArchiveSelected}

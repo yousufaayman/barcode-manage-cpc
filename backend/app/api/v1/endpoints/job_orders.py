@@ -40,7 +40,7 @@ def read_job_orders(
     model_id: Optional[int] = None,
     job_order_number: Optional[str] = None,
     model_name: Optional[str] = None,
-    brand_name: Optional[str] = None,
+    client_name: Optional[str] = None,
     current_user: Optional[schemas.User] = Depends(get_optional_current_user)
 ):
     """Get all job orders with optional filtering"""
@@ -54,8 +54,8 @@ def read_job_orders(
         query = query.filter(models.JobOrder.job_order_number.ilike(f"%{job_order_number}%"))
     if model_name:
         query = query.join(models.Model).filter(models.Model.model_name.ilike(f"%{model_name}%"))
-    if brand_name:
-        query = query.join(models.Brand, models.JobOrder.brand_id == models.Brand.brand_id).filter(models.Brand.brand_name.ilike(f"%{brand_name}%"))
+    if client_name:
+        query = query.join(models.Client, models.JobOrder.client_id == models.Client.client_id).filter(models.Client.client_name.ilike(f"%{client_name}%"))
 
     
     # Get total count before pagination
@@ -68,7 +68,7 @@ def read_job_orders(
     result_items = []
     for job_order in job_orders:
         model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first()
-        brand = db.query(models.Brand).filter(models.Brand.brand_id == job_order.brand_id).first() if job_order.brand_id else None
+        brand = db.query(models.Client).filter(models.Client.client_id == job_order.client_id).first() if job_order.client_id else None
         
         # Get items with color and size information using the proper CRUD function
         items_with_details = get_job_order_items_with_details(db, job_order.job_order_id)
@@ -105,13 +105,13 @@ def read_job_orders(
             "model_id": job_order.model_id,
             "job_order_number": job_order.job_order_number,
             "model_name": model.model_name if model else None,
-            "brand_id": job_order.brand_id,
-            "brand_name": brand.brand_name if brand else None,
+            "client_id": job_order.client_id,
+            "client_name": brand.client_name if brand else None,
             "items": items_with_details,
             "total_working_quantity": total_working_quantity,
             "batches": batches_min,
             "image_url": job_order.image_url,
-            "prints": job_order.prints,
+            "prints": job_order.print_config,
             "_priority": priority  # Internal field for sorting
         }
         
@@ -139,12 +139,12 @@ def read_job_orders_simple(
     result_items = []
     for job_order in job_orders:
         model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first()
-        brand = db.query(models.Brand).filter(models.Brand.brand_id == job_order.brand_id).first() if job_order.brand_id else None
+        brand = db.query(models.Client).filter(models.Client.client_id == job_order.client_id).first() if job_order.client_id else None
         result_items.append({
             "job_order_id": job_order.job_order_id,
             "job_order_number": job_order.job_order_number,
             "model_name": model.model_name if model else None,
-            "brand_name": brand.brand_name if brand else None
+            "client_name": brand.client_name if brand else None
         })
     return result_items
 
@@ -162,7 +162,7 @@ def read_job_order(
     model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first()
     
     # Get brand name
-    brand = db.query(models.Brand).filter(models.Brand.brand_id == job_order.brand_id).first() if job_order.brand_id else None
+    brand = db.query(models.Client).filter(models.Client.client_id == job_order.client_id).first() if job_order.client_id else None
     
     # Get items with color and size information
     items_with_details = get_job_order_items_with_details(db, job_order.job_order_id)
@@ -172,12 +172,12 @@ def read_job_order(
         "model_id": job_order.model_id,
         "job_order_number": job_order.job_order_number,
         "model_name": model.model_name if model else None,
-        "brand_id": job_order.brand_id,
-        "brand_name": brand.brand_name if brand else None,
+        "client_id": job_order.client_id,
+        "client_name": brand.client_name if brand else None,
         "items": items_with_details,
         "image_url": job_order.image_url,
         "notes": job_order.notes,
-        "prints": job_order.prints,
+        "prints": job_order.print_config,
         "date_created": job_order.date_created
     }
 
@@ -195,7 +195,7 @@ def read_job_order_by_number(
     model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first()
 
     # Get brand name
-    brand = db.query(models.Brand).filter(models.Brand.brand_id == job_order.brand_id).first() if job_order.brand_id else None
+    brand = db.query(models.Client).filter(models.Client.client_id == job_order.client_id).first() if job_order.client_id else None
     
     # Get items with color and size information
     items_with_details = get_job_order_items_with_details(db, job_order.job_order_id)
@@ -205,12 +205,13 @@ def read_job_order_by_number(
         "model_id": job_order.model_id,
         "job_order_number": job_order.job_order_number,
         "model_name": model.model_name if model else None,
-        "brand_id": job_order.brand_id,
-        "brand_name": brand.brand_name if brand else None,
+        "client_id": job_order.client_id,
+        "client_name": brand.client_name if brand else None,
         "items": items_with_details,
         "image_url": job_order.image_url,
         "notes": job_order.notes,
-        "prints": job_order.prints
+        "prints": job_order.print_config,
+        "date_created": job_order.date_created
     }
 
 @router.post("/", response_model=schemas.JobOrder)
@@ -268,7 +269,7 @@ def create_job_order(
         "job_order_number": job_order.job_order_number,
         "model_name": model.model_name if model else None,
         "items": items_with_details,
-        "prints": job_order.prints,
+        "prints": job_order.print_config,
         "notes": job_order.notes
     }
 
@@ -277,7 +278,7 @@ async def create_job_order_with_names(
     db: Session = Depends(get_db),
     job_order_number: str = Form(...),
     model_name: str = Form(...),
-    brand_name: str = Form(...),
+    client_name: str = Form(...),
     items: str = Form(...),  # Expect JSON stringified list
     materials: str = Form('[]'),
     prints: str = Form('{}'),
@@ -324,7 +325,7 @@ async def create_job_order_with_names(
     job_order_in = schemas.JobOrderCreateWithNames(
         model_name=model_name,
         job_order_number=job_order_number,
-        brand_name=brand_name,
+        client_name=client_name,
         items=items_data,
         materials=materials_data,
         prints=prints_data or None,
@@ -343,7 +344,7 @@ async def create_job_order_with_names(
         "model_name": model.model_name if model else None,
         "items": items_with_details,
         "notes": job_order.notes,
-        "prints": job_order.prints,
+        "prints": job_order.print_config,
         "image_url": job_order.image_url
     }
 
@@ -403,7 +404,7 @@ def update_job_order(
         "job_order_number": job_order.job_order_number,
         "model_name": model.model_name if model else None,
         "items": items_with_details,
-        "prints": job_order.prints,
+        "prints": job_order.print_config,
         "image_url": job_order.image_url if hasattr(job_order, 'image_url') else None
     }
 
@@ -455,7 +456,7 @@ def read_job_orders_by_model(
             "model_name": model.model_name,
             "items": items_with_details,
             "image_url": job_order.image_url,
-            "prints": job_order.prints
+            "prints": job_order.print_config
         })
     
     return result_items
@@ -514,8 +515,46 @@ def get_job_order_items_summary(
     # Apply pagination
     items = query.offset(skip).limit(limit).all()
     
+    # Map database model fields to schema fields
+    mapped_items = []
+    for item in items:
+        mapped_item = {
+            "item_id": item.item_id,
+            "job_order_id": item.job_order_id,
+            "color_id": item.color_id,
+            "size_id": item.size_id,
+            "color_name": item.color_name,
+            "size_value": item.size_value,
+            "expected_quantity": item.expected_quantity,
+            "produced_quantity": item.working_qty,  # Map working_qty to produced_quantity
+            "cut_quantity": item.cut_qty,  # Map cut_qty to cut_quantity
+            "cut_inspection_qty": item.cut_inspection_qty,
+            "second_degree_cut_qty": item.second_degree_cut_qty,
+            "sewing_in_qty": item.sewing_in_qty,
+            "sewing_out_qty": item.sewing_out_qty,
+            "packaging_in_qty": item.packaging_in_qty,
+            "packaging_out_qty": item.packaging_out_qty,
+            "second_degree_quantity": item.second_degree_qty,  # Map second_degree_qty to second_degree_quantity
+            "completed_quantity": item.completed_qty,  # Map completed_qty to completed_quantity
+            "working_quantity": item.working_qty,  # Map working_qty to working_quantity
+            "remaining_quantity": item.expected_quantity - item.completed_qty,  # Calculate remaining
+            "lost_qty": item.lost_qty,
+            "total_batches": item.total_batches,
+            "has_issues": item.has_issues,
+            "completion_percentage": float(item.completion_percentage) if item.completion_percentage else 0.0,
+            "overproduction_quantity": item.overproduction_quantity,
+            "production_status": item.production_status,
+            "notes": item.notes,
+            "last_calculated_at": item.last_calculated_at,
+            "last_quantity_change": None,
+            "last_completion_change": None,
+            "last_new_batch": None,
+            "last_batch_update": None,
+        }
+        mapped_items.append(mapped_item)
+    
     return {
-        "items": items,
+        "items": mapped_items,
         "total": total_count
     }
 
@@ -724,178 +763,89 @@ def get_job_orders_summary(
     limit: int = 100,
     job_order_number: Optional[str] = None,
     model_name: Optional[str] = None,
-    brand_name: Optional[str] = None,
+    client_name: Optional[str] = None,
     current_user: Optional[schemas.User] = Depends(get_optional_current_user)
 ):
-    """Get job order summaries calculated from item-level data"""
-    # Build base query for job orders with item summaries
-    query = db.query(
-        models.JobOrder,
-        models.Model.model_name,
-        models.Brand.brand_name,
-        sa_func.count(models.JobOrderItemSummary.item_id).label('total_items'),
-        sa_func.sum(models.JobOrderItemSummary.expected_quantity).label('total_expected_quantity'),
-        sa_func.sum(models.JobOrderItemSummary.produced_quantity).label('total_produced_quantity'),
-        sa_func.sum(models.JobOrderItemSummary.cut_quantity).label('total_cut_quantity'),
-        sa_func.sum(models.JobOrderItemSummary.second_degree_quantity).label('total_second_degree_quantity'),
-        sa_func.sum(models.JobOrderItemSummary.completed_quantity).label('total_completed_quantity'),
-        sa_func.sum(models.JobOrderItemSummary.working_quantity).label('total_working_quantity'),
-        sa_func.sum(models.JobOrderItemSummary.remaining_quantity).label('total_remaining_quantity'),
-        sa_func.sum(models.JobOrderItemSummary.total_batches).label('total_batches'),
-        sa_func.max(models.JobOrderItemSummary.last_calculated_at).label('last_calculated_at'),
-        sa_func.max(models.JobOrderItemSummary.last_quantity_change).label('last_quantity_change'),
-        sa_func.max(models.JobOrderItemSummary.last_completion_change).label('last_completion_change'),
-        sa_func.max(models.JobOrderItemSummary.last_new_batch).label('last_new_batch'),
-        sa_func.max(models.JobOrderItemSummary.last_batch_update).label('last_batch_update')
-    ).join(
-        models.Model,
-        models.JobOrder.model_id == models.Model.model_id
-    ).join(
-        models.Brand,
-        models.JobOrder.brand_id == models.Brand.brand_id,
-        isouter=True
-    ).join(
-        models.JobOrderItemSummary,
-        models.JobOrder.job_order_id == models.JobOrderItemSummary.job_order_id,
-        isouter=True
-    ).group_by(
-        models.JobOrder.job_order_id,
-        models.JobOrder.job_order_number,
-        models.Model.model_name,
-        models.Brand.brand_name,
-        models.JobOrder.image_url,
-        models.JobOrder.notes,
-        models.JobOrder.date_created
-    )
+    """Get job order summaries from the job_orders_summary table"""
+    # Build query from job_orders_summary table
+    query = db.query(models.JobOrderSummary)
     
     # Apply filters
     if job_order_number:
-        query = query.filter(models.JobOrder.job_order_number.ilike(f"%{job_order_number}%"))
-    # Note: closed filter removed as closed column no longer exists
+        query = query.filter(models.JobOrderSummary.job_order_number.ilike(f"%{job_order_number}%"))
     if model_name:
-        query = query.filter(models.Model.model_name.ilike(f"%{model_name}%"))
-    if brand_name:
-        query = query.filter(models.Brand.brand_name.ilike(f"%{brand_name}%"))
+        query = query.filter(models.JobOrderSummary.model_name.ilike(f"%{model_name}%"))
+    if client_name:
+        query = query.filter(models.JobOrderSummary.client_name.ilike(f"%{client_name}%"))
     
-    # Get results
-    results = query.all()
+    # Get total count
+    total = query.count()
     
-    # Calculate summaries
+    # Apply pagination
+    results = query.offset(skip).limit(limit).all()
+    
+    # Also need to check for stalled batches and notes which are not in the summary table
     summaries = []
     for result in results:
-        # Calculate derived fields
-        total_expected = result.total_expected_quantity or 0
-        total_produced = result.total_produced_quantity or 0
-        total_cut = result.total_cut_quantity or 0
-        total_second_degree = result.total_second_degree_quantity or 0
-        total_completed = result.total_completed_quantity or 0
-        total_working = result.total_working_quantity or 0
-        total_remaining = result.total_remaining_quantity or 0
-        total_batches = result.total_batches or 0
-        
-        # Calculate completion percentage
-        completion_percentage = round((total_produced / total_expected) * 100, 2) if total_expected > 0 else 0
-        
         # Check for items with notes
         items_with_notes = db.query(models.JobOrderItemSummary).filter(
-            models.JobOrderItemSummary.job_order_id == result.JobOrder.job_order_id,
+            models.JobOrderItemSummary.job_order_id == result.job_order_id,
             models.JobOrderItemSummary.notes.isnot(None),
             models.JobOrderItemSummary.notes != ''
         ).all()
         
-        # Determine if there are issues (including notes)
-        has_issues = total_produced > total_expected or len(items_with_notes) > 0
-        
-        # Check for high second degree items (>3% threshold)
-        has_high_second_degree = False
-        if total_produced > 0:
-            # Get all items for this job order to check individual second degree percentages
-            job_order_items = db.query(models.JobOrderItemSummary).filter(
-                models.JobOrderItemSummary.job_order_id == result.JobOrder.job_order_id,
-                models.JobOrderItemSummary.produced_quantity > 0
-            ).all()
-            
-            for item in job_order_items:
-                if item.second_degree_quantity > 0:
-                    second_degree_percentage = (item.second_degree_quantity / item.produced_quantity) * 100
-                    if second_degree_percentage > 3:
-                        has_high_second_degree = True
-                        break
-        
-        # Calculate overproduction
-        overproduction_quantity = max(0, total_produced - total_expected)
-        
-        # Detect stalled batches: for any item (color_id,size_id) of this job order,
-        # if its batches are spread across more than one current phase (Cutting, any Sewing phase, Packaging)
-        # then mark the job order as having stalled batches.
-        # Map phases to phase groups: Cutting (1), Sewing (2,3,4,7), Packaging (8)
-        # Count distinct phase groups per (color_id,size_id)
+        # Detect stalled batches
         phase_group_case = case(
-            (
-                models.Batch.current_phase == 1,
-                'Cutting'
-            ),
-            (
-                models.Batch.current_phase.in_([2, 3, 4, 7]),
-                'Sewing'
-            ),
-            (
-                models.Batch.current_phase == 8,
-                'Packaging'
-            ),
+            (models.Batch.current_phase == 1, 'Cutting'),
+            (models.Batch.current_phase.in_([2, 3, 4, 7]), 'Sewing'),
+            (models.Batch.current_phase == 8, 'Packaging'),
             else_='Other'
         )
-
+        
         stalled_subq = db.query(
             models.Batch.color_id.label('color_id'),
             models.Batch.size_id.label('size_id'),
             sa_func.count(sa_func.distinct(phase_group_case)).label('group_count')
         ).filter(
-            models.Batch.job_order_id == result.JobOrder.job_order_id,
-            models.Batch.is_second_degree == 0  # Exclude second degree batches from stalling consideration
+            models.Batch.job_order_id == result.job_order_id,
+            models.Batch.is_second_degree == False
         ).group_by(
             models.Batch.color_id,
             models.Batch.size_id
         ).subquery()
-
+        
         has_stalled_batches = db.query(stalled_subq).filter(stalled_subq.c.group_count > 1).first() is not None
-
-        # Get notes from items (if any)
+        
+        # Update has_issues if notes exist
+        has_issues = result.has_issues or len(items_with_notes) > 0
+        
+        # Get notes text
         notes_text = ""
         if items_with_notes:
             notes_list = [item.notes for item in items_with_notes if item.notes]
             notes_text = "; ".join(notes_list)
         
         summaries.append({
-            "job_order_id": result.JobOrder.job_order_id,
-            "job_order_number": result.JobOrder.job_order_number,
+            "job_order_id": result.job_order_id,
+            "job_order_number": result.job_order_number,
             "model_name": result.model_name,
-            "brand_name": result.brand_name,
-            "total_items": result.total_items or 0,
-            "total_expected_quantity": total_expected,
-            "total_produced_quantity": total_produced,
-            "cut_quantity": total_cut,
-            "second_degree_quantity": total_second_degree,
-            "completed_quantity": total_completed,
-            "working_quantity": total_working,
-            "remaining_quantity": total_remaining,
-            "total_batches": total_batches,
+            "client_name": result.client_name,
+            "total_items": result.total_items,
+            "total_expected_quantity": result.total_expected_quantity,
+            "cut_quantity": result.cut_quantity,
+            "second_degree_quantity": result.second_degree_quantity,
+            "completed_quantity": result.total_produced_quantity,
+            "working_quantity": result.working_quantity,
+            "remaining_quantity": result.total_expected_quantity - result.working_quantity,
+            "total_batches": result.total_batches,
             "has_issues": has_issues,
-            "has_high_second_degree": has_high_second_degree,
+            "has_high_second_degree": result.has_high_second_degree,
             "has_stalled_batches": has_stalled_batches,
-            "completion_percentage": completion_percentage,
-            "overproduction_quantity": overproduction_quantity,
+            "completion_percentage": float(result.completion_percentage) if result.completion_percentage else 0,
+            "overproduction_quantity": result.overproduction_quantity,
             "notes": notes_text,
-            "last_calculated_at": result.last_calculated_at,
-            "last_quantity_change": result.last_quantity_change,
-            "last_completion_change": result.last_completion_change,
-            "last_new_batch": result.last_new_batch,
-            "last_batch_update": result.last_batch_update
+            "last_calculated_at": result.last_calculated_at
         })
-    
-    # Apply pagination
-    total = len(summaries)
-    summaries = summaries[skip:skip + limit]
     
     return {
         "items": summaries,
@@ -989,13 +939,13 @@ def get_archive_overview(
     recent_job_orders_data = []
     for jo in recent_job_orders:
         model = db.query(models.Model).filter(models.Model.model_id == jo.model_id).first()
-        brand = db.query(models.Brand).filter(models.Brand.brand_id == jo.brand_id).first() if jo.brand_id else None
+        brand = db.query(models.Client).filter(models.Client.client_id == jo.client_id).first() if jo.client_id else None
         
         recent_job_orders_data.append({
             "job_order_id": jo.job_order_id,
             "job_order_number": jo.job_order_number,
             "model_name": model.model_name if model else "Unknown",
-            "brand_name": brand.brand_name if brand else "Unknown",
+            "client_name": brand.client_name if brand else "Unknown",
             "archived_at": jo.archived_at,
             "date_created": jo.date_created
         })
@@ -1028,7 +978,7 @@ def get_archived_job_orders_detailed(
     limit: int = 100,
     job_order_number: Optional[str] = None,
     model_name: Optional[str] = None,
-    brand_name: Optional[str] = None,
+    client_name: Optional[str] = None,
     include_partial: bool = False,
     current_user: schemas.User = Depends(get_current_active_superuser)
 ):
@@ -1053,27 +1003,27 @@ def get_archived_job_orders_detailed(
     for jo in archived_job_orders:
         # Get model and brand names
         model = db.query(models.Model).filter(models.Model.model_id == jo.model_id).first()
-        brand = db.query(models.Brand).filter(models.Brand.brand_id == jo.brand_id).first() if jo.brand_id else None
+        brand = db.query(models.Client).filter(models.Client.client_id == jo.client_id).first() if jo.client_id else None
         
         # Filter by model_name if specified
         if model_name and model and model_name.lower() not in model.model_name.lower():
             continue
             
-        # Filter by brand_name if specified
-        if brand_name and brand and brand_name.lower() not in brand.brand_name.lower():
+        # Filter by client_name if specified
+        if client_name and brand and client_name.lower() not in brand.client_name.lower():
             continue
         
         result.append(schemas.ArchivedJobOrderResponse(
             job_order_id=jo.job_order_id,
             model_id=jo.model_id,
             job_order_number=jo.job_order_number,
-            brand_id=jo.brand_id,
+            client_id=jo.client_id,
             image_url=jo.image_url,
             notes=jo.notes,
             date_created=jo.date_created,
             archived_at=jo.archived_at,
             model_name=model.model_name if model else None,
-            brand_name=brand.brand_name if brand else None
+            client_name=brand.client_name if brand else None
         ))
     
     # If include_partial is True, also include job orders that have archived items but are not fully archived
@@ -1094,27 +1044,27 @@ def get_archived_job_orders_detailed(
                 
             # Get model and brand names
             model = db.query(models.Model).filter(models.Model.model_id == jo.model_id).first()
-            brand = db.query(models.Brand).filter(models.Brand.brand_id == jo.brand_id).first() if jo.brand_id else None
+            brand = db.query(models.Client).filter(models.Client.client_id == jo.client_id).first() if jo.client_id else None
             
             # Filter by model_name if specified
             if model_name and model and model_name.lower() not in model.model_name.lower():
                 continue
                 
-            # Filter by brand_name if specified
-            if brand_name and brand and brand_name.lower() not in brand.brand_name.lower():
+            # Filter by client_name if specified
+            if client_name and brand and client_name.lower() not in brand.client_name.lower():
                 continue
             
             result.append(schemas.ArchivedJobOrderResponse(
                 job_order_id=jo.job_order_id,
                 model_id=jo.model_id,
                 job_order_number=jo.job_order_number,
-                brand_id=jo.brand_id,
+                client_id=jo.client_id,
                 image_url=jo.image_url,
                 notes=jo.notes,
                 date_created=jo.date_created,
                 archived_at=None,  # Not fully archived
                 model_name=model.model_name if model else None,
-                brand_name=brand.brand_name if brand else None
+                client_name=brand.client_name if brand else None
             ))
     
     return result

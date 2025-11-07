@@ -27,8 +27,8 @@ def get_production_statistics(db: Session):
     
     # Production by Brand
     production_by_brand = db.query(
-        models.Brand.brand_id,
-        models.Brand.brand_name,
+        models.Client.client_id,
+        models.Client.client_name,
         sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending'),
         sa_func.sum(case((models.Batch.status == 'In Progress', 1), else_=0)).label('in_progress'),
         sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed'),
@@ -38,18 +38,18 @@ def get_production_statistics(db: Session):
         models.JobOrder,
         models.Batch.job_order_id == models.JobOrder.job_order_id
     ).join(
-        models.Brand,
-        models.JobOrder.brand_id == models.Brand.brand_id
+        models.Client,
+        models.JobOrder.client_id == models.Client.client_id
     ).group_by(
-        models.Brand.brand_id,
-        models.Brand.brand_name
+        models.Client.client_id,
+        models.Client.client_name
     ).all()
     
     # Production by Model
     production_by_model = db.query(
         models.Model.model_id,
         models.Model.model_name,
-        models.Brand.brand_name,
+        models.Client.client_name,
         sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending'),
         sa_func.sum(case((models.Batch.status == 'In Progress', 1), else_=0)).label('in_progress'),
         sa_func.sum(case((models.Batch.status == 'Completed', 1), else_=0)).label('completed'),
@@ -62,12 +62,12 @@ def get_production_statistics(db: Session):
         models.Model,
         models.JobOrder.model_id == models.Model.model_id
     ).join(
-        models.Brand,
-        models.JobOrder.brand_id == models.Brand.brand_id
+        models.Client,
+        models.JobOrder.client_id == models.Client.client_id
     ).group_by(
         models.Model.model_id,
         models.Model.model_name,
-        models.Brand.brand_name
+        models.Client.client_name
     ).all()
     
     # Recent Activity (last 7 days)
@@ -87,7 +87,7 @@ def get_production_statistics(db: Session):
     # Bottleneck Analysis - Most Pending by Phase
     bottlenecks = db.query(
         models.ProductionPhase.phase_name,
-        models.Brand.brand_name,
+        models.Client.client_name,
         models.Model.model_name,
         sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)).label('pending_count'),
         sa_func.sum(models.Batch.quantity).label('total_quantity')
@@ -98,8 +98,8 @@ def get_production_statistics(db: Session):
         models.Model,
         models.JobOrder.model_id == models.Model.model_id
     ).join(
-        models.Brand,
-        models.JobOrder.brand_id == models.Brand.brand_id
+        models.Client,
+        models.JobOrder.client_id == models.Client.client_id
     ).join(
         models.ProductionPhase,
         models.Batch.current_phase == models.ProductionPhase.phase_id
@@ -107,7 +107,7 @@ def get_production_statistics(db: Session):
         models.Batch.status == 'Pending'
     ).group_by(
         models.ProductionPhase.phase_name,
-        models.Brand.brand_name,
+        models.Client.client_name,
         models.Model.model_name
     ).order_by(
         desc(sa_func.sum(case((models.Batch.status == 'Pending', 1), else_=0)))
@@ -137,8 +137,8 @@ def get_production_statistics(db: Session):
         ],
         "production_by_brand": [
             {
-                "brand_id": item.brand_id,
-                "brand_name": item.brand_name,
+                "client_id": item.client_id,
+                "client_name": item.client_name,
                 "pending": item.pending,
                 "in_progress": item.in_progress,
                 "completed": item.completed,
@@ -150,7 +150,7 @@ def get_production_statistics(db: Session):
             {
                 "model_id": item.model_id,
                 "model_name": item.model_name,
-                "brand_name": item.brand_name,
+                "client_name": item.client_name,
                 "pending": item.pending,
                 "in_progress": item.in_progress,
                 "completed": item.completed,
@@ -168,7 +168,7 @@ def get_production_statistics(db: Session):
         "bottlenecks": [
             {
                 "phase_name": item.phase_name,
-                "brand_name": item.brand_name,
+                "client_name": item.client_name,
                 "model_name": item.model_name,
                 "pending_count": item.pending_count,
                 "total_quantity": item.total_quantity
@@ -189,13 +189,13 @@ def get_production_statistics(db: Session):
         }
     }
 
-def get_brand_statistics(db: Session, brand_id: int):
+def get_client_statistics(db: Session, client_id: int):
     """Get detailed statistics for a specific brand"""
     
     brand_data = db.query(
-        models.Brand.brand_id,
-        models.Brand.brand_name
-    ).filter(models.Brand.brand_id == brand_id).first()
+        models.Client.client_id,
+        models.Client.client_name
+    ).filter(models.Client.client_id == client_id).first()
     
     if not brand_data:
         return None
@@ -213,13 +213,13 @@ def get_brand_statistics(db: Session, brand_id: int):
         models.JobOrder,
         models.Batch.job_order_id == models.JobOrder.job_order_id
     ).join(
-        models.Brand,
-        models.JobOrder.brand_id == models.Brand.brand_id
+        models.Client,
+        models.JobOrder.client_id == models.Client.client_id
     ).join(
         models.ProductionPhase,
         models.Batch.current_phase == models.ProductionPhase.phase_id
     ).filter(
-        models.Brand.brand_id == brand_id
+        models.Client.client_id == client_id
     ).group_by(
         models.Batch.current_phase,
         models.ProductionPhase.phase_name
@@ -243,10 +243,10 @@ def get_brand_statistics(db: Session, brand_id: int):
         models.Model,
         models.JobOrder.model_id == models.Model.model_id
     ).join(
-        models.Brand,
-        models.JobOrder.brand_id == models.Brand.brand_id
+        models.Client,
+        models.JobOrder.client_id == models.Client.client_id
     ).filter(
-        models.Brand.brand_id == brand_id
+        models.Client.client_id == client_id
     ).group_by(
         models.Model.model_id,
         models.Model.model_name
@@ -254,8 +254,8 @@ def get_brand_statistics(db: Session, brand_id: int):
     
     return {
         "brand_info": {
-            "brand_id": brand_data.brand_id,
-            "brand_name": brand_data.brand_name
+            "client_id": brand_data.client_id,
+            "client_name": brand_data.client_name
         },
         "phases": [
             {
@@ -287,13 +287,13 @@ def get_model_statistics(db: Session, model_id: int):
     model_data = db.query(
         models.Model.model_id,
         models.Model.model_name,
-        models.Brand.brand_name
+        models.Client.client_name
     ).join(
         models.JobOrder,
         models.Model.model_id == models.JobOrder.model_id
     ).join(
-        models.Brand,
-        models.JobOrder.brand_id == models.Brand.brand_id
+        models.Client,
+        models.JobOrder.client_id == models.Client.client_id
     ).filter(models.Model.model_id == model_id).first()
     
     if not model_data:
@@ -330,7 +330,7 @@ def get_model_statistics(db: Session, model_id: int):
         "model_info": {
             "model_id": model_data.model_id,
             "model_name": model_data.model_name,
-            "brand_name": model_data.brand_name
+            "client_name": model_data.client_name
         },
         "phases": [
             {
@@ -637,7 +637,7 @@ def get_job_order_item_batch_details(db: Session, item_id: int):
         models.Batch.current_phase,
         models.Batch.status,
         models.Batch.is_second_degree,
-        models.Batch.last_updated_at,
+        models.Batch.last_updated,
         models.ProductionPhase.phase_name
     ).join(
         models.ProductionPhase,
@@ -671,7 +671,7 @@ def get_job_order_item_batch_details(db: Session, item_id: int):
             "phase_name": batch.phase_name,
             "status": batch.status,
             "is_second_degree": bool(batch.is_second_degree),
-            "last_updated_at": batch.last_updated_at.isoformat() if batch.last_updated_at else None
+            "last_updated": batch.last_updated.isoformat() if batch.last_updated else None
         }
         
         phase_status_groups[phase_status_key]["batches"].append(batch_detail)

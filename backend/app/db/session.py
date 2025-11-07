@@ -1,35 +1,33 @@
 from sqlalchemy import create_engine, text, event
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 from app.core.config import settings
 from urllib.parse import quote_plus
-import pymysql
+import psycopg2
 import logging
 from app.models import Base
 
-# Register PyMySQL as the MySQL driver
-pymysql.install_as_MySQLdb()
-
 # URL encode the password to handle special characters
-password = quote_plus(settings.MYSQL_PASSWORD)
+password = quote_plus(settings.POSTGRESQL_PASSWORD)
 
 # First create engine without database name to create the database if it doesn't exist
 initial_engine = create_engine(
-    f"mysql+pymysql://{settings.MYSQL_USER}:{password}@{settings.MYSQL_HOST}:{settings.MYSQL_PORT}",
+    f"postgresql://{settings.POSTGRESQL_USER}:{password}@{settings.POSTGRESQL_HOST}:{settings.POSTGRESQL_PORT}",
     pool_pre_ping=settings.DB_POOL_PRE_PING,
     pool_recycle=settings.DB_POOL_RECYCLE,
     pool_size=5,
-    max_overflow=10,
-    connect_args={"charset": "utf8mb4"}
+    max_overflow=10
 )
 try:
     with initial_engine.connect() as conn:
-        conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {settings.MYSQL_DATABASE}"))
-        conn.commit()
+        result = conn.execute(text(f"SELECT 1 FROM pg_database WHERE datname = '{settings.POSTGRESQL_DATABASE}'")).fetchone()
+        if not result:
+            conn.execute(text(f"CREATE DATABASE {settings.POSTGRESQL_DATABASE}"))
+            conn.commit()
 except Exception as e:
-    logging.warning(f"Could not create database {settings.MYSQL_DATABASE}: {e}")
+    logging.warning(f"Could not create database {settings.POSTGRESQL_DATABASE}: {e}")
 
-SQLALCHEMY_DATABASE_URL = f"mysql+pymysql://{settings.MYSQL_USER}:{password}@{settings.MYSQL_HOST}:{settings.MYSQL_PORT}/{settings.MYSQL_DATABASE}"
+SQLALCHEMY_DATABASE_URL = f"postgresql://{settings.POSTGRESQL_USER}:{password}@{settings.POSTGRESQL_HOST}:{settings.POSTGRESQL_PORT}/{settings.POSTGRESQL_DATABASE}"
 
 # Enhanced engine with comprehensive connection pooling
 engine = create_engine(
@@ -41,15 +39,6 @@ engine = create_engine(
     pool_timeout=settings.DB_POOL_TIMEOUT,
     pool_recycle=settings.DB_POOL_RECYCLE,
     pool_pre_ping=settings.DB_POOL_PRE_PING,
-    
-    # Connection Settings
-    connect_args={
-        "charset": "utf8mb4",
-        "autocommit": False,
-        "connect_timeout": 10,
-        "read_timeout": 30,
-        "write_timeout": 30
-    },
     
     # Engine Settings
     echo=False,  # Set to True for SQL query logging
@@ -101,4 +90,4 @@ def receive_checkout(dbapi_connection, connection_record, connection_proxy):
 @event.listens_for(engine, "checkin")
 def receive_checkin(dbapi_connection, connection_record):
     """Log when a connection is checked back into the pool"""
-    logging.debug("Connection checked back into pool") 
+    logging.debug("Connection checked back into pool")

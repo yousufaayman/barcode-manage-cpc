@@ -120,6 +120,36 @@ Summary tables have been removed from the archive schema to:
 - **Maintain Data Integrity**: Summary data is always current when calculated from source data
 
 
+## Column Naming Conventions
+
+### MySQL to PostgreSQL Column Name Mapping
+
+During the migration, column names are standardized to follow PostgreSQL conventions:
+
+| MySQL Column | PostgreSQL Column | Notes |
+|--------------|------------------|-------|
+| `phase_id` | `id` | Primary key standardization |
+| `color_id` | `id` | Primary key standardization |
+| `size_id` | `id` | Primary key standardization |
+| `model_id` | `id` | Primary key standardization |
+| `material_id` | `id` | Primary key standardization |
+| `brand_id` | `client_id` | Table renamed from brands to clients |
+| `user_id` | `id` | **Exception**: users table keeps `id` |
+| `job_order_id` | `id` | Primary key standardization |
+| `item_id` | `id` | Primary key standardization |
+| `batch_id` | `id` | Primary key standardization |
+
+| MySQL Column | PostgreSQL Column | Notes |
+|--------------|------------------|-------|
+| `phase_name` | `name` | Name column standardization |
+| `color_name` | `name` | Name column standardization |
+| `size_value` | `value` | Size-specific naming |
+| `model_name` | `name` | Name column standardization |
+| `material_name` | `name` | Name column standardization |
+| `brand_name` | `client_name` | Table renamed from brands to clients |
+
+**Exception Rule**: The `users` table is the only exception where the primary key remains as `id` instead of `user_id` to maintain consistency with authentication systems.
+
 ## Data Type Mappings
 
 ### MySQL to PostgreSQL Conversions
@@ -147,16 +177,16 @@ CREATE OR REPLACE FUNCTION ops.handle_phase_transitions()
 RETURNS TRIGGER AS $$
 BEGIN
     -- Cutting: When set to Completed, move to Sewing - 1 (Pending)
-    IF NEW.current_phase = (SELECT id FROM core.production_phases WHERE name = 'Cutting' LIMIT 1) 
+    IF NEW.current_phase = (SELECT id FROM core.production_phases WHERE phase_name = 'Cutting' LIMIT 1) 
        AND NEW.status = 'Completed' THEN
-        NEW.current_phase := (SELECT id FROM core.production_phases WHERE name = 'Sewing - 1' LIMIT 1);
+        NEW.current_phase := (SELECT id FROM core.production_phases WHERE phase_name = 'Sewing - 1' LIMIT 1);
         NEW.status := 'Pending';
     END IF;
     
     -- Any Sewing phase: When set to Completed, move to Packaging (Pending)
-    IF (SELECT name FROM core.production_phases WHERE id = NEW.current_phase) LIKE 'Sewing%'
+    IF (SELECT phase_name FROM core.production_phases WHERE id = NEW.current_phase) LIKE 'Sewing%'
        AND NEW.status = 'Completed' THEN
-        NEW.current_phase := (SELECT id FROM core.production_phases WHERE name = 'Packaging' LIMIT 1);
+        NEW.current_phase := (SELECT id FROM core.production_phases WHERE phase_name = 'Packaging' LIMIT 1);
         NEW.status := 'Pending';
     END IF;
     
@@ -228,7 +258,7 @@ CREATE UNIQUE INDEX ON core.colors (name);
 CREATE UNIQUE INDEX ON core.sizes (value);
 CREATE UNIQUE INDEX ON core.models (name);
 CREATE UNIQUE INDEX ON core.materials (name);
-CREATE UNIQUE INDEX ON core.production_phases (name);
+CREATE UNIQUE INDEX ON core.production_phases (phase_name);
 
 -- Composite indexes
 CREATE INDEX ON core.job_order_items (job_order_id, color_id, size_id);

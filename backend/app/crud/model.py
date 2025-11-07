@@ -4,8 +4,8 @@ from .. import models, schemas
 def get_model(db: Session, model_id: int):
     return db.query(models.Model).filter(models.Model.model_id == model_id).first()
 
-def get_model_by_name(db: Session, model_name: str):
-    return db.query(models.Model).filter(models.Model.model_name == model_name).first()
+def get_model_by_name(db: Session, name: str):
+    return db.query(models.Model).filter(models.Model.model_name == name).first()
 
 def get_models(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.Model).offset(skip).limit(limit).all()

@@ -200,8 +200,8 @@ const BarcodeDetailsPage: React.FC = () => {
                   <p className="text-lg font-semibold text-gray-900">{barcodeData.job_order_number || 'N/A'}</p>
                 </div>
                 <div>
-                  <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.brand')}</h4>
-                  <p className="text-lg font-semibold text-gray-900">{barcodeData.brand_name}</p>
+                  <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.client')}</h4>
+                  <p className="text-lg font-semibold text-gray-900">{barcodeData.client_name}</p>
                 </div>
                 <div>
                   <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.model')}</h4>

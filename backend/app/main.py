@@ -4,10 +4,13 @@ from .database import engine
 from . import models
 from .api.v1.api import api_router
 from .db.init_db import init_db, create_initial_admin
+from .database import create_triggers_and_functions
+from .crud import get_users_with_role_in_system
 from .core.config import settings
 from .utils.pool_manager import ConnectionPoolManager
 from .utils.directory_manager import ensure_all_directories, get_directory_info
 from .services.scheduler_service import SchedulerService
+from .services.summary_refresh_service import summary_refresh_service
 import logging
 import uvicorn
 import os
@@ -16,6 +19,25 @@ from fastapi.staticfiles import StaticFiles
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def verify_admin_user_exists():
+    """Verify that at least one admin user exists in the OPS system"""
+    from .database import SessionLocal
+    
+    db = SessionLocal()
+    try:
+        admin_users = get_users_with_role_in_system(db=db, system_name="OPS", role="admin")
+        if not admin_users:
+            logger.warning("No admin users found in OPS system!")
+            logger.warning("Please create an admin user with OPS system access")
+        else:
+            logger.info(f"Found {len(admin_users)} admin user(s) in OPS system")
+            for admin in admin_users:
+                logger.info(f"  - {admin.username}")
+    except Exception as e:
+        logger.error(f"Error verifying admin users: {str(e)}")
+    finally:
+        db.close()
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -63,7 +85,14 @@ async def startup_event():
     
     # Initialize database
     init_db()
-    create_initial_admin()
+    # Ensure triggers/functions are up to date
+    try:
+        create_triggers_and_functions()
+    except Exception as e:
+        logger.warning(f"Could not create DB triggers/functions: {e}")
+    
+    # Verify admin user exists in OPS system
+    verify_admin_user_exists()
     
     # Log directory information
     dir_info = get_directory_info()
@@ -77,9 +106,23 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to start report scheduler service: {str(e)}")
     
+    # Start the summary refresh service (replaces pg_cron)
+    try:
+        summary_refresh_service.start()
+        logger.info("Summary refresh service started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start summary refresh service: {str(e)}")
+    
     # Log final pool status
     ConnectionPoolManager.log_pool_status()
     logger.info("Application startup complete")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Shutting down application...")
+    summary_refresh_service.stop()
+    await summary_refresh_service.wait_for_completion()
+    logger.info("Application shutdown complete")
 
 @app.get("/")
 def read_root():

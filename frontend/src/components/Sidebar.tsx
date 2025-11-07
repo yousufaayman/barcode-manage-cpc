@@ -85,17 +85,17 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
             <NavItem to="/dashboard" label={t('navigation.dashboard')} icon={LayoutDashboard} />
             <NavItem to="/scanner" label={t('navigation.barcodeScanner')} icon={QrCode} />
             <NavItem to="/barcode-management" label={t('navigation.barcodeManagement')} icon={Package} />
-            {(user?.role === 'Admin' || user?.role === 'Creator') && (
+            {(user?.role === 'admin' || user?.role === 'creator') && (
               <NavItem to="/job-orders" label={t('navigation.jobOrders')} icon={FileText} />
             )}
-            {(user?.role === 'Admin' || user?.role === 'Creator' || user?.role === 'Cutting') && (
+            {(user?.role === 'admin' || user?.role === 'creator' || user?.role === 'cutting') && (
               <NavItem to="/bulk-create" label={t('navigation.barcodeCreate')} icon={Package} />
             )}
           </div>
         </div>
 
         {/* Admin Section */}
-        {user?.role === 'Admin' && (
+        {user?.role === 'admin' && (
           <div className="mb-4">
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2">
               {t('navigation.administration')}
@@ -109,7 +109,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
         )}
 
         {/* Creator Section */}
-        {user?.role === 'Creator' && (
+        {user?.role === 'creator' && (
           <div className="mb-4">
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2">
               {t('navigation.additional')}

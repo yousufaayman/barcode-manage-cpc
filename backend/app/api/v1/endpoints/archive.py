@@ -4,21 +4,16 @@ from typing import List, Optional
 from pydantic import BaseModel
 from app.crud import *
 from app import models, schemas
-from app.core.deps import get_db, get_current_active_superuser, get_current_user
+from app.core.deps import get_db, get_current_admin_user
 
 router = APIRouter()
 
 @router.get("/overview")
 def get_archive_overview(
     db: Session = Depends(get_db),
-    current_user: schemas.User = Depends(get_current_active_superuser)
+    current_user: models.User = Depends(get_current_admin_user)
 ):
     """Get overview of all archived data for the main archive page"""
-    if current_user.role != schemas.RoleEnum.ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied. Admin privileges required to view archive."
-        )
     
     # Get counts
     archived_job_orders_count = db.query(models.ArchivedJobOrder).count()
@@ -39,13 +34,13 @@ def get_archive_overview(
     recent_job_orders_data = []
     for jo in recent_job_orders:
         model = db.query(models.Model).filter(models.Model.model_id == jo.model_id).first()
-        brand = db.query(models.Brand).filter(models.Brand.brand_id == jo.brand_id).first() if jo.brand_id else None
+        brand = db.query(models.Client).filter(models.Client.client_id == jo.client_id).first() if jo.client_id else None
         
         recent_job_orders_data.append({
             "job_order_id": jo.job_order_id,
             "job_order_number": jo.job_order_number,
             "model_name": model.model_name if model else "Unknown",
-            "brand_name": brand.brand_name if brand else "Unknown",
+            "client_name": brand.client_name if brand else "Unknown",
             "archived_at": jo.archived_at,
             "date_created": jo.date_created
         })

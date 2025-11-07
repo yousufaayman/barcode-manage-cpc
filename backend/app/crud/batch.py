@@ -15,7 +15,7 @@ def get_batch(db: Session, batch_id: int):
     batch = db.query(
         models.Batch,
         models.JobOrder.job_order_number,
-        models.Brand.brand_name,
+        models.Client.client_name,
         models.Model.model_name,
         models.Size.size_value,
         models.Color.color_name,
@@ -23,7 +23,7 @@ def get_batch(db: Session, batch_id: int):
     ).join(
         models.JobOrder, models.Batch.job_order_id == models.JobOrder.job_order_id
     ).join(
-        models.Brand, models.JobOrder.brand_id == models.Brand.brand_id
+        models.Client, models.JobOrder.client_id == models.Client.client_id
     ).join(
         models.Model, models.JobOrder.model_id == models.Model.model_id
     ).join(
@@ -47,12 +47,12 @@ def get_batch(db: Session, batch_id: int):
             serial=str(batch.Batch.serial),
             current_phase=batch.Batch.current_phase,
             status=batch.Batch.status,
-            brand_name=batch.brand_name,
+            client_name=batch.client_name,
             model_name=batch.model_name,
             size_value=batch.size_value,
             color_name=batch.color_name,
             phase_name=batch.phase_name,
-            last_updated_at=batch.Batch.last_updated_at,
+            last_updated=batch.Batch.last_updated,
             is_second_degree=bool(batch.Batch.is_second_degree),
             notes=getattr(batch.Batch, 'notes', None)
         )
@@ -62,7 +62,7 @@ def get_batch_by_barcode(db: Session, barcode: str):
     batch = db.query(
         models.Batch,
         models.JobOrder.job_order_number,
-        models.Brand.brand_name,
+        models.Client.client_name,
         models.Model.model_name,
         models.Size.size_value,
         models.Color.color_name,
@@ -70,7 +70,7 @@ def get_batch_by_barcode(db: Session, barcode: str):
     ).join(
         models.JobOrder, models.Batch.job_order_id == models.JobOrder.job_order_id
     ).join(
-        models.Brand, models.JobOrder.brand_id == models.Brand.brand_id
+        models.Client, models.JobOrder.client_id == models.Client.client_id
     ).join(
         models.Model, models.JobOrder.model_id == models.Model.model_id
     ).join(
@@ -86,7 +86,7 @@ def get_batch_by_barcode(db: Session, barcode: str):
         batch = db.query(
             models.ArchivedBatch,
             models.JobOrder.job_order_number,
-            models.Brand.brand_name,
+            models.Client.client_name,
             models.Model.model_name,
             models.Size.size_value,
             models.Color.color_name,
@@ -94,7 +94,7 @@ def get_batch_by_barcode(db: Session, barcode: str):
         ).join(
             models.JobOrder, models.ArchivedBatch.job_order_id == models.JobOrder.job_order_id
         ).join(
-            models.Brand, models.JobOrder.brand_id == models.Brand.brand_id
+            models.Client, models.JobOrder.client_id == models.Client.client_id
         ).join(
             models.Model, models.JobOrder.model_id == models.Model.model_id
         ).join(
@@ -124,12 +124,12 @@ def get_batch_by_barcode(db: Session, barcode: str):
         current_phase=batch_obj.current_phase,
         status=batch_obj.status,
         is_second_degree=bool(batch_obj.is_second_degree),
-        brand_name=batch.brand_name,
+        client_name=batch.client_name,
         model_name=batch.model_name,
         size_value=batch.size_value,
         color_name=batch.color_name,
         phase_name=batch.phase_name,
-        last_updated_at=batch_obj.last_updated_at,
+        last_updated=batch_obj.last_updated,
         archived_at=archived_at
     )
 
@@ -137,7 +137,7 @@ def get_batches(db: Session, skip: int = 0, limit: int = 100):
     batches = db.query(
         models.Batch,
         models.JobOrder.job_order_number,
-        models.Brand.brand_name,
+        models.Client.client_name,
         models.Model.model_name,
         models.Size.size_value,
         models.Color.color_name,
@@ -145,7 +145,7 @@ def get_batches(db: Session, skip: int = 0, limit: int = 100):
     ).join(
         models.JobOrder, models.Batch.job_order_id == models.JobOrder.job_order_id
     ).join(
-        models.Brand, models.JobOrder.brand_id == models.Brand.brand_id
+        models.Client, models.JobOrder.client_id == models.Client.client_id
     ).join(
         models.Model, models.JobOrder.model_id == models.Model.model_id
     ).join(
@@ -169,12 +169,12 @@ def get_batches(db: Session, skip: int = 0, limit: int = 100):
             serial=str(batch.Batch.serial),
             current_phase=batch.Batch.current_phase,
             status=batch.Batch.status,
-            brand_name=batch.brand_name,
+            client_name=batch.client_name,
             model_name=batch.model_name,
             size_value=batch.size_value,
             color_name=batch.color_name,
             phase_name=batch.phase_name,
-            last_updated_at=batch.Batch.last_updated_at,
+            last_updated=batch.Batch.last_updated,
             is_second_degree=bool(batch.Batch.is_second_degree)
         )
         for batch in batches
@@ -321,7 +321,7 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
         create_scan_event(
             db=db,
             batch_id=db_batch.batch_id,
-            action_type='second_degree_update',
+            action_type='status_change',
             phase_id=new_phase,
             old_status=str(old_second_degree),
             new_status=str(new_second_degree),
@@ -340,7 +340,7 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
     db.refresh(db_batch)
     # Get related info through JobOrder
     job_order = db.query(models.JobOrder).filter(models.JobOrder.job_order_id == db_batch.job_order_id).first()
-    brand = db.query(models.Brand).filter(models.Brand.brand_id == job_order.brand_id).first() if job_order and job_order.brand_id else None
+    brand = db.query(models.Client).filter(models.Client.client_id == job_order.client_id).first() if job_order and job_order.client_id else None
     model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first() if job_order and job_order.model_id else None
     size = db.query(models.Size).filter(models.Size.size_id == db_batch.size_id).first()
     color = db.query(models.Color).filter(models.Color.color_id == db_batch.color_id).first()
@@ -358,12 +358,12 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
         current_phase=db_batch.current_phase,
         status=db_batch.status,
         is_second_degree=bool(db_batch.is_second_degree),
-        brand_name=brand.brand_name if brand else "",
+        client_name=brand.client_name if brand else "",
         model_name=model.model_name if model else "",
         size_value=size.size_value if size else "",
         color_name=color.color_name if color else "",
         phase_name=phase.phase_name if phase else "",
-        last_updated_at=db_batch.last_updated_at,
+        last_updated=db_batch.last_updated,
         archived_at=None
     )
 
@@ -455,7 +455,7 @@ def archive_batch(db: Session, batch_id: int):
         serial=batch_model.serial,
         current_phase=batch_model.current_phase,
         status=batch_model.status,
-        last_updated_at=batch_model.last_updated_at,
+        last_updated=batch_model.last_updated,
         is_second_degree=batch_model.is_second_degree,
         archived_at=sa_func.now()
     )
@@ -481,7 +481,7 @@ def archive_batches_bulk(db: Session, batch_ids: List[int]):
                 serial=batch_model.serial,
                 current_phase=batch_model.current_phase,
                 status=batch_model.status,
-                last_updated_at=batch_model.last_updated_at,
+                last_updated=batch_model.last_updated,
                 is_second_degree=batch_model.is_second_degree,
                 archived_at=sa_func.now()
             )
@@ -504,7 +504,7 @@ def archive_batches_bulk(db: Session, batch_ids: List[int]):
             job_order_id=archived_batch.job_order_id,
             job_order_number=job_order.job_order_number if job_order else "",
             barcode=archived_batch.barcode,
-            brand_id=job_order.brand_id if job_order else None,
+            client_id=job_order.client_id if job_order else None,
             model_id=job_order.model_id if job_order else None,
             size_id=archived_batch.size_id,
             color_id=archived_batch.color_id,
@@ -513,12 +513,12 @@ def archive_batches_bulk(db: Session, batch_ids: List[int]):
             serial=str(archived_batch.serial),
             current_phase=archived_batch.current_phase,
             status=archived_batch.status,
-            brand_name=job_order.brand.brand_name if job_order and job_order.brand else "",
+            client_name=job_order.brand.client_name if job_order and job_order.brand else "",
             model_name=job_order.model.model_name if job_order and job_order.model else "",
             size_value=size.size_value if size else "",
             color_name=color.color_name if color else "",
             phase_name=phase.phase_name if phase else "",
-            last_updated_at=archived_batch.last_updated_at,
+            last_updated=archived_batch.last_updated,
             archived_at=archived_batch.archived_at,
             is_second_degree=bool(archived_batch.is_second_degree)
         )
@@ -551,7 +551,7 @@ def delete_archived_batch(db: Session, batch_id: int):
             job_order_id=archived_batch.job_order_id,
             job_order_number=job_order.job_order_number if job_order else "",
             barcode=archived_batch.barcode,
-            brand_id=job_order.brand_id if job_order else None,
+            client_id=job_order.client_id if job_order else None,
             model_id=job_order.model_id if job_order else None,
             size_id=archived_batch.size_id,
             color_id=archived_batch.color_id,
@@ -560,12 +560,12 @@ def delete_archived_batch(db: Session, batch_id: int):
             serial=str(archived_batch.serial),
             current_phase=archived_batch.current_phase,
             status=archived_batch.status,
-            brand_name=job_order.brand.brand_name if job_order and job_order.brand else "",
+            client_name=job_order.brand.client_name if job_order and job_order.brand else "",
             model_name=job_order.model.model_name if job_order and job_order.model else "",
             size_value=size.size_value if size else "",
             color_name=color.color_name if color else "",
             phase_name=phase.phase_name if phase else "",
-            last_updated_at=archived_batch.last_updated_at,
+            last_updated=archived_batch.last_updated,
             archived_at=archived_batch.archived_at,
             is_second_degree=bool(archived_batch.is_second_degree)
         )
@@ -635,7 +635,7 @@ def recover_archived_batch(db: Session, batch_id: int):
         serial=archived_batch.serial,
         current_phase=archived_batch.current_phase,
         status=archived_batch.status,
-        last_updated_at=sa_func.now(),
+        last_updated=sa_func.now(),
         is_second_degree=archived_batch.is_second_degree
     )
     db.add(active_batch)
@@ -655,7 +655,7 @@ def recover_archived_batch(db: Session, batch_id: int):
         job_order_id=active_batch.job_order_id,
         job_order_number=job_order.job_order_number if job_order else "",
         barcode=active_batch.barcode,
-        brand_id=job_order.brand_id if job_order else None,
+        client_id=job_order.client_id if job_order else None,
         model_id=job_order.model_id if job_order else None,
         size_id=active_batch.size_id,
         color_id=active_batch.color_id,
@@ -664,12 +664,12 @@ def recover_archived_batch(db: Session, batch_id: int):
         serial=str(active_batch.serial),
         current_phase=active_batch.current_phase,
         status=active_batch.status,
-        brand_name=job_order.brand.brand_name if job_order and job_order.brand else "",
+        client_name=job_order.brand.client_name if job_order and job_order.brand else "",
         model_name=job_order.model.model_name if job_order and job_order.model else "",
         size_value=size.size_value if size else "",
         color_name=color.color_name if color else "",
         phase_name=phase.phase_name if phase else "",
-        last_updated_at=active_batch.last_updated_at,
+        last_updated=active_batch.last_updated,
         archived_at=None,
         is_second_degree=bool(active_batch.is_second_degree)
     )
@@ -727,7 +727,7 @@ def recover_archived_batches_bulk(db: Session, batch_ids: List[int]):
             
             if existing_batch:
                 for field in ['job_order_id', 'size_id', 'color_id', 'quantity', 
-                             'layers', 'serial', 'current_phase', 'status', 'last_updated_at', 'is_second_degree']:
+                             'layers', 'serial', 'current_phase', 'status', 'last_updated', 'is_second_degree']:
                     if hasattr(archived_batch, field):
                         setattr(existing_batch, field, getattr(archived_batch, field))
                 db.delete(archived_batch)
@@ -744,7 +744,7 @@ def recover_archived_batches_bulk(db: Session, batch_ids: List[int]):
                     serial=archived_batch.serial,
                     current_phase=archived_batch.current_phase,
                     status=archived_batch.status,
-                    last_updated_at=archived_batch.last_updated_at,
+                    last_updated=archived_batch.last_updated,
                     is_second_degree=archived_batch.is_second_degree
                 )
                 db.add(new_batch)
@@ -905,7 +905,7 @@ def get_detailed_events_by_batch(db: Session, batch_id: int, limit: int = 100):
     ).join(
         models.ProductionPhase, models.BarcodeScanEvent.phase_id == models.ProductionPhase.phase_id
     ).outerjoin(
-        models.User, models.BarcodeScanEvent.user_id == models.User.user_id
+        models.User, models.BarcodeScanEvent.user_id == models.User.id
     ).filter(
         models.BarcodeScanEvent.batch_id == batch_id
     ).order_by(models.BarcodeScanEvent.scanned_at.desc()).limit(limit).all()

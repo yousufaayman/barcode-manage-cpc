@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional, Union
 from .. import models, schemas
 from sqlalchemy import func, text
-from .brand import get_brand_by_name, create_brand
+from .client import get_client_by_name, create_client
 from .model import get_model_by_name, create_model
 from .color import get_color_by_name, create_color
 from .size import get_size_by_value, create_size
@@ -33,16 +33,20 @@ def create_job_order(db: Session, job_order: schemas.JobOrderCreate) -> models.J
         )
         db.add(db_item)
 
-    # Handle prints flags if provided
-    if getattr(job_order, 'prints', None) is not None:
-        db_prints = models.JobOrderPrint(
-            job_order_id=db_job_order.job_order_id,
-            **job_order.prints.model_dump()
-        )
-        db.add(db_prints)
+    # Handle print_config if provided
+    if getattr(job_order, 'print_config', None) is not None:
+        db_job_order.print_config = job_order.print_config.model_dump() if job_order.print_config else None
 
     db.commit()
     db.refresh(db_job_order)
+    
+    # Refresh summaries for the newly created job order
+    db.execute(text("SELECT ops.refresh_job_order_items_summary_for_jobs(ARRAY[:job_order_id])"), 
+               {"job_order_id": db_job_order.job_order_id})
+    db.execute(text("SELECT reporting.refresh_job_order_summary_for_jobs(ARRAY[:job_order_id])"), 
+               {"job_order_id": db_job_order.job_order_id})
+    db.commit()
+    
     return db_job_order
 
 def create_job_order_with_names(db: Session, job_order: schemas.JobOrderCreateWithNames) -> models.JobOrder:
@@ -50,16 +54,17 @@ def create_job_order_with_names(db: Session, job_order: schemas.JobOrderCreateWi
     if not model:
         model = create_model(db, schemas.ModelCreate(model_name=job_order.model_name))
     
-    brand = get_brand_by_name(db, job_order.brand_name)
-    if not brand:
-        brand = create_brand(db, schemas.BrandCreate(brand_name=job_order.brand_name))
+    client = get_client_by_name(db, job_order.client_name)
+    if not client:
+        client = create_client(db, schemas.ClientCreate(name=job_order.client_name))
     
     db_job_order = models.JobOrder(
         model_id=model.model_id,
-        brand_id=brand.brand_id,
+        client_id=client.client_id,
         job_order_number=job_order.job_order_number,
         image_url=job_order.image_url,  # Save uploaded image path
-        notes=job_order.notes
+        notes=job_order.notes,
+        print_config=job_order.print_config.model_dump() if job_order.print_config else None
         # date_created will be set automatically by the model
     )
     db.add(db_job_order)
@@ -103,15 +108,16 @@ def create_job_order_with_names(db: Session, job_order: schemas.JobOrderCreateWi
             )
             db.add(db_mat)
 
-    # handle prints flags
-    if job_order.prints is not None:
-        db_prints = models.JobOrderPrint(
-            job_order_id=db_job_order.job_order_id,
-            **job_order.prints.model_dump()
-        )
-        db.add(db_prints)
     db.commit()
     db.refresh(db_job_order)
+    
+    # Refresh summaries for the newly created job order
+    db.execute(text("SELECT ops.refresh_job_order_items_summary_for_jobs(ARRAY[:job_order_id])"), 
+               {"job_order_id": db_job_order.job_order_id})
+    db.execute(text("SELECT reporting.refresh_job_order_summary_for_jobs(ARRAY[:job_order_id])"), 
+               {"job_order_id": db_job_order.job_order_id})
+    db.commit()
+    
     return db_job_order
 
 def get_job_order(db: Session, job_order_id: int) -> Optional[models.JobOrder]:
@@ -156,18 +162,9 @@ def update_job_order(db: Session, job_order_id: int, job_order_update: schemas.J
                 if "notes" in item:
                     db_item.notes = item["notes"]
 
-    # Handle prints update
-    if job_order_update.prints is not None:
-        db_prints = db.query(models.JobOrderPrint).filter(models.JobOrderPrint.job_order_id == job_order_id).first()
-        if db_prints:
-            for field, value in job_order_update.prints.model_dump().items():
-                setattr(db_prints, field, value)
-        else:
-            db_prints = models.JobOrderPrint(
-                job_order_id=job_order_id,
-                **job_order_update.prints.model_dump()
-            )
-            db.add(db_prints)
+    # Handle print_config update
+    if job_order_update.print_config is not None:
+        db_job_order.print_config = job_order_update.print_config.model_dump() if job_order_update.print_config else None
     # Handle materials update
     if job_order_update.materials is not None:
         # Delete existing materials for this job order
@@ -447,21 +444,21 @@ def get_job_order_item_production_tracking(db: Session, item_id: int) -> Optiona
         models.JobOrder.job_order_id == item_summary.job_order_id
     ).first()
     
-    # Get model and brand details
+    # Get model and client details
     model = db.query(models.Model).filter(
         models.Model.model_id == job_order.model_id
     ).first()
     
-    brand = db.query(models.Brand).filter(
-        models.Brand.brand_id == job_order.brand_id
-    ).first() if job_order.brand_id else None
+    client = db.query(models.Client).filter(
+        models.Client.client_id == job_order.client_id
+    ).first() if job_order.client_id else None
     
     return {
         "item_id": item_summary.item_id,
         "job_order_id": item_summary.job_order_id,
         "job_order_number": job_order.job_order_number,
         "model_name": model.model_name if model else None,
-        "brand_name": brand.brand_name if brand else None,
+        "client_name": client.client_name if client else None,
         "color_id": item_summary.color_id,
         "color_name": item_summary.color_name,
         "size_id": item_summary.size_id,
@@ -498,21 +495,21 @@ def get_job_order_items_with_issues(db: Session, skip: int = 0, limit: int = 100
             models.JobOrder.job_order_id == item.job_order_id
         ).first()
         
-        # Get model and brand details
+        # Get model and client details
         model = db.query(models.Model).filter(
             models.Model.model_id == job_order.model_id
         ).first()
         
-        brand = db.query(models.Brand).filter(
-            models.Brand.brand_id == job_order.brand_id
-        ).first() if job_order.brand_id else None
+        client = db.query(models.Client).filter(
+            models.Client.client_id == job_order.client_id
+        ).first() if job_order.client_id else None
         
         result.append({
             "item_id": item.item_id,
             "job_order_id": item.job_order_id,
             "job_order_number": job_order.job_order_number,
             "model_name": model.model_name if model else None,
-            "brand_name": brand.brand_name if brand else None,
+            "client_name": client.client_name if client else None,
             "color_name": item.color_name,
             "size_value": item.size_value,
             "expected_quantity": item.expected_quantity,
@@ -552,14 +549,14 @@ def get_job_order_items_high_second_degree(db: Session, skip: int = 0, limit: in
             models.JobOrder.job_order_id == item.job_order_id
         ).first()
         
-        # Get model and brand details
+        # Get model and client details
         model = db.query(models.Model).filter(
             models.Model.model_id == job_order.model_id
         ).first()
         
-        brand = db.query(models.Brand).filter(
-            models.Brand.brand_id == job_order.brand_id
-        ).first() if job_order.brand_id else None
+        client = db.query(models.Client).filter(
+            models.Client.client_id == job_order.client_id
+        ).first() if job_order.client_id else None
         
         second_degree_percentage = (item.second_degree_quantity / item.produced_quantity) * 100
         
@@ -568,7 +565,7 @@ def get_job_order_items_high_second_degree(db: Session, skip: int = 0, limit: in
             "job_order_id": item.job_order_id,
             "job_order_number": job_order.job_order_number,
             "model_name": model.model_name if model else None,
-            "brand_name": brand.brand_name if brand else None,
+            "client_name": client.client_name if client else None,
             "color_name": item.color_name,
             "size_value": item.size_value,
             "produced_quantity": item.produced_quantity,
@@ -593,14 +590,14 @@ def get_job_order_items_with_quantity_reductions(db: Session, skip: int = 0, lim
             models.JobOrder.job_order_id == item.job_order_id
         ).first()
         
-        # Get model and brand details
+        # Get model and client details
         model = db.query(models.Model).filter(
             models.Model.model_id == job_order.model_id
         ).first()
         
-        brand = db.query(models.Brand).filter(
-            models.Brand.brand_id == job_order.brand_id
-        ).first() if job_order.brand_id else None
+        client = db.query(models.Client).filter(
+            models.Client.client_id == job_order.client_id
+        ).first() if job_order.client_id else None
         
         quantity_reduction = item.cut_quantity - item.produced_quantity
         
@@ -609,7 +606,7 @@ def get_job_order_items_with_quantity_reductions(db: Session, skip: int = 0, lim
             "job_order_id": item.job_order_id,
             "job_order_number": job_order.job_order_number,
             "model_name": model.model_name if model else None,
-            "brand_name": brand.brand_name if brand else None,
+            "client_name": client.client_name if client else None,
             "color_name": item.color_name,
             "size_value": item.size_value,
             "produced_quantity": item.produced_quantity,
@@ -743,7 +740,7 @@ def archive_job_order(db: Session, job_order_id: int):
         job_order_id=job_order.job_order_id,
         model_id=job_order.model_id,
         job_order_number=job_order.job_order_number,
-        brand_id=job_order.brand_id,
+        client_id=job_order.client_id,
         image_url=job_order.image_url,
         notes=job_order.notes,
         date_created=job_order.date_created,
@@ -819,7 +816,7 @@ def recover_archived_job_order(db: Session, job_order_id: int):
         job_order_id=archived_job_order.job_order_id,
         model_id=archived_job_order.model_id,
         job_order_number=archived_job_order.job_order_number,
-        brand_id=archived_job_order.brand_id,
+        client_id=archived_job_order.client_id,
         image_url=archived_job_order.image_url,
         notes=archived_job_order.notes,
         date_created=archived_job_order.date_created
@@ -1005,7 +1002,7 @@ def restore_job_order_item(db: Session, item_id: int):
                 serial=archived_batch.serial,
                 current_phase=archived_batch.current_phase,
                 status=archived_batch.status,
-                last_updated_at=func.now(),
+                last_updated=func.now(),
                 is_second_degree=archived_batch.is_second_degree
             )
             db.add(restored_batch)
@@ -1111,7 +1108,7 @@ def restore_job_order(db: Session, job_order_id: int):
             job_order_id=archived_job_order.job_order_id,
             model_id=archived_job_order.model_id,
             job_order_number=desired_job_order_number,
-            brand_id=archived_job_order.brand_id,
+            client_id=archived_job_order.client_id,
             image_url=archived_job_order.image_url,
             notes=archived_job_order.notes,
             date_created=archived_job_order.date_created
@@ -1218,7 +1215,7 @@ def restore_job_order(db: Session, job_order_id: int):
                 serial=archived_batch.serial,
                 current_phase=archived_batch.current_phase,
                 status=archived_batch.status,
-                last_updated_at=func.now(),
+                last_updated=func.now(),
                 is_second_degree=archived_batch.is_second_degree
             )
             db.add(restored_batch)

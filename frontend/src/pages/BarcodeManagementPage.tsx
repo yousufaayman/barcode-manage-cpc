@@ -18,8 +18,10 @@ interface Barcode {
   job_order_id: number;
   job_order_number?: string;
   barcode: string;
-  brand_id?: number;
+  brand_id: number;
   brand_name: string;
+  client_id?: number;
+  client_name?: string;
   model_id?: number;
   model_name: string;
   size_id?: number;
@@ -54,7 +56,7 @@ const BarcodeManagementPage: React.FC = () => {
   // Initialize filters with default phase based on user role
   const getInitialFilters = () => {
     if (user) {
-      if (user.role === 'Admin') {
+      if (user.role === 'admin') {
         return {
           barcode: '',
           brand: '',
@@ -255,13 +257,13 @@ const BarcodeManagementPage: React.FC = () => {
   // Helper function to get allowed phases for each role
   const getAllowedPhasesForRole = (role: string): number[] => {
     switch (role) {
-      case 'Admin':
+      case 'admin':
         return [1, 2, 3, 4, 7, 8]; // All phases: Cutting, Sewing lines 1-4, Packaging
-      case 'Cutting':
+      case 'cutting':
         return [1]; // Only cutting
-      case 'Sewing':
+      case 'sewing':
         return [2, 3, 4, 7, 8]; // All sewing lines (2,3,4,7) and packaging
-      case 'Packaging':
+      case 'packaging':
         return [8]; // Only packaging
       default:
         return [1]; // Default to cutting
@@ -486,7 +488,12 @@ const BarcodeManagementPage: React.FC = () => {
     { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 150, hidden: !showFullView },
     // Add barcode column
     { key: 'barcode', header: t('barcode.barcode'), width: 150, render: (item: Barcode) => item.barcode },
-    { key: 'brand_name', header: t('bulkBarcode.brand'), width: 70 },
+    {
+      key: 'brand_name',
+      header: t('bulkBarcode.client'),
+      width: 70,
+      render: (item: Barcode) => item.client_name || item.brand_name
+    },
     { key: 'model_name', header: t('bulkBarcode.model'), width: 100 },
     // Always show size_value column
     { key: 'size_value', header: t('bulkBarcode.size'), width: 70 },
@@ -546,7 +553,7 @@ const BarcodeManagementPage: React.FC = () => {
     ];
 
     // Only add actions column for admin users
-    if (user?.role === 'Admin') {
+    if (user?.role === 'admin') {
       baseColumns.push({
       key: 'actions',
       header: t('common.actions'),
@@ -575,7 +582,7 @@ const BarcodeManagementPage: React.FC = () => {
         </div>
       )
       });
-    } else if (user?.role === 'Creator') {
+    } else if (user?.role === 'creator') {
       baseColumns.push({
       key: 'actions',
       header: t('common.actions'),
@@ -655,8 +662,8 @@ const BarcodeManagementPage: React.FC = () => {
                 options={brandOptions}
                 value={filters.brand}
                 onChange={(value) => handleDropdownFilterChange('brand', value)}
-                placeholder={t('bulkBarcode.brand')}
-                label={t('bulkBarcode.brand')}
+                placeholder={t('bulkBarcode.client')}
+                label={t('bulkBarcode.client')}
               />
             </div>
             
@@ -708,7 +715,7 @@ const BarcodeManagementPage: React.FC = () => {
                 ) : (
                   phases
                     .filter(phase => {
-                      if (user?.role === 'Admin') return true;
+                      if (user?.role === 'admin') return true;
                       return getAllowedPhasesForRole(user?.role || '').includes(phase.phase_id);
                     })
                     .map(phase => (
@@ -751,7 +758,7 @@ const BarcodeManagementPage: React.FC = () => {
             </div>
             
             {/* Delete and Archive Buttons - moved here to be in same row as status filter */}
-            {user?.role === 'Admin' && (
+            {user?.role === 'admin' && (
               <div className="form-group">
                 <label className="text-sm font-medium text-gray-700">{t('common.actions')}</label>
                 <div className="flex gap-2">
@@ -774,7 +781,7 @@ const BarcodeManagementPage: React.FC = () => {
               </div>
             )}
             
-            {user?.role === 'Creator' && (
+            {user?.role === 'creator' && (
               <div className="form-group">
                 <label className="text-sm font-medium text-gray-700">{t('common.actions')}</label>
                 <div className="flex gap-2">
@@ -800,7 +807,7 @@ const BarcodeManagementPage: React.FC = () => {
           </div>
           
           {/* Print Controls - Only for Admins */}
-          {user?.role === 'Admin' && (
+          {user?.role === 'admin' && (
             <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
               <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
                 <div className="flex items-center space-x-2">

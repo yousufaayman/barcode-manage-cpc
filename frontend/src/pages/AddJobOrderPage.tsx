@@ -320,7 +320,7 @@ const AddJobOrderPage: React.FC = () => {
                   value={newJobOrder.brand_name}
                   onValueChange={(value) => setNewJobOrder(prev => ({ ...prev, brand_name: value }))}
                   options={existingBrands}
-                  placeholder={t('jobOrders.brandName')}
+                  placeholder={t('jobOrders.clientName')}
                   disabled={addLoading}
                 />
               </div>

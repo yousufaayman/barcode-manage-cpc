@@ -216,7 +216,7 @@ async def submit_bulk_barcodes(
             if existing_batch:
                 duplicate_barcodes.append({
                     "barcode": barcode.barcode,
-                    "brand": existing_batch.brand_name,
+                    "brand": existing_batch.client_name,
                     "model": existing_batch.model_name,
                     "size": existing_batch.size_value,
                     "color": existing_batch.color_name,
@@ -228,7 +228,7 @@ async def submit_bulk_barcodes(
         
         try:
             # Create the batch with user_id
-            db_batch = create_batch(db, barcode, user_id=current_user.user_id)
+            db_batch = create_batch(db, barcode, user_id=current_user.id)
             db.refresh(db_batch)  # Ensure all auto fields are loaded
             # Get the batch with all related data using CRUD function
             batch_response = get_batch(db, db_batch.batch_id)
@@ -236,7 +236,7 @@ async def submit_bulk_barcodes(
                 created_batches.append(batch_response)
             else:
                 # Fallback to manual construction if CRUD function fails
-                brand = get_brand(db, db_batch.brand_id)
+                brand = get_client(db, db_batch.client_id)
                 model = get_model(db, db_batch.model_id)
                 size = get_size(db, db_batch.size_id)
                 color = get_color(db, db_batch.color_id)
@@ -246,7 +246,7 @@ async def submit_bulk_barcodes(
                         job_order_id=db_batch.job_order_id,
                         job_order_number=None,
                         barcode=db_batch.barcode,
-                        brand_id=db_batch.brand_id,
+                        client_id=db_batch.client_id,
                         model_id=db_batch.model_id,
                         size_id=db_batch.size_id,
                         color_id=db_batch.color_id,
@@ -255,12 +255,12 @@ async def submit_bulk_barcodes(
                         serial=str(db_batch.serial),
                         current_phase=db_batch.current_phase,
                         status=db_batch.status,
-                        brand_name=brand.brand_name if brand else "",
+                        client_name=brand.client_name if brand else "",
                         model_name=model.model_name if model else "",
                         size_value=size.size_value if size else "",
                         color_name=color.color_name if color else "",
                         phase_name=phase.phase_name if phase else "",
-                        last_updated_at=db_batch.last_updated_at,
+                        last_updated=db_batch.last_updated,
                         archived_at=None
                     )
                 created_batches.append(batch_response)
@@ -448,7 +448,7 @@ async def validate_second_degree_batches(
                 from app.crud.helpers import generate_barcode_string
                 barcode = generate_barcode_string(
                     row_data["job_order_id"],
-                    job_order.brand_id or 0,
+                    job_order.client_id or 0,
                     job_order.model_id or 0,
                     row_data["size_id"],
                     row_data["color_id"],
@@ -460,7 +460,7 @@ async def validate_second_degree_batches(
                 # Create valid row with generated barcode
                 valid_row = {
                     "barcode": barcode,
-                    "brand": job_order.brand.brand_name if job_order.brand else "",
+                    "brand": job_order.brand.client_name if job_order.brand else "",
                     "model": job_order.model.model_name if job_order.model else "",
                     "size": job_order_item.size.size_value,
                     "color": job_order_item.color.color_name,
@@ -468,7 +468,7 @@ async def validate_second_degree_batches(
                     "layers": row_data["layers"],
                     "serial": f"{serial_number:03d}",
                     "status": "success",
-                    "brand_id": job_order.brand_id or 0,
+                    "client_id": job_order.client_id or 0,
                     "model_id": job_order.model_id or 0,
                     "size_id": row_data["size_id"],
                     "color_id": row_data["color_id"],

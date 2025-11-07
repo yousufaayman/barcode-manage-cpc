@@ -30,7 +30,7 @@ const queryClient = new QueryClient();
 
 const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
-  return user?.role === 'Admin' ? <>{children}</> : <Navigate to="/" />;
+  return user?.role === 'admin' ? <>{children}</> : <Navigate to="/" />;
 };
 
 const AppContent: React.FC = () => {
@@ -56,19 +56,19 @@ const AppContent: React.FC = () => {
           </Route>
           
           {/* Admin, Creator, and Cutting Only Routes */}
-          <Route element={<PrivateRoute allowedRoles={['Admin', 'Creator', 'Cutting']} />}>
+          <Route element={<PrivateRoute allowedRoles={['admin', 'creator', 'cutting']} />}>
             <Route path="/bulk-create" element={<BulkBarcodeCreatePage />} />
           </Route>
           
           {/* Admin and Creator Only Routes */}
-          <Route element={<PrivateRoute allowedRoles={['Admin', 'Creator']} />}>
+          <Route element={<PrivateRoute allowedRoles={['admin', 'creator']} />}>
             <Route path="/job-orders" element={<JobOrdersPage />} />
             <Route path="/add-job-order" element={<AddJobOrderPage />} />
             <Route path="/advanced-statistics" element={<AdvancedStatisticsPage />} />
           </Route>
           
           {/* Admin Only Routes */}
-          <Route element={<PrivateRoute allowedRoles={['Admin']} />}>
+          <Route element={<PrivateRoute allowedRoles={['admin']} />}>
             <Route path="/archive" element={<ArchivedBatchesPage />} />
             <Route path="/users" element={<UserManagementPage />} />
           </Route>

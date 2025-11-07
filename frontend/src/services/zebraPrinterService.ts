@@ -129,7 +129,7 @@ class ZebraPrinterService {
       return text.replace(/[\n\r\t]/g, ' ').replace(/[^\x20-\x7E]/g, '').trim();
     };
 
-    const textInfo = cleanText(`Brand: ${barcodeData.brand} | Model: ${barcodeData.model}`);
+    const textInfo = cleanText(`Client: ${barcodeData.brand} | Model: ${barcodeData.model}`);
     const textInfo2 = cleanText(`Color: ${barcodeData.color} | Qty: ${barcodeData.quantity} | Size: ${barcodeData.size}`);
     const cleanBarcode = cleanText(barcodeData.barcode);
 

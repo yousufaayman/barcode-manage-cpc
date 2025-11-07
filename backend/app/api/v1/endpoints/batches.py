@@ -16,12 +16,27 @@ class BatchListResponse(BaseModel):
 class BulkArchiveRequest(BaseModel):
     batch_ids: List[int]
 
-# Brand endpoints
-@router.get("/brands/", response_model=List[schemas.Brand])
+# Client endpoints (renamed from Brand)
+@router.get("/clients/", response_model=List[schemas.Client])
+def read_clients(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """Get all clients"""
+    clients = get_clients(db, skip=skip, limit=limit)
+    return clients
+
+# Backward compatibility - brands endpoint redirects to clients
+@router.get("/brands", response_model=List[schemas.BrandResponse])
+@router.get("/brands/", response_model=List[schemas.BrandResponse])
 def read_brands(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """Get all brands"""
-    brands = get_brands(db, skip=skip, limit=limit)
-    return brands
+    """Get all clients (backward compatibility for brands)"""
+    clients = get_clients(db, skip=skip, limit=limit)
+    # Transform client data to brand format for backward compatibility
+    return [
+        schemas.BrandResponse(
+            brand_name=client.client_name,
+            brand_id=client.client_id
+        )
+        for client in clients
+    ]
 
 # Model endpoints
 @router.get("/models/", response_model=List[schemas.Model])
@@ -50,7 +65,7 @@ def read_batches(
     skip: int = 0,
     limit: int = 100,
     barcode: str = None,
-    brand: str = None,
+    client: str = None,
     model: str = None,
     size: str = None,
     color: str = None,
@@ -66,7 +81,7 @@ def read_batches(
     """Get all batches with optional filtering"""
     # Require admin access for archived batches
     if archived:
-        if not current_user or current_user.role != "Admin":
+        if not current_user or not has_role_in_system(db=db, user_id=current_user.id, system_name="OPS", role="admin"):
             raise HTTPException(
                 status_code=403,
                 detail="Access denied. Admin privileges required to view archived batches."
@@ -79,7 +94,7 @@ def read_batches(
         # For archived batches, use outer joins since the referenced data might not exist
         query = db.query(
             base_table,
-            models.Brand.brand_name.label('brand_name'),
+            models.Client.client_name.label('client_name'),
             models.Model.model_name.label('model_name'),
             models.Size.size_value.label('size_value'),
             models.Color.color_name.label('color_name'),
@@ -89,8 +104,8 @@ def read_batches(
             models.JobOrder,
             base_table.job_order_id == models.JobOrder.job_order_id
         ).outerjoin(
-            models.Brand,
-            models.JobOrder.brand_id == models.Brand.brand_id
+            models.Client,
+            models.JobOrder.client_id == models.Client.client_id
         ).outerjoin(
             models.Model,
             models.JobOrder.model_id == models.Model.model_id
@@ -108,7 +123,7 @@ def read_batches(
         # For active batches, use regular joins
         query = db.query(
             base_table,
-            models.Brand.brand_name.label('brand_name'),
+            models.Client.client_name.label('client_name'),
             models.Model.model_name.label('model_name'),
             models.Size.size_value.label('size_value'),
             models.Color.color_name.label('color_name'),
@@ -118,8 +133,8 @@ def read_batches(
             models.JobOrder,
             base_table.job_order_id == models.JobOrder.job_order_id
         ).outerjoin(
-            models.Brand,
-            models.JobOrder.brand_id == models.Brand.brand_id
+            models.Client,
+            models.JobOrder.client_id == models.Client.client_id
         ).outerjoin(
             models.Model,
             models.JobOrder.model_id == models.Model.model_id
@@ -137,8 +152,8 @@ def read_batches(
     # Apply filters if provided
     if barcode:
         query = query.filter(base_table.barcode.ilike(f"%{barcode}%"))
-    if brand:
-        query = query.filter(models.Brand.brand_name == brand)
+    if client:
+        query = query.filter(models.Client.client_name == client)
     if model:
         query = query.filter(models.Model.model_name.ilike(f"%{model}%"))
     if size:
@@ -171,7 +186,7 @@ def read_batches(
                 job_order_id=batch[0].job_order_id,
                 job_order_number=batch[6] if batch[6] else f"JO-{batch[0].job_order_id}",
                 barcode=batch[0].barcode,
-                brand_id=getattr(batch[0], 'brand_id', None),
+                client_id=getattr(batch[0], 'client_id', None),
                 model_id=getattr(batch[0], 'model_id', None),
                 size_id=batch[0].size_id,
                 color_id=batch[0].color_id,
@@ -180,12 +195,12 @@ def read_batches(
                 serial=str(batch[0].serial),
                 current_phase=batch[0].current_phase,
                 status=batch[0].status,
-                brand_name=batch[1] if batch[1] else "Unknown",
+                client_name=batch[1] if batch[1] else "Unknown",
                 model_name=batch[2] if batch[2] else "Unknown",
                 size_value=batch[3] if batch[3] else "Unknown",
                 color_name=batch[4] if batch[4] else "Unknown",
                 phase_name=batch[5] if batch[5] else "Unknown",
-                last_updated_at=batch[0].last_updated_at,
+                last_updated=batch[0].last_updated,
                 archived_at=getattr(batch[0], 'archived_at', None) if archived else None,
                 is_second_degree=bool(batch[0].is_second_degree)
             )
@@ -288,7 +303,7 @@ def create_batch(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Create a new batch"""
-    batch = create_batch(db=db, batch=batch_in, user_id=current_user.user_id)
+    batch = create_batch(db=db, batch=batch_in, user_id=current_user.id)
     return batch
 
 @router.put("/{batch_id}", response_model=schemas.BatchResponse)
@@ -339,7 +354,7 @@ def delete_archived_batch(
 ):
     """Delete an archived batch"""
     # Require admin access for deleting archived batches
-    if not current_user or current_user.role != "Admin":
+    if not current_user or not has_role_in_system(db=db, user_id=current_user.id, system_name="OPS", role="admin"):
         raise HTTPException(
             status_code=403,
             detail="Access denied. Admin privileges required to delete archived batches."
@@ -360,7 +375,7 @@ def archive_batch(
 ):
     """Archive a batch by moving it to the archived_batches table"""
     # Require admin access for archiving
-    if not current_user or current_user.role != "Admin":
+    if not current_user or not has_role_in_system(db=db, user_id=current_user.id, system_name="OPS", role="admin"):
         raise HTTPException(
             status_code=403,
             detail="Access denied. Admin privileges required to archive batches."
@@ -382,7 +397,7 @@ def archive_batches_bulk_endpoint(
 ):
     """Archive multiple batches by moving them to the archived_batches table"""
     # Require admin access for archiving
-    if not current_user or current_user.role != "Admin":
+    if not current_user or not has_role_in_system(db=db, user_id=current_user.id, system_name="OPS", role="admin"):
         raise HTTPException(
             status_code=403,
             detail="Access denied. Admin privileges required to archive batches."
@@ -403,7 +418,7 @@ def recover_archived_batch_endpoint(
 ):
     """Recover an archived batch by moving it back to the active batches table"""
     # Require admin access for recovery
-    if not current_user or current_user.role != "Admin":
+    if not current_user or current_user.role != schemas.RoleEnum.ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Access denied. Admin privileges required to recover archived batches."
@@ -429,7 +444,7 @@ def recover_archived_batches_bulk_endpoint(
 ):
     """Recover multiple archived batches by moving them back to the active batches table"""
     # Require admin access for recovery
-    if not current_user or current_user.role != "Admin":
+    if not current_user or current_user.role != schemas.RoleEnum.ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Access denied. Admin privileges required to recover archived batches."
@@ -483,12 +498,12 @@ def get_archived_batches_detailed(
             models.JobOrder.job_order_id == batch.job_order_id
         ).first()
         
-        brand = None
+        client = None
         model = None
         if job_order:
-            brand = db.query(models.Brand).filter(
-                models.Brand.brand_id == job_order.brand_id
-            ).first() if job_order.brand_id else None
+            client = db.query(models.Client).filter(
+                models.Client.client_id == job_order.client_id
+            ).first() if job_order.client_id else None
             model = db.query(models.Model).filter(
                 models.Model.model_id == job_order.model_id
             ).first()
@@ -517,12 +532,12 @@ def get_archived_batches_detailed(
             serial=str(batch.serial),
             current_phase=batch.current_phase,
             status=batch.status,
-            brand_name=brand.brand_name if brand else None,
+            client_name=client.client_name if client else None,
             model_name=model.model_name if model else None,
             size_value=size.size_value if size else None,
             color_name=color.color_name if color else None,
             phase_name=phase.phase_name if phase else None,
-            last_updated_at=batch.last_updated_at,
+            last_updated=batch.last_updated,
             archived_at=batch.archived_at,
             is_second_degree=False  # Archived batches don't have this field
         ))
@@ -558,7 +573,7 @@ def update_batch_by_barcode(
         raise HTTPException(status_code=404, detail="Batch not found")
     
     try:
-        user_id = current_user.user_id if current_user else None
+        user_id = current_user.id if current_user else None
         updated_batch = update_batch(db=db, db_batch=db_batch_model, batch=batch_in, user_id=user_id)
         return updated_batch
     except Exception as e:
@@ -582,7 +597,7 @@ def transition_completed_phases(
     Note: Automatic transitions are handled by the database trigger 'handle_phase_transitions'
     for new status changes. This endpoint is for bulk transitions of existing batches.
     """
-    if not current_user or current_user.role != "Admin":
+    if not current_user or current_user.role != schemas.RoleEnum.ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Access denied. Admin privileges required."

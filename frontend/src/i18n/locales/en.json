@@ -39,7 +39,13 @@
     "clearing": "Clearing...",
     "complete": "Complete",
     "archive": "Archive",
-    "archiving": "Archiving..."
+    "archiving": "Archiving...",
+    "key": "Key",
+    "value": "Value",
+    "type": "Type",
+    "details": "Details",
+    "noEntries": "No entries",
+    "remove": "Remove"
   },
   "zebraPrinter": {
     "title": "Zebra Printer Configuration",
@@ -131,15 +137,15 @@
       "filters": {
         "jobOrderNumber": "Job Order Number",
         "model": "Model",
-        "brand": "Brand",
+        "client": "Client",
         "jobOrderNumberPlaceholder": "Search by number",
         "modelPlaceholder": "Search by model",
-        "brandPlaceholder": "Search brand"
+        "clientPlaceholder": "Search client"
       },
       "columns": {
         "number": "Number",
         "model": "Model",
-        "brand": "Brand",
+        "client": "Client",
         "expected": "Expected",
         "working": "Working",
         "completed": "Completed",
@@ -167,7 +173,7 @@
     "progress": "Progress",
     "layers": "Layers",
     "serial": "Serial",
-    "brand": "Brand",
+    "client": "Client",
     "model": "Model",
     "size": "Size",
     "color": "Color",
@@ -448,7 +454,7 @@
     "validationComplete": "Validation complete: {count} valid rows, {errors} rows with errors.",
     "allRowsValid": "All {count} rows are valid and ready for submission.",
     "rowNumber": "Row #",
-    "brand": "Client",
+    "client": "Client",
     "model": "Model",
     "size": "Size",
     "color": "Color",
@@ -459,7 +465,7 @@
     "selectJobOrder": "Select Job Order",
     "selectJobOrderPlaceholder": "Choose a job order...",
     "noModel": "No model",
-    "noBrand": "No brand",
+    "noClient": "No client",
     "referencedColors": "Referenced Colors",
     "referencedSizes": "Referenced Sizes",
     "errors": {
@@ -527,7 +533,7 @@
       "colorRequired": "Color is required for item {itemNumber}",
       "sizeRequired": "Size is required for item {itemNumber}",
       "quantityRequired": "Quantity must be greater than 0 for item {itemNumber}",
-      "brandNameRequired": "Brand name is required."
+      "clientNameRequired": "Client name is required."
     },
     "filters": {
       "jobOrderNumber": "Job Order Number",
@@ -546,11 +552,11 @@
       "addNew": "Add \"{value}\"",
       "noOptionsFound": "No options found."
     },
-    "brandName": "Brand Name",
+    "clientName": "Client Name",
     "placeholders": {
       "jobOrderNumber": "Search job order number...",
       "modelName": "Search model name...",
-      "brandName": "Search brand name..."
+      "clientName": "Search client name..."
     },
     "openOrders": "Open Job Orders",
     "loadingOpenOrders": "Loading open job orders...",
@@ -630,6 +636,13 @@
     "lostQuantityIssues": "Lost Quantity Issues",
     "completed": "Completed",
     "remainingQuantity": "Remaining Quantity",
-    "workingQty": "Working Qty"
+    "workingQty": "Working Qty",
+    "phaseDetails": "Phase Details",
+    "cutInspection": "Cut Inspection",
+    "secondDegreeCut": "Second Degree Cut",
+    "sewingIn": "Sewing In",
+    "sewingOut": "Sewing Out",
+    "packagingIn": "Packaging In",
+    "packagingOut": "Packaging Out"
   }
 } 

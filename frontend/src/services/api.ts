@@ -61,7 +61,7 @@ export interface LoginResponse {
 export interface User {
   id: number;
   username: string;
-  role: 'Admin' | 'Cutting' | 'Sewing' | 'Packaging' | 'Creator';
+  role: 'admin' | 'cutting' | 'sewing' | 'packaging' | 'creator';
 }
 
 export interface UserCreate {
@@ -85,7 +85,7 @@ export interface BarcodeData {
   model_id: number;
   size_id: number;
   color_id: number;
-  brand_name: string;
+  client_name: string;
   model_name: string;
   size_value: string;
   color_name: string;
@@ -220,18 +220,18 @@ export interface WIPStat {
   completed: number;
 }
 
-export interface WIPByBrandStat {
+export interface WIPByClientStat {
   brand_id: number;
-  brand_name: string;
+  client_name: string;
   pending: number;
   in_progress: number;
   completed: number;
   total: number;
 }
 
-export interface WorkingPhaseByBrandStat {
+export interface WorkingPhaseByClientStat {
   brand_id: number;
-  brand_name: string;
+  client_name: string;
   phase_id: number;
   phase_name: string;
   pending: number;
@@ -244,7 +244,7 @@ export interface WorkingPhaseByModelStat {
   model_id: number;
   model_name: string;
   brand_id: number;
-  brand_name: string;
+  client_name: string;
   phase_id: number;
   phase_name: string;
   pending: number;
@@ -261,8 +261,8 @@ export interface AdvancedStatisticsResponse {
   status_distribution: StatusDistribution[];
   average_batch_size: number;
   current_wip: WIPStat[];
-  wip_by_brand: WIPByBrandStat[];
-  working_phase_by_brand: WorkingPhaseByBrandStat[];
+  wip_by_client: WIPByClientStat[];
+  working_phase_by_client: WorkingPhaseByClientStat[];
   working_phase_by_model: WorkingPhaseByModelStat[];
   // Add other stats as they are implemented
   [key: string]: any; // Allow other properties for now
@@ -277,9 +277,9 @@ export interface ProductionStatisticsResponse {
     completed: number;
     total: number;
   }>;
-  production_by_brand: Array<{
+  production_by_client: Array<{
     brand_id: number;
-    brand_name: string;
+    client_name: string;
     pending: number;
     in_progress: number;
     completed: number;
@@ -289,7 +289,7 @@ export interface ProductionStatisticsResponse {
   production_by_model: Array<{
     model_id: number;
     model_name: string;
-    brand_name: string;
+    client_name: string;
     pending: number;
     in_progress: number;
     completed: number;
@@ -303,7 +303,7 @@ export interface ProductionStatisticsResponse {
   }>;
   bottlenecks: Array<{
     phase_name: string;
-    brand_name: string;
+    client_name: string;
     model_name: string;
     pending_count: number;
     total_quantity: number;
@@ -323,10 +323,10 @@ export interface ProductionStatisticsResponse {
   };
 }
 
-export interface BrandStatisticsResponse {
-  brand_info: {
+export interface ClientStatisticsResponse {
+  client_info: {
     brand_id: number;
-    brand_name: string;
+    client_name: string;
   };
   phases: Array<{
     phase_id: number;
@@ -352,7 +352,7 @@ export interface ModelStatisticsResponse {
   model_info: {
     model_id: number;
     model_name: string;
-    brand_name: string;
+    client_name: string;
   };
   phases: Array<{
     phase_id: number;
@@ -460,7 +460,7 @@ export interface JobOrder {
   job_order_number: string;
   model_name?: string;
   brand_id?: number;
-  brand_name?: string;
+  client_name?: string;
   items: JobOrderItem[];
   total_working_quantity?: number;
   notes?: string;
@@ -533,7 +533,7 @@ export interface JobOrderSummary {
   job_order_id: number;
   job_order_number: string;
   model_name?: string;
-  brand_name?: string;
+  client_name?: string;
   total_items: number;
   total_expected_quantity: number;
   total_produced_quantity: number;
@@ -566,10 +566,17 @@ export interface JobOrderItemSummary {
   expected_quantity: number;
   produced_quantity: number;
   cut_quantity: number;
+  cut_inspection_qty: number;
+  second_degree_cut_qty: number;
+  sewing_in_qty: number;
+  sewing_out_qty: number;
+  packaging_in_qty: number;
+  packaging_out_qty: number;
   second_degree_quantity: number;
   completed_quantity: number;
   working_quantity: number;
   remaining_quantity: number;
+  lost_qty: number;
   total_batches: number;
   has_issues: boolean;
   completion_percentage: number;
@@ -679,7 +686,7 @@ export const barcodeApi = {
     skip?: number;
     limit?: number;
     barcode?: string;
-    brand?: string;
+    client?: string;
     model?: string;
     size?: string;
     color?: string;
@@ -854,15 +861,15 @@ export const jobOrderApi = {
     limit?: number;
     job_order_number?: string;
     model_name?: string;
-    brand_name?: string;
+    client_name?: string;
     issues_first?: boolean;
   }): Promise<JobOrderListResponse> => {
     const response = await api.get<JobOrderListResponse>('/job-orders/', { params });
     return response.data;
   },
 
-  getAllSimple: async (): Promise<{job_order_id: number, job_order_number: string, model_name: string | null, brand_name: string | null}[]> => {
-    const response = await api.get<{job_order_id: number, job_order_number: string, model_name: string | null, brand_name: string | null}[]>('/job-orders/simple/');
+  getAllSimple: async (): Promise<{job_order_id: number, job_order_number: string, model_name: string | null, client_name: string | null}[]> => {
+    const response = await api.get<{job_order_id: number, job_order_number: string, model_name: string | null, client_name: string | null}[]>('/job-orders/simple/');
     return response.data;
   },
 
@@ -1071,8 +1078,8 @@ export const statisticsApi = {
     return response.data;
   },
 
-  getBrandStatistics: async (brandId: number): Promise<BrandStatisticsResponse> => {
-    const response = await api.get<BrandStatisticsResponse>(`/statistics/brand/${brandId}`);
+  getClientStatistics: async (clientId: number): Promise<ClientStatisticsResponse> => {
+    const response = await api.get<ClientStatisticsResponse>(`/statistics/client/${clientId}`);
     return response.data;
   },
 

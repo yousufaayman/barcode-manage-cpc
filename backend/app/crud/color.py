@@ -4,8 +4,8 @@ from .. import models, schemas
 def get_color(db: Session, color_id: int):
     return db.query(models.Color).filter(models.Color.color_id == color_id).first()
 
-def get_color_by_name(db: Session, color_name: str):
-    return db.query(models.Color).filter(models.Color.color_name == color_name).first()
+def get_color_by_name(db: Session, name: str):
+    return db.query(models.Color).filter(models.Color.color_name == name).first()
 
 def get_colors(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.Color).offset(skip).limit(limit).all()

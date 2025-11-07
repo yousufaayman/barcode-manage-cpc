@@ -38,17 +38,10 @@ const JobOrderDetailsPage: React.FC = () => {
   const [editLoading, setEditLoading] = useState(false);
   const [editNotes, setEditNotes] = useState<string>('');
   const [editMaterials, setEditMaterials] = useState<Array<{material_name: string, color_name: string, quantity: number, notes?: string}>>([]);
-  const [editPrints, setEditPrints] = useState({
-    chest: false,
-    back: false,
-    waist: false,
-    right_leg: false,
-    left_leg: false,
-    pocket: false,
-    hood: false,
-    right_arm: false,
-    left_arm: false,
-  });
+  const [editPrints, setEditPrints] = useState<{
+    type: string;
+    details: Record<string, string>;
+  } | null>(null);
   // Removed: confirmDialogOpen, confirmAction (close/reopen state)
 
   // Print copies state
@@ -124,8 +117,7 @@ const JobOrderDetailsPage: React.FC = () => {
   const generatePrintHTML = () => {
     if (!viewJobOrder) return '';
     console.log('Job Order for printing:', viewJobOrder);
-    console.log('Brand name:', viewJobOrder.brand_name);
-    console.log('Brand ID:', viewJobOrder.brand_id);
+    console.log('Client name:', viewJobOrder.client_name);
     const colors: string[] = Array.from(new Set(viewJobOrder.items.map((it: any) => it.color_name)));
     const sizes: string[] = Array.from(new Set(viewJobOrder.items.map((it: any) => it.size_value)));
 
@@ -147,20 +139,22 @@ const JobOrderDetailsPage: React.FC = () => {
     const matsHTML = materials.map((m: any) => `<tr><td style="border:1px solid #000;padding:4px;">${m.material_name}</td><td style="border:1px solid #000;padding:4px;">${m.color_name || '-'}</td><td style="border:1px solid #000;padding:4px;text-align:center;font-weight:bold;">${m.quantity}</td></tr>`).join('');
 
     // Printing sections
-    const printFlags: [keyof typeof viewJobOrder.prints, string][] = [
-      ['chest', t('jobOrderDetails.chest')],
-      ['back', t('jobOrderDetails.back')],
-      ['waist', t('jobOrderDetails.waist')],
-      ['right_leg', t('jobOrderDetails.rightLeg')],
-      ['left_leg', t('jobOrderDetails.leftLeg')],
-      ['pocket', t('jobOrderDetails.pocket')],
-      ['hood', t('jobOrderDetails.hood')],
-    ];
-    const activePrints = printFlags.filter(([k]) => viewJobOrder.prints?.[k]).map(([_, lbl]) => lbl).join(', ');
+    let printConfigHTML = '';
+    if (viewJobOrder.prints && viewJobOrder.prints.type && viewJobOrder.prints.details) {
+      const printDetails = Object.entries(viewJobOrder.prints.details).map(([key, value]) => 
+        `<tr><td style="border:1px solid #000;padding:4px;">${key}</td><td style="border:1px solid #000;padding:4px;">${value}</td></tr>`
+      ).join('');
+      printConfigHTML = `
+        <h4 style="margin:6px 0 2px 0;">${t('jobOrderDetails.printingDetails')} (${viewJobOrder.prints.type})</h4>
+        <table style="width:100%;border-collapse:collapse;font-size:10pt;">
+          <thead><tr><th style="border:1px solid #000;padding:4px;">${t('common.key')}</th><th style="border:1px solid #000;padding:4px;">${t('common.value')}</th></tr></thead>
+          <tbody>${printDetails}</tbody>
+        </table>`;
+    }
 
     return `
       <div class="print-job-order" style="width:100%;border:1px solid #000;margin-bottom:2mm;padding:3mm;box-sizing:border-box;">
-        <p style="margin:0 0 2px 0;font-weight:bold;">${t('jobOrders.brandName')}: ${viewJobOrder.brand_name || viewJobOrder.brand_id || '-'}</p>
+        <p style="margin:0 0 2px 0;font-weight:bold;">${t('jobOrders.clientName')}: ${viewJobOrder.client_name || '-'}</p>
         <p style="margin:0 0 2px 0;">${t('jobOrders.modelName')}: ${viewJobOrder.model_name || '-'}</p>
         <p style="margin:0 0 4px 0;font-size:10pt;">${t('jobOrders.jobOrderNumber')}: ${viewJobOrder.job_order_number}</p>
         ${viewJobOrder.date_created ? `<p style="margin:0 0 4px 0;font-size:10pt;">${t('jobOrderDetails.dateCreated')}: ${format(new Date(viewJobOrder.date_created), 'yyyy-MM-dd HH:mm')}</p>` : ''}
@@ -189,12 +183,13 @@ const JobOrderDetailsPage: React.FC = () => {
           <tbody>${matsHTML}</tbody>
         </table>` : ''}
 
+        ${printConfigHTML}
+
         <div style="display:flex;align-items:flex-start;gap:4mm;margin-top:3px;">
           ${viewJobOrder.image_url ? `<img src="${getPublicImageUrl(viewJobOrder.image_url)}" alt="img" style="width:55mm;height:45mm;object-fit:fill;border:1px solid #000;"/>` : ''}
-          ${(activePrints || viewJobOrder.notes) ? `
+          ${viewJobOrder.notes ? `
           <div style="border:1px solid #000;padding:3px;font-size:9pt;flex:1;">
-            ${activePrints ? `<p style="margin:0 0 2px 0;"><strong>${t('jobOrderDetails.printingDetails')}:</strong> ${activePrints}</p>` : ''}
-            ${viewJobOrder.notes ? `<p style="margin:0;"><strong>${t('jobOrderDetails.notes')}</strong> ${viewJobOrder.notes}</p>` : ''}
+            <p style="margin:0;"><strong>${t('jobOrderDetails.notes')}</strong> ${viewJobOrder.notes}</p>
           </div>` : ''}
         </div>
       </div>`;
@@ -226,26 +221,9 @@ const JobOrderDetailsPage: React.FC = () => {
   };
 
   useEffect(() => {
-    const fetchData = async (forceRefresh = false) => {
+    const fetchData = async () => {
       setViewLoading(true);
       try {
-        // If force refresh is requested, refresh the summary data first
-        if (forceRefresh) {
-          try {
-            await jobOrderApi.refreshItemSummaries(Number(jobOrderId));
-            // Only show success toast for manual refreshes, not auto-refresh
-            if (!isInitialLoad) {
-              toast({
-                title: t('common.success'),
-                description: 'Data refreshed successfully',
-              });
-            }
-          } catch (refreshError) {
-            console.warn('Failed to refresh summary data:', refreshError);
-            // Continue with fetching even if refresh fails
-          }
-        }
-        
         const jobOrder = await jobOrderApi.getById(Number(jobOrderId));
         setViewJobOrder(jobOrder);
         
@@ -297,9 +275,7 @@ const JobOrderDetailsPage: React.FC = () => {
       }
     };
     if (jobOrderId) {
-      // Only auto-refresh on initial page load, not when edit dialog opens
-      const shouldRefresh = isInitialLoad && !editDialogOpen;
-      fetchData(shouldRefresh);
+      fetchData();
       if (isInitialLoad) {
         setIsInitialLoad(false);
       }
@@ -371,6 +347,17 @@ const JobOrderDetailsPage: React.FC = () => {
       
       setEditConsumptionValues(newConsumptionValues);
       setEditBulkConsumption(newBulkConsumption);
+      
+      // Initialize print config
+      if (fullJobOrder.prints && fullJobOrder.prints.type && fullJobOrder.prints.details) {
+        setEditPrints({
+          type: fullJobOrder.prints.type,
+          details: { ...fullJobOrder.prints.details }
+        });
+      } else {
+        setEditPrints(null);
+      }
+      
       setEditDialogOpen(true);
     } catch (error) {
       console.error('Error fetching job order details:', error);
@@ -419,19 +406,12 @@ const JobOrderDetailsPage: React.FC = () => {
         })),
         notes: editNotes,
       };
-      // Only include prints if changed
-      if (JSON.stringify(editPrints) !== JSON.stringify({
-        chest: editingJobOrder.prints?.chest || false,
-        back: editingJobOrder.prints?.back || false,
-        waist: editingJobOrder.prints?.waist || false,
-        right_leg: editingJobOrder.prints?.right_leg || false,
-        left_leg: editingJobOrder.prints?.left_leg || false,
-        pocket: editingJobOrder.prints?.pocket || false,
-        hood: editingJobOrder.prints?.hood || false,
-        right_arm: editingJobOrder.prints?.right_arm || false,
-        left_arm: editingJobOrder.prints?.left_arm || false,
-      })) {
-        updateData.prints = editPrints;
+      // Include print config if provided or if it was removed
+      const originalPrints = editingJobOrder.prints && editingJobOrder.prints.type 
+        ? { type: editingJobOrder.prints.type, details: editingJobOrder.prints.details || {} }
+        : null;
+      if (JSON.stringify(editPrints) !== JSON.stringify(originalPrints)) {
+        updateData.print_config = editPrints;
       }
       // Include materials only if provided
       if (consumptionProvided) {
@@ -485,17 +465,7 @@ const JobOrderDetailsPage: React.FC = () => {
     setEditItems([]);
     setEditNotes('');
     setEditMaterials([]);
-    setEditPrints({
-      chest: false,
-      back: false,
-      waist: false,
-      right_leg: false,
-      left_leg: false,
-      pocket: false,
-      hood: false,
-      right_arm: false,
-      left_arm: false,
-    });
+    setEditPrints(null);
   };
   const handleAddMaterial = () => {
     setEditMaterials([...editMaterials, { material_name: '', color_name: '', quantity: 0 }]);
@@ -635,18 +605,6 @@ const JobOrderDetailsPage: React.FC = () => {
     }
   };
 
-  // Print options array for the edit dialog
-  const printOptions: [keyof typeof editPrints, string][] = [
-    ['chest', t('jobOrderDetails.chest')],
-    ['back', t('jobOrderDetails.back')],
-    ['waist', t('jobOrderDetails.waist')],
-    ['right_leg', t('jobOrderDetails.rightLeg')],
-    ['left_leg', t('jobOrderDetails.leftLeg')],
-    ['pocket', t('jobOrderDetails.pocket')],
-    ['hood', t('jobOrderDetails.hood')],
-    ['right_arm', t('jobOrderDetails.rightArm')],
-    ['left_arm', t('jobOrderDetails.leftArm')],
-  ];
 
   // Helper to group items by color
   const groupItemsByColor = (items: any[]) => {
@@ -747,7 +705,7 @@ const JobOrderDetailsPage: React.FC = () => {
               </Button>
               
               {/* Archive Button - Only for Admin users */}
-              {user?.role === 'Admin' && (
+              {user?.role === 'admin' && (
                 <Button
                   variant="outline"
                   onClick={handleArchiveJobOrder}
@@ -792,8 +750,8 @@ const JobOrderDetailsPage: React.FC = () => {
         <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <h3 className="text-lg font-semibold text-blue-800 mb-2">{t('jobOrders.brandName')}</h3>
-              <p className="text-blue-900">{viewJobOrder.brand_name || '-'}</p>
+              <h3 className="text-lg font-semibold text-blue-800 mb-2">{t('jobOrders.clientName')}</h3>
+              <p className="text-blue-900">{viewJobOrder.client_name || '-'}</p>
             </div>
             <div>
               <h3 className="text-lg font-semibold text-blue-800 mb-2">{t('jobOrders.modelName')}</h3>
@@ -924,21 +882,20 @@ const JobOrderDetailsPage: React.FC = () => {
               </div>
             );
           })()}
-          <div className="overflow-x-auto">
+          {/* Summary Table */}
+          <div className="overflow-x-auto mb-6">
             <table className="min-w-full border rounded-lg overflow-hidden shadow-sm">
               <thead className="bg-gray-100 text-gray-800">
                 <tr>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.color')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.size')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.expected')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.cutQuantity')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.workingQty')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.secondDegree')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.lostQuantity')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.remainingQuantity')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.completed')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.cuttingDifference')}</th>
-                  {user?.role === 'Admin' && (
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.secondDegree')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.lostQuantity')}</th>
+                  {user?.role === 'admin' && (
                     <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">Actions</th>
                   )}
                 </tr>
@@ -950,13 +907,10 @@ const JobOrderDetailsPage: React.FC = () => {
                   
                   return Object.entries(groupedItems).map(([color, items]) => {
                     const colorRows = items.map((item, itemIdx) => {
-                      const producedColor = item.produced_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
-                      const cutColor = item.cut_quantity > item.produced_quantity ? 'text-purple-600 font-bold' : 'text-blue-600 font-medium';
                       const secondDegreeColor = item.second_degree_quantity > 0 ? 'text-orange-600 font-medium' : 'text-gray-500';
                       const completedColor = item.completed_quantity > 0 ? 'text-green-600 font-semibold' : 'text-gray-500';
                       const remainingColor = item.remaining_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
                       
-                      // Detect all issues for this item
                       const issues = detectIssues(item);
                       const hasIssues = issues.length > 0;
                       
@@ -965,12 +919,6 @@ const JobOrderDetailsPage: React.FC = () => {
                         rowBackgroundClass = 'bg-red-100 hover:bg-red-200 border-l-4 border-l-red-600 shadow-sm';
                       }
                       
-                      // Enhanced cut quantity styling for rows with issues
-                      const enhancedCutColor = hasIssues 
-                        ? 'text-red-700 font-bold'
-                        : cutColor;
-                      
-                      // Enhanced cutting difference styling for rows with issues
                       const enhancedCuttingDiffColor = hasIssues 
                         ? 'text-red-700 font-bold'
                         : remainingColor;
@@ -988,14 +936,12 @@ const JobOrderDetailsPage: React.FC = () => {
                           </td>
                           <td className="px-4 py-2 border-b border-gray-200">{item.size_value}</td>
                           <td className="px-4 py-2 border-b border-gray-200 text-right font-medium">{item.expected_quantity}</td>
-                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${enhancedCutColor}`}>{item.cut_quantity}</td>
-                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${producedColor}`}>{item.produced_quantity}</td>
-                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${secondDegreeColor}`}>{item.second_degree_quantity}</td>
-                          <td className="px-4 py-2 border-b border-gray-200 text-right font-semibold text-orange-700">{item.cut_quantity > item.produced_quantity ? (item.cut_quantity - item.produced_quantity) : 0}</td>
-                          <td className="px-4 py-2 border-b border-gray-200 text-right font-medium">{item.expected_quantity - item.completed_quantity}</td>
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${remainingColor}`}>{item.remaining_quantity}</td>
                           <td className={`px-4 py-2 border-b border-gray-200 text-right ${completedColor}`}>{item.completed_quantity}</td>
                           <td className={`px-4 py-2 border-b border-gray-200 text-right ${enhancedCuttingDiffColor}`}>{item.cut_quantity - item.expected_quantity > 0 ? '+' : ''}{item.cut_quantity - item.expected_quantity}</td>
-                          {user?.role === 'Admin' && (
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${secondDegreeColor}`}>{item.second_degree_quantity}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right font-semibold text-orange-700">{item.lost_qty || 0}</td>
+                          {user?.role === 'admin' && (
                             <td className="px-4 py-2 border-b border-gray-200 text-center">
                               <button
                                 onClick={() => handleArchiveItem(item.item_id)}
@@ -1007,6 +953,76 @@ const JobOrderDetailsPage: React.FC = () => {
                               </button>
                             </td>
                           )}
+                        </tr>
+                      );
+                    });
+                    
+                    return colorRows;
+                  }).flat();
+                })()}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Phase Details Table */}
+          <div className="overflow-x-auto">
+            <h3 className="text-lg font-semibold mb-3 text-gray-800">{t('jobOrderDetails.phaseDetails')}</h3>
+            <table className="min-w-full border rounded-lg overflow-hidden shadow-sm">
+              <thead className="bg-gray-100 text-gray-800">
+                <tr>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.color')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.size')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.expected')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.cutQuantity')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.cutInspection')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.secondDegreeCut')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.sewingIn')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.sewingOut')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.packagingIn')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.packagingOut')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(() => {
+                  const groupedItems = groupItemsByColor(viewTrackingData);
+                  let rowIndex = 0;
+                  
+                  return Object.entries(groupedItems).map(([color, items]) => {
+                    const colorRows = items.map((item, itemIdx) => {
+                      const cutColor = item.cut_quantity > item.produced_quantity ? 'text-purple-600 font-bold' : 'text-blue-600 font-medium';
+                      
+                      const issues = detectIssues(item);
+                      const hasIssues = issues.length > 0;
+                      
+                      let rowBackgroundClass = rowIndex % 2 === 0 ? 'bg-white' : 'bg-gray-200 hover:bg-gray-300';
+                      if (hasIssues) {
+                        rowBackgroundClass = 'bg-red-100 hover:bg-red-200 border-l-4 border-l-red-600 shadow-sm';
+                      }
+                      
+                      const enhancedCutColor = hasIssues 
+                        ? 'text-red-700 font-bold'
+                        : cutColor;
+                      
+                      rowIndex++;
+                      
+                      return (
+                        <tr key={`phase-${item.item_id}-${itemIdx}`} className={`${rowBackgroundClass} transition-colors`}>
+                          <td className="px-4 py-2 border-b border-gray-200">
+                            {itemIdx === 0 ? (
+                              <div className="font-semibold text-gray-800">{color}</div>
+                            ) : (
+                              <div className="text-gray-500 text-sm">└─</div>
+                            )}
+                          </td>
+                          <td className="px-4 py-2 border-b border-gray-200">{item.size_value}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right font-medium">{item.expected_quantity}</td>
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${enhancedCutColor}`}>{item.cut_quantity}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right">{item.cut_inspection_qty || 0}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right text-orange-600">{item.second_degree_cut_qty || 0}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right">{item.sewing_in_qty || 0}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right">{item.sewing_out_qty || 0}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right">{item.packaging_in_qty || 0}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right">{item.packaging_out_qty || 0}</td>
                         </tr>
                       );
                     });
@@ -1044,31 +1060,29 @@ const JobOrderDetailsPage: React.FC = () => {
           )}
 
           {/* Printing Details */}
-          {(() => {
-            const printOptions: [keyof typeof viewJobOrder.prints, string][] = [
-              ['chest', t('jobOrderDetails.chest')],
-              ['back', t('jobOrderDetails.back')],
-              ['waist', t('jobOrderDetails.waist')],
-              ['right_leg', t('jobOrderDetails.rightLeg')],
-              ['left_leg', t('jobOrderDetails.leftLeg')],
-              ['pocket', t('jobOrderDetails.pocket')],
-              ['hood', t('jobOrderDetails.hood')],
-            ];
-            const activePrints = printOptions.filter(([key]) => viewJobOrder?.prints?.[key]);
-            if (activePrints.length === 0) return null;
-            return (
-              <div className="mt-8">
-                <h3 className="text-lg font-semibold mb-2">{t('jobOrderDetails.printingDetails')}</h3>
-                <div className="flex flex-wrap gap-2 text-sm">
-                  {activePrints.map(([key, label]) => (
-                    <div key={String(key)} className="flex items-center gap-1 bg-green-50 text-green-700 px-2 py-1 rounded border border-green-200">
-                      ✔️ <span>{label}</span>
-                    </div>
-                  ))}
-                </div>
+          {viewJobOrder.prints && viewJobOrder.prints.type && viewJobOrder.prints.details && Object.keys(viewJobOrder.prints.details).length > 0 && (
+            <div className="mt-8">
+              <h3 className="text-lg font-semibold mb-2">{t('jobOrderDetails.printingDetails')} ({viewJobOrder.prints.type})</h3>
+              <div className="overflow-x-auto">
+                <table className="min-w-full border rounded-lg overflow-hidden text-sm">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="px-4 py-2 border-b text-left">{t('common.key')}</th>
+                      <th className="px-4 py-2 border-b text-left">{t('common.value')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(viewJobOrder.prints.details).map(([key, value], idx) => (
+                      <tr key={key} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="px-4 py-2 border-b">{key}</td>
+                        <td className="px-4 py-2 border-b">{value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            );
-          })()}
+            </div>
+          )}
         </div>
       ) : (
         <div className="text-center py-10 text-red-600">{t('jobOrderDetails.notFound')}</div>
@@ -1118,21 +1132,107 @@ const JobOrderDetailsPage: React.FC = () => {
 
               {/* Printing Details Section */}
               <div>
-                <h3 className="text-lg font-semibold mb-2">{t('jobOrderDetails.printingDetails')}</h3>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  {printOptions.map(([key, label]) => (
-                    <label key={key} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={editPrints[key]}
-                        onChange={e => setEditPrints(prev => ({ ...prev, [key]: e.target.checked }))}
-                        disabled={editLoading}
-                        className="rounded"
-                      />
-                      <span className="text-sm">{label}</span>
-                    </label>
-                  ))}
+                <div className="flex justify-between items-center mb-2">
+                  <h3 className="text-lg font-semibold">{t('jobOrderDetails.printingDetails')}</h3>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      onClick={() => setEditPrints(editPrints ? null : { type: 'Printing', details: {} })}
+                      disabled={editLoading}
+                      variant="outline"
+                      size="sm"
+                    >
+                      {editPrints ? t('common.remove') : t('common.add')}
+                    </Button>
+                  </div>
                 </div>
+                {editPrints && (
+                  <div className="space-y-3 border rounded-lg p-4">
+                    <div>
+                      <Label>{t('common.type')}</Label>
+                      <select
+                        value={editPrints.type}
+                        onChange={e => setEditPrints(prev => prev ? { ...prev, type: e.target.value } : null)}
+                        disabled={editLoading}
+                        className="w-full border rounded px-3 py-2 mt-1"
+                      >
+                        <option value="Printing">Printing</option>
+                        <option value="Embroidery">Embroidery</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="flex justify-between items-center mb-2">
+                        <Label>{t('common.details')}</Label>
+                        <Button
+                          type="button"
+                          onClick={() => {
+                            if (editPrints) {
+                              const key = prompt('Enter key name:');
+                              if (key && key.trim()) {
+                                setEditPrints({
+                                  ...editPrints,
+                                  details: { ...editPrints.details, [key.trim()]: '' }
+                                });
+                              }
+                            }
+                          }}
+                          disabled={editLoading || !editPrints}
+                          variant="outline"
+                          size="sm"
+                        >
+                          {t('common.add')} {t('common.key')}
+                        </Button>
+                      </div>
+                      {Object.keys(editPrints.details).length > 0 ? (
+                        <div className="space-y-2">
+                          {Object.entries(editPrints.details).map(([key, value]) => (
+                            <div key={key} className="flex gap-2 items-center">
+                              <Input
+                                value={key}
+                                onChange={e => {
+                                  const newDetails = { ...editPrints!.details };
+                                  delete newDetails[key];
+                                  newDetails[e.target.value] = value;
+                                  setEditPrints({ ...editPrints!, details: newDetails });
+                                }}
+                                disabled={editLoading}
+                                className="flex-1"
+                                placeholder={t('common.key')}
+                              />
+                              <Input
+                                value={value}
+                                onChange={e => setEditPrints(prev => prev ? {
+                                  ...prev,
+                                  details: { ...prev.details, [key]: e.target.value }
+                                } : null)}
+                                disabled={editLoading}
+                                className="flex-1"
+                                placeholder={t('common.value')}
+                              />
+                              <Button
+                                type="button"
+                                onClick={() => {
+                                  if (editPrints) {
+                                    const newDetails = { ...editPrints.details };
+                                    delete newDetails[key];
+                                    setEditPrints({ ...editPrints, details: newDetails });
+                                  }
+                                }}
+                                disabled={editLoading}
+                                variant="outline"
+                                size="sm"
+                              >
+                                {t('common.remove')}
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-500">{t('common.noEntries')}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Consumption Table */}

@@ -60,7 +60,7 @@ const DashboardPage: React.FC = () => {
     model_name: '',
     brand_name: ''
   });
-  const [brandOptions, setBrandOptions] = useState<string[]>([]);
+  const [clientOptions, setClientOptions] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'job-orders' | 'pending' | 'in-progress'>('pending');
   const [loadedTabs, setLoadedTabs] = useState<Set<string>>(new Set(['pending']));
   
@@ -84,23 +84,13 @@ const DashboardPage: React.FC = () => {
 
   const hasMoreJobOrders = jobOrderSummaries.length < jobOrdersTotal;
 
-  const fetchJobOrders = useCallback(async (reset: boolean = false, forceRefresh: boolean = false) => {
+  const fetchJobOrders = useCallback(async (reset: boolean = false) => {
     if (reset) {
       setLoadingJobOrders(true);
     } else {
       setIsLoadingMore(true);
     }
     try {
-      // If force refresh is requested, refresh the summary data first
-      if (forceRefresh) {
-        try {
-          await jobOrderApi.refreshItemSummaries();
-        } catch (refreshError) {
-          console.warn('Failed to refresh summary data:', refreshError);
-          // Continue with fetching even if refresh fails
-        }
-      }
-      
       const params: {
         skip: number;
         limit: number;
@@ -144,7 +134,7 @@ const DashboardPage: React.FC = () => {
         setPhaseStats(phaseData);
 
         // Fetch barcodes for department if user is not admin; aggregate across multi-line phases like Sewing-1, Sewing-2
-        if (user && user.role !== 'Admin' && user.role !== 'Creator') {
+        if (user && user.role && user.role !== 'admin' && user.role !== 'creator') {
           const roleName = user.role; // e.g., 'Sewing'
           let targetPhaseNames: string[] = [roleName];
           try {
@@ -212,10 +202,8 @@ const DashboardPage: React.FC = () => {
         }
 
         // For non-admin users, fetch job order summaries (limited)
-        if (user && user.role !== 'Admin') {
-          // Only auto-refresh on initial page load
-          const shouldRefresh = isInitialLoad;
-          fetchJobOrders(true, shouldRefresh);
+        if (user && user.role && user.role !== 'admin') {
+          fetchJobOrders(true);
           if (isInitialLoad) {
             setIsInitialLoad(false);
           }
@@ -230,25 +218,25 @@ const DashboardPage: React.FC = () => {
 
   // Refetch when filters change
   useEffect(() => {
-    if (user && user.role !== 'Admin') {
+    if (user && user.role && user.role !== 'admin') {
       setJobOrdersSkip(0);
-      // Don't refresh on filter changes, only on initial load
-      fetchJobOrders(true, false);
+      // Fetch on filter changes
+      fetchJobOrders(true);
     }
   }, [joFilters.job_order_number, joFilters.model_name, joFilters.brand_name, user]);
 
-  // Fetch brand options for dropdown
+  // Fetch client options for dropdown
   useEffect(() => {
-    const fetchBrands = async () => {
+    const fetchClients = async () => {
       try {
         const simple = await jobOrderApi.getAllSimple();
-        const brands = [...new Set(simple.map(s => s.brand_name).filter(Boolean))] as string[];
-        setBrandOptions(brands);
+        const clients = [...new Set(simple.map(s => s.brand_name).filter(Boolean))] as string[];
+        setClientOptions(clients);
       } catch (e) {
-        setBrandOptions([]);
+        setClientOptions([]);
       }
     };
-    fetchBrands();
+    fetchClients();
   }, []);
 
   // Fetch expected quantities when phase barcodes change
@@ -395,10 +383,10 @@ const DashboardPage: React.FC = () => {
         (b.job_order_number && b.job_order_number.toLowerCase().includes(itemFilters.job_order_number.toLowerCase()));
       const matchesModel = !itemFilters.model_name || 
         (b.model_name && b.model_name.toLowerCase().includes(itemFilters.model_name.toLowerCase()));
-      const matchesBrand = !itemFilters.brand_name || 
+      const matchesClient = !itemFilters.brand_name || 
         (b.brand_name && b.brand_name.toLowerCase().includes(itemFilters.brand_name.toLowerCase()));
       
-      return matchesJobOrder && matchesModel && matchesBrand;
+      return matchesJobOrder && matchesModel && matchesClient;
     });
 
     // Get unique job order IDs from filtered barcodes
@@ -593,7 +581,7 @@ const DashboardPage: React.FC = () => {
         </div>
 
       {/* Tabbed Dashboard for non-admin users */}
-      {user && user.role !== 'Admin' && (
+      {user && user.role && user.role !== 'admin' && (
         <div className="flex-1 flex flex-col min-h-0">
           {/* Custom Tab Navigation */}
           <div className="flex border-b mb-0 flex-shrink-0">
@@ -610,7 +598,7 @@ const DashboardPage: React.FC = () => {
             >
               {t('dashboard.jobOrders.title')}
             </button>
-            {user.role !== 'Creator' && (
+            {user.role && user.role !== 'creator' && (
               <>
                 <button
                   onClick={() => {
@@ -670,12 +658,12 @@ const DashboardPage: React.FC = () => {
                       />
                     </div>
                     <div>
-                      <div className="text-xs text-gray-600 mb-1">{t('dashboard.jobOrders.filters.brand')}</div>
+                      <div className="text-xs text-gray-600 mb-1">{t('dashboard.jobOrders.filters.client')}</div>
                       <SearchableDropdown
-                        options={brandOptions}
+                        options={clientOptions}
                         value={joFilters.brand_name}
                         onChange={(value) => setJoFilters(prev => ({ ...prev, brand_name: value }))}
-                        placeholder={t('dashboard.jobOrders.filters.brandPlaceholder')}
+                        placeholder={t('dashboard.jobOrders.filters.clientPlaceholder')}
                       />
                     </div>
                   </div>
@@ -707,7 +695,7 @@ const DashboardPage: React.FC = () => {
                           <tr>
                             <th className="px-3 py-2 text-left">{t('dashboard.jobOrders.columns.number')}</th>
                             <th className="px-3 py-2 text-left">{t('dashboard.jobOrders.columns.model')}</th>
-                            <th className="px-3 py-2 text-left">{t('dashboard.jobOrders.columns.brand')}</th>
+                            <th className="px-3 py-2 text-left">{t('dashboard.jobOrders.columns.client')}</th>
                             <th className="px-3 py-2 text-right">{t('dashboard.jobOrders.columns.expected')}</th>
                             <th className="px-3 py-2 text-right">{t('dashboard.jobOrders.columns.working')}</th>
                             <th className="px-3 py-2 text-right">{t('dashboard.jobOrders.columns.completed')}</th>
@@ -746,7 +734,7 @@ const DashboardPage: React.FC = () => {
             )}
             
             {/* Pending Items Tab */}
-            {user.role !== 'Creator' && activeTab === 'pending' && loadedTabs.has('pending') && (
+            {user.role && user.role !== 'creator' && activeTab === 'pending' && loadedTabs.has('pending') && (
               <div className="flex-1 flex flex-col min-h-0">
                 <Card className="flex-1 flex flex-col min-h-0 h-full border-0 shadow-none">
                   <CardHeader className="flex-shrink-0">
@@ -772,12 +760,12 @@ const DashboardPage: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <div className="text-xs text-gray-600 mb-1">{t('dashboard.jobOrders.filters.brand')}</div>
+                        <div className="text-xs text-gray-600 mb-1">{t('dashboard.jobOrders.filters.client')}</div>
                         <SearchableDropdown
-                          options={brandOptions}
+                          options={clientOptions}
                           value={itemFilters.brand_name}
                           onChange={(value) => setItemFilters(prev => ({ ...prev, brand_name: value }))}
-                          placeholder={t('dashboard.jobOrders.filters.brandPlaceholder')}
+                          placeholder={t('dashboard.jobOrders.filters.clientPlaceholder')}
                         />
                       </div>
                     </div>
@@ -790,8 +778,8 @@ const DashboardPage: React.FC = () => {
                         {t('commonExt.clearFilters')}
                       </Button>
                     </div>
-                    {renderAggregatedItemList(
-                      phaseBarcodes[user.role.toLowerCase()].pending,
+                    {user.role && renderAggregatedItemList(
+                      phaseBarcodes[user.role.toLowerCase()]?.pending || [],
                       t('dashboard.pendingItems')
                     )}
                   </CardContent>
@@ -800,7 +788,7 @@ const DashboardPage: React.FC = () => {
             )}
             
             {/* In Progress Items Tab */}
-            {user.role !== 'Creator' && activeTab === 'in-progress' && loadedTabs.has('in-progress') && (
+            {user.role && user.role !== 'creator' && activeTab === 'in-progress' && loadedTabs.has('in-progress') && (
               <div className="flex-1 flex flex-col min-h-0">
                 <Card className="flex-1 flex flex-col min-h-0 h-full border-0 shadow-none">
                   <CardHeader className="flex-shrink-0">
@@ -826,12 +814,12 @@ const DashboardPage: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <div className="text-xs text-gray-600 mb-1">{t('dashboard.jobOrders.filters.brand')}</div>
+                        <div className="text-xs text-gray-600 mb-1">{t('dashboard.jobOrders.filters.client')}</div>
                         <SearchableDropdown
-                          options={brandOptions}
+                          options={clientOptions}
                           value={itemFilters.brand_name}
                           onChange={(value) => setItemFilters(prev => ({ ...prev, brand_name: value }))}
-                          placeholder={t('dashboard.jobOrders.filters.brandPlaceholder')}
+                          placeholder={t('dashboard.jobOrders.filters.clientPlaceholder')}
                         />
                       </div>
                     </div>
@@ -844,8 +832,8 @@ const DashboardPage: React.FC = () => {
                         {t('commonExt.clearFilters')}
                       </Button>
                     </div>
-                    {renderAggregatedItemList(
-                      phaseBarcodes[user.role.toLowerCase()].in_progress,
+                    {user.role && renderAggregatedItemList(
+                      phaseBarcodes[user.role.toLowerCase()]?.in_progress || [],
                       t('dashboard.inProgressItems')
                     )}
                   </CardContent>
@@ -857,7 +845,7 @@ const DashboardPage: React.FC = () => {
       )}
 
               {/* Admin Dashboard */}
-        {user && user.role === 'Admin' && (
+        {user && user.role && user.role === 'admin' && (
           <div className="flex-1 flex flex-col min-h-0">
             <h2 className="text-xl font-semibold mb-3 text-gray-700 flex-shrink-0">
               Production Phase Distribution

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.crud import statistics as stats_crud
 from app import schemas
-from app.api.v1.endpoints.auth import get_db
+from app.db.session import get_db
 from app.core.deps import get_current_user
 
 router = APIRouter()
@@ -18,22 +18,22 @@ def get_production_statistics(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving production statistics: {str(e)}")
 
-@router.get("/brand/{brand_id}", response_model=schemas.BrandStatisticsResponse)
-def get_brand_statistics(
-    brand_id: int,
+@router.get("/client/{client_id}", response_model=schemas.ClientStatisticsResponse)
+def get_client_statistics(
+    client_id: int,
     db: Session = Depends(get_db),
     current_user: schemas.User = Depends(get_current_user)
 ):
-    """Get detailed statistics for a specific brand"""
+    """Get detailed statistics for a specific client"""
     try:
-        stats = stats_crud.get_brand_statistics(db, brand_id)
+        stats = stats_crud.get_client_statistics(db, client_id)
         if not stats:
-            raise HTTPException(status_code=404, detail="Brand not found")
+            raise HTTPException(status_code=404, detail="Client not found")
         return stats
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error retrieving brand statistics: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving client statistics: {str(e)}")
 
 @router.get("/model/{model_id}", response_model=schemas.ModelStatisticsResponse)
 def get_model_statistics(

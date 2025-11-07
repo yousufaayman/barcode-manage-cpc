@@ -13,16 +13,16 @@ def encode_model_name(model_name: str, length: int = 2) -> str:
     encoded = base36.dumps(hash_int)
     return encoded[:length].upper()
 
-def generate_barcode_string(job_order_id: int, brand_id: int, model_id: int, size_id: int, color_id: int, quantity: int, layers: int, serial: int) -> str:
+def generate_barcode_string(job_order_id: int, client_id: int, model_id: int, size_id: int, color_id: int, quantity: int, layers: int, serial: int) -> str:
     job_order_code = base36.dumps(job_order_id)
-    brand_code = base36.dumps(brand_id)
+    client_code = base36.dumps(client_id)
     model_code = base36.dumps(model_id)
     size_code = base36.dumps(size_id)
     color_code = base36.dumps(color_id)
     quantity_code = base36.dumps(quantity)
     layers_code = base36.dumps(layers)
     serial_code = base36.dumps(serial)
-    return f"{job_order_code}-{brand_code}-{model_code}-{size_code}-{color_code}-{quantity_code}-{layers_code}-{serial_code}"
+    return f"{job_order_code}-{client_code}-{model_code}-{size_code}-{color_code}-{quantity_code}-{layers_code}-{serial_code}"
 
 def validate_row_data(row_data: Dict[str, Any], required_columns: List[str]) -> Tuple[bool, Optional[str]]:
     missing_fields = [field for field in required_columns if not row_data.get(field)]
@@ -81,11 +81,11 @@ def process_row(db: Session, row_data: Dict[str, Any], job_order: models.JobOrde
     serial_int = get_next_serial_number(db, job_order.job_order_id, size.size_id, color.color_id)
     serial_str = f"{serial_int:03d}"
     
-    brand = db.query(models.Brand).filter(models.Brand.brand_id == job_order.brand_id).first() if job_order.brand_id else None
+    client = db.query(models.Client).filter(models.Client.client_id == job_order.client_id).first() if job_order.client_id else None
     model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first() if job_order.model_id else None
     barcode = generate_barcode_string(
         job_order.job_order_id,
-        brand.brand_id if brand else 0,
+        client.client_id if client else 0,
         model.model_id if model else 0,
         size.size_id,
         color.color_id,
@@ -96,11 +96,11 @@ def process_row(db: Session, row_data: Dict[str, Any], job_order: models.JobOrde
     return {
         "barcode": barcode,
         "job_order_id": job_order.job_order_id,
-        "brand_id": brand.brand_id if brand else None,
+        "client_id": client.client_id if client else None,
         "model_id": model.model_id if model else None,
         "size_id": size.size_id,
         "color_id": color.color_id,
-        "brand": brand.brand_name if brand else None,
+        "client": client.client_name if client else None,
         "model": model.model_name if model else None,
         "size": size.size_value,
         "color": color.color_name,
@@ -131,11 +131,11 @@ def process_row_with_serial(db: Session, row_data: Dict[str, Any], job_order: mo
     # Use the pre-assigned serial number
     serial_str = f"{serial_number:03d}"
     
-    brand = db.query(models.Brand).filter(models.Brand.brand_id == job_order.brand_id).first() if job_order.brand_id else None
+    client = db.query(models.Client).filter(models.Client.client_id == job_order.client_id).first() if job_order.client_id else None
     model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first() if job_order.model_id else None
     barcode = generate_barcode_string(
         job_order.job_order_id,
-        brand.brand_id if brand else 0,
+        client.client_id if client else 0,
         model.model_id if model else 0,
         size.size_id,
         color.color_id,
@@ -146,11 +146,11 @@ def process_row_with_serial(db: Session, row_data: Dict[str, Any], job_order: mo
     return {
         "barcode": barcode,
         "job_order_id": job_order.job_order_id,
-        "brand_id": brand.brand_id if brand else None,
+        "client_id": client.client_id if client else None,
         "model_id": model.model_id if model else None,
         "size_id": size.size_id,
         "color_id": color.color_id,
-        "brand": brand.brand_name if brand else None,
+        "client": client.client_name if client else None,
         "model": model.model_name if model else None,
         "size": size.size_value,
         "color": color.color_name,
@@ -275,22 +275,21 @@ def process_bulk_barcodes(db: Session, df: pd.DataFrame, job_order_id: int) -> T
     
     return processed_data, error_rows
 
-def get_or_create_brand(db: Session, name: str) -> models.Brand:
-    brand = db.query(models.Brand).filter(models.Brand.brand_name == name).first()
-    if not brand:
-        brand = models.Brand(brand_name=name)
-        db.add(brand)
+def get_or_create_client(db: Session, name: str) -> models.Client:
+    client = db.query(models.Client).filter(models.Client.client_name == name).first()
+    if not client:
+        client = models.Client(client_name=name)
+        db.add(client)
         db.commit()
-        db.refresh(brand)
-    return brand
+        db.refresh(client)
+    return client
 
-def get_or_create_model(db: Session, name: str, brand_id: int) -> models.Model:
+def get_or_create_model(db: Session, name: str, client_id: int) -> models.Model:
     model = db.query(models.Model).filter(
-        models.Model.model_name == name,
-        models.Model.brand_id == brand_id
+        models.Model.model_name == name
     ).first()
     if not model:
-        model = models.Model(model_name=name, brand_id=brand_id)
+        model = models.Model(model_name=name)
         db.add(model)
         db.commit()
         db.refresh(model)

@@ -39,7 +39,13 @@
     "complete": "مكتمل",
     "unknown": "غير معروف",
     "na": "غير متاح",
-    "clearing": "جارٍ المسح..."
+    "clearing": "جارٍ المسح...",
+    "key": "المفتاح",
+    "value": "القيمة",
+    "type": "النوع",
+    "details": "التفاصيل",
+    "noEntries": "لا توجد إدخالات",
+    "remove": "إزالة"
   },
   "zebraPrinter": {
     "title": "إعدادات طابعة زبرا",
@@ -131,15 +137,15 @@
       "filters": {
         "jobOrderNumber": "رقم أمر العمل",
         "model": "الموديل",
-        "brand": "العميل",
+        "client": "العميل",
         "jobOrderNumberPlaceholder": "ابحث بالرقم",
         "modelPlaceholder": "ابحث بالموديل",
-        "brandPlaceholder": "ابحث بالعميل"
+        "clientPlaceholder": "ابحث بالعميل"
       },
       "columns": {
         "number": "الرقم",
         "model": "الموديل",
-        "brand": "العميل",
+        "client": "العميل",
         "expected": "المتوقع",
         "working": "قيد العمل",
         "completed": "المكتمل",
@@ -164,7 +170,7 @@
     "progress": "التقدم",
     "layers": "الطبقات",
     "serial": "الرقم التسلسلي",
-    "brand": "العلامة التجارية",
+    "client": "العلامة التجارية",
     "model": "الموديل",
     "size": "المقاس",
     "color": "اللون",
@@ -430,7 +436,7 @@
     "validationComplete": "اكتمل التحقق: {count} صفوف صحيحة، {errors} صفوف بها أخطاء.",
     "allRowsValid": "جميع {count} الصفوف صحيحة وجاهزة للإرسال.",
     "rowNumber": "Row #",
-    "brand": "Brand",
+    "client": "العميل",
     "model": "Model",
     "size": "Size",
     "color": "Color",
@@ -441,7 +447,7 @@
     "selectJobOrder": "اختر أمر العمل",
     "selectJobOrderPlaceholder": "اختر أمر عمل...",
     "noModel": "لا يوجد موديل",
-    "noBrand": "لا توجد علامة تجارية",
+    "noClient": "لا يوجد عميل",
     "colors": "Colors",
     "sizes": "Sizes",
     "referencedColors": "Referenced Colors",
@@ -511,7 +517,7 @@
       "colorRequired": "اللون مطلوب للعنصر {itemNumber}",
       "sizeRequired": "المقاس مطلوب للعنصر {itemNumber}",
       "quantityRequired": "يجب أن تكون الكمية أكبر من 0 للعنصر {itemNumber}",
-      "brandNameRequired": "اسم العلامة التجارية مطلوب."
+      "clientNameRequired": "اسم العلامة التجارية مطلوب."
     },
     "filters": {
       "jobOrderNumber": "رقم أمر العمل",
@@ -530,11 +536,11 @@
       "addNew": "إضافة \"{value}\"",
       "noOptionsFound": "لم يتم العثور على خيارات."
     },
-    "brandName": "اسم العميل",
+    "clientName": "اسم العميل",
     "placeholders": {
       "jobOrderNumber": "ابحث برقم أمر العمل...",
       "modelName": "ابحث باسم الموديل...",
-      "brandName": "ابحث باسم العميل..."
+      "clientName": "ابحث باسم العميل..."
     },
     "openOrders": "أوامر العمل المفتوحة",
     "loadingOpenOrders": "جاري تحميل أوامر العمل المفتوحة...",
@@ -614,6 +620,13 @@
     "lostQuantityIssues": "مشاكل الكمية المفقودة",
     "completed": "مكتمل",
     "remainingQuantity": "الكمية المتبقية",
-    "workingQty": "كمية العمل"
+    "workingQty": "كمية العمل",
+    "phaseDetails": "تفاصيل المراحل",
+    "cutInspection": "فحص القص",
+    "secondDegreeCut": "قص الدرجة الثانية",
+    "sewingIn": "الحياكة الداخلة",
+    "sewingOut": "الحياكة الخارجة",
+    "packagingIn": "التعبئة الداخلة",
+    "packagingOut": "التعبئة الخارجة"
   }
 } 

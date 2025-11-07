@@ -2,7 +2,7 @@ import React, { createContext, useState, useContext, useEffect } from 'react';
 import { authApi, User } from '../services/api';
 
 // Define user roles
-export type UserRole = 'Admin' | 'Cutting' | 'Sewing' | 'Packaging' | 'Creator';
+export type UserRole = 'admin' | 'cutting' | 'sewing' | 'packaging' | 'creator';
 
 // Define context type
 type AuthContextType = {

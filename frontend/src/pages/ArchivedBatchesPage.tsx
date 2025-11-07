@@ -30,7 +30,7 @@ interface ArchivedJobOrder {
   job_order_id: number;
   model_id: number;
   job_order_number: string;
-  brand_id?: number | null;
+  brand_id: number;
   image_url?: string | null;
   notes?: string | null;
   date_created: string;
@@ -712,7 +712,7 @@ const ArchivedBatchesPage: React.FC = () => {
       },
       { key: 'barcode', header: t('barcode.barcode'), width: 150 },
       { key: 'job_order_number', header: t('barcode.jobOrderNumber'), width: 120 },
-      { key: 'brand_name', header: t('bulkBarcode.brand'), width: 120 },
+      { key: 'brand_name', header: t('bulkBarcode.client'), width: 120 },
       { key: 'model_name', header: t('bulkBarcode.model'), width: 120 },
       { key: 'size_value', header: t('bulkBarcode.size'), width: 100 },
       { key: 'color_name', header: t('bulkBarcode.color'), width: 100 },
@@ -848,8 +848,8 @@ const ArchivedBatchesPage: React.FC = () => {
                     options={[...new Set(archivedJobOrders.map(jo => jo.brand_name || '').filter(Boolean))] as string[]}
                     value={jobOrderFilters.brand_name}
                     onChange={(val) => { setJobOrderFilters(prev => ({ ...prev, brand_name: val })); setJobOrdersPage(1); }}
-                    placeholder={t('bulkBarcode.brand')}
-                    label={t('bulkBarcode.brand')}
+                    placeholder={t('bulkBarcode.client')}
+                    label={t('bulkBarcode.client')}
                   />
                 </div>
               </div>
@@ -1006,8 +1006,8 @@ const ArchivedBatchesPage: React.FC = () => {
                 options={brandOptions}
                 value={filters.brand}
                 onChange={(value) => handleDropdownFilterChange('brand', value)}
-                placeholder={t('bulkBarcode.brand')}
-                label={t('bulkBarcode.brand')}
+                placeholder={t('bulkBarcode.client')}
+                label={t('bulkBarcode.client')}
               />
             </div>
             
@@ -1075,7 +1075,7 @@ const ArchivedBatchesPage: React.FC = () => {
               </select>
             </div>
 
-            {user?.role === 'Admin' && (
+            {user?.role === 'admin' && (
               <div className="form-group">
                 <div className="flex space-x-2" style={{ marginTop: '24px' }}>
                   <button

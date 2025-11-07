@@ -1,67 +1,38 @@
 from datetime import timedelta
-from typing import Any, List
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app import models, schemas
-from app.crud import (
-    get_user,
-    get_user_by_username,
-    get_users,
-    create_user,
-    update_user,
-    delete_user
-)
+from app import crud, models, schemas
+from app.core import deps
 from app.core import security
 from app.core.config import settings
-from app.core.deps import get_db, get_current_user, get_current_active_user, get_current_active_superuser
+from app.crud import get_user_by_username, has_role_in_system
 
 router = APIRouter()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
-
-@router.post("/register", response_model=schemas.User)
-def register(
-    *,
-    db: Session = Depends(get_db),
-    user_in: schemas.UserCreate,
-) -> Any:
-    """
-    Create new user.
-    """
-    user = get_user_by_username(db, username=user_in.username)
-    if user:
-        raise HTTPException(
-            status_code=400,
-            detail="The user with this username already exists in the system.",
-        )
-    user = create_user(db, obj_in=user_in)
-    return user
 
 @router.post("/login", response_model=schemas.Token)
-def login(
-    db: Session = Depends(get_db),
-    form_data: OAuth2PasswordRequestForm = Depends()
+def login_access_token(
+    db: Session = Depends(deps.get_db), form_data: OAuth2PasswordRequestForm = Depends()
 ) -> Any:
     """
-    OAuth2 compatible token login, get an access token for future requests
+    OAuth2 compatible token login, get an access token for future requests.
     """
-    # Get user by username
     user = get_user_by_username(db, username=form_data.username)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    if not user or not security.verify_password(form_data.password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+    elif not user:
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
     
-    # Verify password
-    if not security.verify_password(form_data.password, user.password):
+    # Check if user has any role in OPS system
+    from app.crud import get_user_roles_in_system
+    user_roles = get_user_roles_in_system(db=db, user_id=user.id, system_name="OPS")
+    if not user_roles:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=403, 
+            detail="Access denied. User does not have any role in OPS system."
         )
     
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -72,122 +43,61 @@ def login(
         "token_type": "bearer",
     }
 
-@router.get("/me", response_model=schemas.User)
-def read_users_me(
-    current_user: models.User = Depends(get_current_active_user),
-) -> Any:
+
+@router.post("/test-token", response_model=schemas.User)
+def test_token(current_user: models.User = Depends(deps.get_current_active_user)) -> Any:
     """
-    Get current user.
+    Test access token.
     """
     return current_user
 
-@router.put("/me", response_model=schemas.User)
-def update_user_me(
-    *,
-    db: Session = Depends(get_db),
-    user_in: schemas.UserUpdate,
-    current_user: models.User = Depends(get_current_active_user),
-) -> Any:
-    """
-    Update own user.
-    """
-    user = update_user(db, db_obj=current_user, obj_in=user_in)
-    return user
 
-# Admin only endpoints
-@router.get("/users", response_model=list[schemas.User])
-def read_users(
-    db: Session = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100,
-    current_user: models.User = Depends(get_current_active_superuser),
+@router.get("/me")
+def read_user_me(
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
-    Retrieve users.
+    Get current user with OPS system role only.
     """
-    users = get_users(db, skip=skip, limit=limit)
-    return users
-
-@router.post("/users", response_model=schemas.User)
-def create_user_endpoint(
-    *,
-    db: Session = Depends(get_db),
-    user_in: schemas.UserCreate,
-    current_user: models.User = Depends(get_current_active_superuser),
-) -> Any:
-    """
-    Create new user.
-    """
-    user = get_user_by_username(db, username=user_in.username)
-    if user:
-        raise HTTPException(
-            status_code=400,
-            detail="The user with this username already exists in the system.",
-        )
-    user = create_user(db, obj_in=user_in)
-    return user
-
-@router.put("/users/{user_id}", response_model=schemas.User)
-def update_user_endpoint(
-    *,
-    db: Session = Depends(get_db),
-    user_id: int,
-    user_in: schemas.UserUpdate,
-    current_user: models.User = Depends(get_current_active_superuser),
-) -> Any:
-    """
-    Update a user.
-    """
-    user = get_user(db, id=user_id)
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="The user with this ID does not exist in the system",
-        )
-    user = update_user(db, db_obj=user, obj_in=user_in)
-    return user
-
-@router.delete("/users/{user_id}", response_model=schemas.User)
-def delete_user_endpoint(
-    *,
-    db: Session = Depends(get_db),
-    user_id: int,
-    current_user: models.User = Depends(get_current_active_superuser),
-) -> Any:
-    """
-    Delete a user.
-    """
-    user = get_user(db, id=user_id)
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="The user with this ID does not exist in the system",
-        )
-    user = delete_user(db, id=user_id)
-    return user
-
-@router.put("/users/{user_id}/reset-password", response_model=schemas.User)
-def reset_user_password(
-    *,
-    db: Session = Depends(get_db),
-    user_id: int,
-    password_reset: schemas.ResetPasswordRequest,
-    current_user: models.User = Depends(get_current_active_superuser),
-) -> Any:
-    """
-    Reset a user's password (Admin only).
-    """
-    user = get_user(db, id=user_id)
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="The user with this ID does not exist in the system",
-        )
+    # Extract role from user_roles for OPS system only
+    ops_role = None
+    for user_role in current_user.user_roles:
+        if user_role.system.name == 'OPS':
+            ops_role = user_role.role
+            break
     
-    # Update the user's password
-    user.password = security.get_password_hash(password_reset.new_password)
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    # Return simplified user data with only OPS role
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "role": ops_role
+    }
+
+
+@router.get("/me/roles")
+def read_user_roles(
+    current_user: models.User = Depends(deps.get_current_active_user),
+    db: Session = Depends(deps.get_db)
+) -> Any:
+    """
+    Get current user's roles in all systems.
+    """
+    from app.crud import get_user_roles_in_system
     
-    return user 
+    # Get all systems
+    systems = crud.system.get_all(db=db)
+    user_roles = []
+    
+    for system in systems:
+        roles = get_user_roles_in_system(db=db, user_id=current_user.id, system_name=system.name)
+        if roles:
+            user_roles.append({
+                "system": system.name,
+                "roles": [role.role for role in roles]
+            })
+    
+    return {
+        "user_id": current_user.id,
+        "username": current_user.username,
+        "system_roles": user_roles
+    }

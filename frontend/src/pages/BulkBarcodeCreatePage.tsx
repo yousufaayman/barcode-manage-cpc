@@ -794,7 +794,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
           <div className="p-4 border rounded bg-gray-50 mb-2">
             <div><strong>{t('barcode.jobOrderNumber')}:</strong> {selectedJobOrder.job_order_number}</div>
             <div><strong>{t('bulkBarcode.model')}:</strong> {selectedJobOrder.model_name || t('bulkBarcode.noModel')}</div>
-            <div><strong>{t('bulkBarcode.brand')}:</strong> {selectedJobOrder.brand_name || t('bulkBarcode.noBrand')}</div>
+            <div><strong>{t('bulkBarcode.client')}:</strong> {selectedJobOrder.brand_name || t('bulkBarcode.noClient')}</div>
             {jobOrderItems.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-8">
                 <div>
@@ -970,7 +970,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                         {isSubmitted && <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('common.status')}</TableHead>}
                         <TableHead className="md:px-4 md:py-2 px-2 py-1">{t('barcode.barcode')}</TableHead>
                         <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('barcode.jobOrderNumber')}</TableHead>
-                        <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.brand')}</TableHead>
+                        <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.client')}</TableHead>
                         <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.model')}</TableHead>
                         <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.size')}</TableHead>
                         <TableHead className={cn("md:table-cell md:px-4 md:py-2 px-2 py-1", !showAllColumns && "hidden")}>{t('bulkBarcode.color')}</TableHead>
@@ -1146,7 +1146,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>{t('barcode.barcode')}</TableHead>
-                    <TableHead>{t('bulkBarcode.brand')}</TableHead>
+                    <TableHead>{t('bulkBarcode.client')}</TableHead>
                     <TableHead>{t('bulkBarcode.model')}</TableHead>
                     <TableHead>{t('bulkBarcode.size')}</TableHead>
                     <TableHead>{t('bulkBarcode.color')}</TableHead>

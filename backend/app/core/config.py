@@ -15,12 +15,12 @@ class Settings(BaseSettings):
     # CORS Configuration - Dynamic from environment
     CORS_ORIGINS: str = "*"
     
-    # Database Configuration - All from environment variables (no hardcoded defaults)
-    MYSQL_HOST: str
-    MYSQL_PORT: int = 3306
-    MYSQL_USER: str
-    MYSQL_PASSWORD: str
-    MYSQL_DATABASE: str
+    # Database Configuration - PostgreSQL only
+    POSTGRESQL_HOST: str
+    POSTGRESQL_PORT: int = 5432
+    POSTGRESQL_USER: str
+    POSTGRESQL_PASSWORD: str
+    POSTGRESQL_DATABASE: str
     
     # Connection Pool Configuration
     DB_POOL_SIZE: int = 10
