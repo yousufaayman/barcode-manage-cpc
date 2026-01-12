@@ -16,8 +16,9 @@ class DirectoryManager:
     def __init__(self):
         self.base_paths = {
             'static': settings.JOB_ORDER_IMAGE_UPLOAD_DIR,
-            'logs': getattr(settings, 'LOG_DIR', 'logs'),
-            'uploads': getattr(settings, 'UPLOAD_DIR', 'uploads'),
+        }
+        self.descriptions = {
+            'static': "Static files",
         }
     
     def ensure_directory_exists(self, directory_path: str, description: str = "") -> bool:
@@ -44,59 +45,16 @@ class DirectoryManager:
             logger.error(f"Failed to create directory {directory_path}: {e}")
             return False
     
-    def ensure_upload_directories(self) -> bool:
-        """Ensure all upload directories exist"""
-        upload_dirs = [
-            (self.base_paths['uploads'], "General uploads"),
-            (os.path.join(self.base_paths['uploads'], 'barcodes'), "Barcode uploads"),
-            (os.path.join(self.base_paths['uploads'], 'job-orders'), "Job order uploads"),
-            (os.path.join(self.base_paths['uploads'], 'templates'), "Template uploads"),
-            (os.path.join(self.base_paths['uploads'], 'exports'), "Export files"),
-        ]
-        
-        success = True
-        for dir_path, description in upload_dirs:
-            if not self.ensure_directory_exists(dir_path, description):
-                success = False
-        
-        return success
-    
-    
-    def ensure_log_directories(self) -> bool:
-        """Ensure all log directories exist"""
-        log_dirs = [
-            (self.base_paths['logs'], "Application logs"),
-            (os.path.join(self.base_paths['logs'], 'backend'), "Backend logs"),
-            (os.path.join(self.base_paths['logs'], 'monitoring'), "Monitoring logs"),
-            (os.path.join(self.base_paths['logs'], 'nginx'), "Nginx logs"),
-        ]
-        
-        success = True
-        for dir_path, description in log_dirs:
-            if not self.ensure_directory_exists(dir_path, description):
-                success = False
-        
-        return success
-    
-    
-    
-    
     def ensure_all_directories(self) -> bool:
         """Ensure all required directories exist"""
         logger.info("Ensuring all application directories exist...")
         
         success = True
         
-        # Core directories
-        if not self.ensure_directory_exists(self.base_paths['static'], "Static files"):
-            success = False
-        
-        # Specialized directories
-        if not self.ensure_upload_directories():
-            success = False
-        
-        if not self.ensure_log_directories():
-            success = False
+        for name, path in self.base_paths.items():
+            description = self.descriptions.get(name, name)
+            if not self.ensure_directory_exists(path, description):
+                success = False
         
         if success:
             logger.info("All application directories verified successfully")

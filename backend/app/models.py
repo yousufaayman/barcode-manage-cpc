@@ -12,7 +12,7 @@ Base = declarative_base()
 
 class UserRoleEnum(str, enum.Enum):
     ADMIN = "admin"
-    CREATOR = "creator"
+    GENERAL_OPERATIONS = "general_operations"
     CUTTING = "cutting"
     SEWING = "sewing"
     PACKAGING = "packaging"
@@ -157,6 +157,7 @@ class JobOrder(Base):
     notes = Column(Text, nullable=True)
     print_config = Column(JSONB, nullable=True)  # Replaces job_order_prints table
     date_created = Column(DateTime, server_default=func.now(), nullable=False)
+    priority = Column(Integer, nullable=True, default=0)
 
     # Relationships
     model = relationship("Model", back_populates="job_orders")
@@ -245,9 +246,11 @@ class Batch(Base):
     phase = relationship("ProductionPhase", back_populates="batches")
     job_order = relationship("JobOrder", back_populates="batches")
     barcode_scan_events = relationship("BarcodeScanEvent", back_populates="batch")
+    phase_quantity_ledger = relationship("PhaseQuantityLedger", back_populates="batch")
+    phase_history = relationship("BatchPhaseHistory", back_populates="batch", cascade="all, delete-orphan")
 
 class BarcodeScanEvent(Base):
-    """Ops.barcode_scan_events - Enhanced with metadata JSONB field"""
+    """Ops.barcode_scan_events"""
     __tablename__ = "barcode_scan_events"
     __table_args__ = {'schema': 'ops'}
     
@@ -264,15 +267,117 @@ class BarcodeScanEvent(Base):
     scanned_at = Column(DateTime, nullable=False, default=func.now(), index=True)
     user_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
     notes = Column(Text, nullable=True)
-    scan_metadata = Column(JSONB, nullable=True)  # Additional metadata for scan events
+    
+    affects_phase_type = Column(String(50), nullable=True, index=True)
+    quantity_delta = Column(Integer, nullable=True)
+    is_reversal = Column(Boolean, nullable=True, default=False, index=True)
+    reversed_event_id = Column(Integer, ForeignKey("ops.barcode_scan_events.id", ondelete="SET NULL"), nullable=True, index=True)
     
     # Relationships
     batch = relationship("Batch", back_populates="barcode_scan_events")
     phase = relationship("ProductionPhase", back_populates="barcode_scan_events")
     user = relationship("User")
+    reversed_event = relationship("BarcodeScanEvent", remote_side=[id], foreign_keys=[reversed_event_id])
+    ledger_entries = relationship("PhaseQuantityLedger", back_populates="scan_event")
     
     def __repr__(self):
         return f"<BarcodeScanEvent {self.batch_id}:{self.action_type}:{self.scanned_at}>"
+
+class PhaseQuantityLedger(Base):
+    """Ops.phase_quantity_ledger - Append-only ledger for phase quantity deltas"""
+    __tablename__ = "phase_quantity_ledger"
+    __table_args__ = {'schema': 'ops'}
+    
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    batch_id = Column(Integer, ForeignKey("ops.batches.batch_id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_event_id = Column(Integer, ForeignKey("ops.barcode_scan_events.id", ondelete="CASCADE"), nullable=False, index=True)
+    affects_phase_type = Column(String(50), nullable=False, index=True)
+    quantity_delta = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=func.now(), index=True)
+    
+    # Relationships
+    batch = relationship("Batch")
+    scan_event = relationship("BarcodeScanEvent", back_populates="ledger_entries")
+    
+    def __repr__(self):
+        return f"<PhaseQuantityLedger batch:{self.batch_id} phase:{self.affects_phase_type} delta:{self.quantity_delta}>"
+
+class BatchCompensation(Base):
+    """Ops.batch_compensations - Tracks batches created to compensate for lost physical barcodes"""
+    __tablename__ = "batch_compensations"
+    __table_args__ = {'schema': 'ops'}
+
+    compensation_id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("ops.batches.batch_id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("core.job_order_items.item_id", ondelete="CASCADE"), nullable=False, index=True)
+    phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=False, index=True)
+    quantity = Column(Integer, nullable=False)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+
+    batch = relationship("Batch")
+    item = relationship("JobOrderItem")
+    phase = relationship("ProductionPhase")
+    user = relationship("User")
+
+    def __repr__(self):
+        return f"<BatchCompensation {self.compensation_id}: Batch {self.batch_id}, Item {self.item_id}, Phase {self.phase_id}, Qty {self.quantity}>"
+
+class SingleRejection(Base):
+    """Ops.single_rejections - Tracks individual piece rejections that move items back between phases"""
+    __tablename__ = "single_rejections"
+    __table_args__ = {'schema': 'ops'}
+
+    rejection_id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("ops.batches.batch_id", ondelete="CASCADE"), nullable=False, index=True)
+    rejected_from_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=False, index=True)
+    rejected_from_phase_type = Column(String(50), nullable=False, index=True)
+    return_to_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=True, index=True)
+    quantity = Column(Integer, nullable=False, default=1)
+    rejection_reason = Column(Text, nullable=True)
+    rejected_by_user_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
+    rejected_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    status_at_rejection = Column(String(50), nullable=True, index=True)
+    is_resolved = Column(Boolean, nullable=False, default=False)
+    resolved_quantity = Column(Integer, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+
+    batch = relationship("Batch")
+    rejected_from_phase = relationship("ProductionPhase", foreign_keys=[rejected_from_phase_id])
+    return_to_phase = relationship("ProductionPhase", foreign_keys=[return_to_phase_id])
+    user = relationship("User")
+
+    def __repr__(self):
+        return f"<SingleRejection {self.rejection_id}: Batch {self.batch_id}, From Phase {self.rejected_from_phase_id}, Qty {self.quantity}>"
+
+class BatchPhaseHistory(Base):
+    """Ops.batch_phase_history - Tracks detailed phase history per batch with one entry per batch"""
+    __tablename__ = "batch_phase_history"
+    __table_args__ = (
+        UniqueConstraint('batch_id', name='batch_phase_history_batch_unique'),
+        {'schema': 'ops'}
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    batch_id = Column(Integer, ForeignKey("ops.batches.batch_id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    inspection_qty = Column(Integer, default=0)
+    sewing_in_qty = Column(Integer, default=0)
+    sewing_out_qty = Column(Integer, default=0)
+    qc_in_qty = Column(Integer, default=0)
+    qc_out_qty = Column(Integer, default=0)
+    packaging_in_qty = Column(Integer, default=0)
+    packaging_out_qty = Column(Integer, default=0)
+    current_phase_type = Column(String(50), nullable=True)  # Track current phase for reference
+    quantity_at_phase = Column(Integer, default=0)
+    status_at_phase = Column(String(50), nullable=True)
+    compensation = Column(Boolean, nullable=False, default=False, server_default='false')
+    entered_at = Column(DateTime, server_default=func.now(), nullable=False)
+    last_updated = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    batch = relationship("Batch", back_populates="phase_history")
+
+    def __repr__(self):
+        return f"<BatchPhaseHistory batch:{self.batch_id} phase:{self.current_phase_type} qty:{self.quantity_at_phase}>"
 
 # ============================================================================
 # ARCHIVE SCHEMA MODELS
@@ -311,6 +416,7 @@ class ArchivedJobOrder(Base):
     notes = Column(Text, nullable=True)
     print_config = Column(JSONB, nullable=True)  # Preserve print configuration
     date_created = Column(DateTime, nullable=False)
+    priority = Column(Integer, nullable=True, default=0)
     archived_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 class ArchivedJobOrderItem(Base):
@@ -357,8 +463,52 @@ class ArchivedBarcodeScanEvent(Base):
     new_phase = Column(Integer, nullable=True)
     scanned_at = Column(DateTime, nullable=False)
     user_id = Column(Integer, nullable=True)  # No foreign key for archived data
+    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+class ArchivedCutDetail(Base):
+    """Archive.cut_details - Archived cut details"""
+    __tablename__ = "cut_details"
+    __table_args__ = {'schema': 'archive'}
+
+    cut_id = Column(Integer, primary_key=True, index=True)
+    job_order_id = Column(Integer, nullable=False)
+    color_id = Column(Integer, nullable=False)
+    num_of_rolls_used = Column(Integer, nullable=False, default=0)
+    total_layers = Column(Integer, nullable=False, default=0)
+    job_order_items_ratios = Column(JSONB, nullable=False)
+    waste_fabric_weight = Column(DECIMAL(10, 3), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=True)
+    created_by_user_id = Column(Integer, nullable=True)
     notes = Column(Text, nullable=True)
-    scan_metadata = Column(JSONB, nullable=True)
+    print_status = Column(String(50), nullable=True)
+    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+class ArchivedCutRoll(Base):
+    """Archive.cut_rolls - Archived cut rolls"""
+    __tablename__ = "cut_rolls"
+    __table_args__ = {'schema': 'archive'}
+
+    roll_id = Column(Integer, primary_key=True, index=True)
+    cut_id = Column(Integer, nullable=False, index=True)
+    roll_number = Column(Integer, nullable=False)
+    weight = Column(DECIMAL(10, 3), nullable=False)
+    layer_weight = Column(DECIMAL(10, 3), nullable=False)
+    num_of_layers = Column(Integer, nullable=False)
+    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+class ArchivedCutSizeTransition(Base):
+    """Archive.cut_size_transitions - Archived cut size transitions"""
+    __tablename__ = "cut_size_transitions"
+    __table_args__ = {'schema': 'archive'}
+
+    transition_id = Column(Integer, primary_key=True, index=True)
+    cut_id = Column(Integer, nullable=False, index=True)
+    from_item_id = Column(Integer, nullable=False)
+    to_item_id = Column(Integer, nullable=False)
+    quantity = Column(Integer, nullable=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=True)
     archived_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 # ============================================================================
@@ -382,6 +532,8 @@ class JobOrderItemSummary(Base):
     second_degree_cut_qty = Column(Integer, default=0)
     sewing_in_qty = Column(Integer, default=0)
     sewing_out_qty = Column(Integer, default=0)
+    qc_in_qty = Column(Integer, default=0)
+    qc_out_qty = Column(Integer, default=0)
     packaging_in_qty = Column(Integer, default=0)
     packaging_out_qty = Column(Integer, default=0)
     working_qty = Column(Integer, default=0)
@@ -394,6 +546,7 @@ class JobOrderItemSummary(Base):
     overproduction_quantity = Column(Integer, default=0)
     production_status = Column(String(20), default='Not Started')
     notes = Column(Text, nullable=True)
+    true_consumption = Column(DECIMAL(10, 4), nullable=True)
     last_calculated_at = Column(TIMESTAMP, nullable=True)
 
     # Relationships
@@ -425,6 +578,7 @@ class JobOrderSummary(Base):
     has_high_second_degree = Column(Boolean, default=False)
     completion_percentage = Column(DECIMAL(5,2), default=0.00)
     overproduction_quantity = Column(Integer, default=0)
+    priority = Column(Integer, nullable=True, default=0)
     last_calculated_at = Column(TIMESTAMP, nullable=True)
 
     def __repr__(self):

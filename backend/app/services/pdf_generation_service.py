@@ -25,6 +25,7 @@ def get_phase_color(phase_name: str) -> tuple:
         "Sewing - 3": colors.HexColor('#8B5CF6'),     # Purple
         "Sewing - 4": colors.HexColor('#10B981'),     # Emerald
         "Packaging": colors.HexColor('#F97316'),      # Orange
+        "QC": colors.HexColor('#06B6D4'),             # Cyan
     }
     return phase_colors.get(phase_name, colors.HexColor('#6B7280'))  # Default gray
 

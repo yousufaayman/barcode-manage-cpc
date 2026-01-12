@@ -306,12 +306,12 @@ async def print_barcodes(
         for barcode in request.barcodes:
             for _ in range(request.count):
                 print_barcode_zebra(
-                    barcode_string=barcode['barcode'],
-                    brand=barcode['brand'],
-                    model_name=barcode['model'],
-                    size_value=barcode['size'],
-                    color_name=barcode['color'],
-                    quantity=barcode['quantity'],
+                    barcode_string=barcode.get('barcode', ''),
+                    brand=barcode.get('client_name', ''),
+                    model_name=barcode.get('model', ''),
+                    size_value=barcode.get('size', ''),
+                    color_name=barcode.get('color', ''),
+                    quantity=barcode.get('quantity', 0),
                     printer_name=request.printer_name
                 )
         
@@ -448,11 +448,8 @@ async def validate_second_degree_batches(
                 from app.crud.helpers import generate_barcode_string
                 barcode = generate_barcode_string(
                     row_data["job_order_id"],
-                    job_order.client_id or 0,
-                    job_order.model_id or 0,
                     row_data["size_id"],
                     row_data["color_id"],
-                    row_data["quantity"],
                     row_data["layers"],
                     serial_number
                 )

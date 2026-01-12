@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
-import api, { jobOrderApi, JobOrder } from '../services/api';
+import api, { jobOrderApi, JobOrder, JobOrderSummary } from '../services/api';
 import { cn } from '../lib/utils';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -27,35 +27,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
-import { Plus, Search, Filter, X, Package, CheckCircle, Edit, Eye } from 'lucide-react';
+import { Plus, Search, Filter, X, Package, CheckCircle, Edit, Eye, ArrowUpDown } from 'lucide-react';
 import VirtualizedTable from '../components/VirtualizedTable';
 import SearchableDropdown, { EditableDropdown } from '../components/SearchableDropdown';
 import { useToast } from '../hooks/use-toast';
 import { Label } from '../components/ui/label';
 import { Link } from 'react-router-dom';
 import { Textarea } from '../components/ui/textarea';
-
-interface JobOrderSummary {
-  job_order_id: number;
-  job_order_number: string;
-  model_name?: string;
-  client_name?: string;
-  total_items: number;
-  total_expected_quantity: number;
-  cut_quantity: number;
-  second_degree_quantity: number;
-  completed_quantity: number;
-  working_quantity: number;
-  remaining_quantity: number;
-  total_batches: number;
-  has_issues: boolean;
-  has_high_second_degree: boolean;
-  has_stalled_batches: boolean;
-  completion_percentage: number;
-  overproduction_quantity: number;
-  notes?: string;
-  last_calculated_at?: string;
-}
+import PriorityModal from '../components/PriorityModal';
 
 const JobOrdersPage: React.FC = () => {
   const { user } = useAuth();
@@ -189,6 +168,10 @@ const JobOrdersPage: React.FC = () => {
   
   // Track if this is the initial page load
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+
+  // Priority modal state
+  const [priorityModalOpen, setPriorityModalOpen] = useState(false);
+  const [allJobOrdersForPriority, setAllJobOrdersForPriority] = useState<JobOrderSummary[]>([]);
   
   // Fetch open job orders using summary endpoint
   const fetchOpenJobOrders = async () => {
@@ -211,28 +194,34 @@ const JobOrdersPage: React.FC = () => {
         return;
       }
       
-      // Sort so that job orders with issues come first, using hierarchy: P > T > L > S > O
+      // Sort by issues hierarchy first: P > T > L > S > O, then by manual priority
       const sortedOpenItems = [...allOpenResponse.items].sort((a, b) => {
         const aIssues = detectIssues(a);
         const bIssues = detectIssues(b);
         
-        // Get highest priority issue for each job order
         const getHighestPriority = (issues: any[]) => {
-          if (issues.some(i => i.type === 'notes')) return 5; // P - highest
-          if (issues.some(i => i.type === 'stalled')) return 4; // T
-          if (issues.some(i => i.type === 'lost_quantity')) return 3; // L
-          if (issues.some(i => i.type === 'high_second_degree')) return 2; // S
-          if (issues.some(i => i.type === 'overproduction')) return 1; // O - lowest
-          return 0; // No issues
+          if (issues.some(i => i.type === 'notes')) return 5;
+          if (issues.some(i => i.type === 'stalled')) return 4;
+          if (issues.some(i => i.type === 'lost_quantity')) return 3;
+          if (issues.some(i => i.type === 'high_second_degree')) return 2;
+          if (issues.some(i => i.type === 'overproduction')) return 1;
+          return 0;
         };
         
-        const aPriority = getHighestPriority(aIssues);
-        const bPriority = getHighestPriority(bIssues);
+        const aIssuePriority = getHighestPriority(aIssues);
+        const bIssuePriority = getHighestPriority(bIssues);
         
-        // Sort by priority (highest first), then by job order number if same priority
-        if (aPriority !== bPriority) {
-          return bPriority - aPriority;
+        if (aIssuePriority !== bIssuePriority) {
+          return bIssuePriority - aIssuePriority;
         }
+        
+        const priorityA = a.priority || 0;
+        const priorityB = b.priority || 0;
+        
+        if (priorityB !== priorityA) {
+          return priorityB - priorityA;
+        }
+        
         return a.job_order_number.localeCompare(b.job_order_number);
       });
       // Apply pagination after sorting
@@ -748,6 +737,40 @@ const JobOrdersPage: React.FC = () => {
     }
   };
 
+  const handleOpenPriorityModal = async () => {
+    try {
+      const response = await jobOrderApi.getSummary({ limit: 10000 });
+      setAllJobOrdersForPriority(response.items || []);
+      setPriorityModalOpen(true);
+    } catch (error) {
+      console.error('Error fetching job orders for priority:', error);
+      toast({
+        title: t('common.error'),
+        description: 'Failed to load job orders',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  const handleSavePriorities = async (updates: Array<{ job_order_id: number; priority: number }>) => {
+    try {
+      await jobOrderApi.bulkUpdatePriorities(updates);
+      await fetchOpenJobOrders();
+      toast({
+        title: t('common.success'),
+        description: 'Priorities updated successfully',
+      });
+    } catch (error: any) {
+      console.error('Error saving priorities:', error);
+      toast({
+        title: t('common.error'),
+        description: error?.response?.data?.detail || 'Failed to save priorities',
+        variant: 'destructive'
+      });
+      throw error;
+    }
+  };
+
   // Handler to open the view dialog and fetch tracking data
   const handleViewJobOrder = async (jobOrder: JobOrderSummary) => {
     // This function is no longer needed as the view is handled by a Link
@@ -825,7 +848,7 @@ const JobOrdersPage: React.FC = () => {
           className="rounded border-gray-300 text-green-600 focus:ring-green-500"
         />
       ),
-      hidden: user?.role !== 'admin' && user?.role !== 'creator'
+      hidden: user?.role !== 'admin' && user?.role !== 'general_operations'
     },
     {
       key: 'job_order_number',
@@ -979,7 +1002,7 @@ const JobOrdersPage: React.FC = () => {
               <Eye className="w-4 h-4 text-gray-600" />
             </Button>
           </Link>
-          {(user?.role === 'admin' || user?.role === 'creator') && (
+          {(user?.role === 'admin' || user?.role === 'general_operations') && (
             <Button
               variant="ghost"
               size="sm"
@@ -1023,57 +1046,64 @@ const JobOrdersPage: React.FC = () => {
               {t('barcodeManagement.clearFilters')}
             </Button>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            <div className="form-group">
-              <label htmlFor="job_order_number" className="text-sm font-medium text-gray-700">{t('jobOrders.jobOrderNumber')}</label>
-              <SearchableDropdown
-                label={t('jobOrders.jobOrderNumber')}
-                options={jobOrderOptions}
-                value={filters.job_order_number}
-                onChange={(value) => handleFilterChange('job_order_number', value)}
-                placeholder={t('jobOrders.placeholders.jobOrderNumber')}
-              />
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              <div className="form-group">
+                <SearchableDropdown
+                  label={t('jobOrders.jobOrderNumber')}
+                  options={jobOrderOptions}
+                  value={filters.job_order_number}
+                  onChange={(value) => handleFilterChange('job_order_number', value)}
+                  placeholder={t('jobOrders.placeholders.jobOrderNumber')}
+                />
+              </div>
+              
+              <div className="form-group">
+                <SearchableDropdown
+                  label={t('jobOrders.modelName')}
+                  options={modelOptions}
+                  value={filters.model_name}
+                  onChange={(value) => handleFilterChange('model_name', value)}
+                  placeholder={t('jobOrders.placeholders.modelName')}
+                />
+              </div>
+              
+              <div className="form-group">
+                <SearchableDropdown
+                  label={t('jobOrders.clientName')}
+                  options={brandOptions}
+                  value={filters.client_name}
+                  onChange={(value) => handleFilterChange('client_name', value)}
+                  placeholder={t('jobOrders.placeholders.clientName')}
+                />
+              </div>
             </div>
             
             <div className="form-group">
-              <label htmlFor="model_name" className="text-sm font-medium text-gray-700">{t('jobOrders.modelName')}</label>
-              <SearchableDropdown
-                label={t('jobOrders.model')}
-                options={modelOptions}
-                value={filters.model_name}
-                onChange={(value) => handleFilterChange('model_name', value)}
-                placeholder={t('jobOrders.placeholders.modelName')}
-              />
+              <label className="text-sm font-medium text-gray-700 mb-2 block">{t('common.actions')}</label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button
+                  onClick={handleOpenPriorityModal}
+                  variant="outline"
+                  className="min-w-[140px] sm:flex-1"
+                >
+                  <ArrowUpDown className="h-4 w-4 mr-2" />
+                  <span className="whitespace-nowrap">{t('jobOrders.priority.title', 'Prioritize')}</span>
+                </Button>
+                <Button
+                  onClick={handleAddJobOrder}
+                  className="min-w-[140px] sm:flex-1 text-white font-medium"
+                  style={{ backgroundColor: 'rgb(17, 139, 80)', borderColor: 'rgb(17, 139, 80)', color: '#fff', fontWeight: 500 }}
+                >
+                  <span className="whitespace-nowrap">{t('jobOrders.addJobOrder')}</span>
+                </Button>
+              </div>
             </div>
-            
-            <div className="form-group">
-              <label htmlFor="client_name" className="text-sm font-medium text-gray-700">{t('jobOrders.clientName')}</label>
-              <SearchableDropdown
-                label={t('bulkBarcode.client')}
-                options={brandOptions}
-                value={filters.client_name}
-                onChange={(value) => handleFilterChange('client_name', value)}
-                placeholder={t('jobOrders.placeholders.clientName')}
-              />
-            </div>
-            
-            <div className="form-group">
-              <label className="text-sm font-medium text-gray-700">{t('common.actions')}</label>
-              <Button
-                onClick={handleAddJobOrder}
-                className="w-full text-white font-medium"
-                style={{ backgroundColor: 'rgb(17, 139, 80)', borderColor: 'rgb(17, 139, 80)', color: '#fff', fontWeight: 500 }}
-              >
-                {t('jobOrders.addJobOrder')}
-              </Button>
-            </div>
-            
-
           </div>
         </div>
         
         {/* Archive Action Button */}
-        {(user?.role === 'admin' || user?.role === 'creator') && selectedJobOrders.length > 0 && (
+        {(user?.role === 'admin' || user?.role === 'ops_manager') && selectedJobOrders.length > 0 && (
           <div className="mb-6 text-center">
             <button
               onClick={handleArchiveSelected}
@@ -1290,6 +1320,12 @@ const JobOrdersPage: React.FC = () => {
         </DialogContent>
       </Dialog>
 
+      <PriorityModal
+        open={priorityModalOpen}
+        onOpenChange={setPriorityModalOpen}
+        jobOrders={allJobOrdersForPriority}
+        onSave={handleSavePriorities}
+      />
 
     </Layout>
   );

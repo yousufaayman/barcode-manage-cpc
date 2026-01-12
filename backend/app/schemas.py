@@ -1,5 +1,8 @@
-from pydantic import BaseModel, Field, EmailStr, model_validator, computed_field
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field, EmailStr, model_validator, computed_field, model_serializer
+from typing import Optional, List, Dict, Any, Literal
+# Shared status literals
+CutPrintStatus = Literal['pending', 'in_progress', 'completed']
+
 from datetime import datetime, date
 from enum import Enum
 
@@ -10,7 +13,7 @@ from enum import Enum
 # User schemas
 class RoleEnum(str, Enum):
     ADMIN = "admin"
-    CREATOR = "creator"
+    GENERAL_OPERATIONS = "general_operations"
     CUTTING = "cutting"
     SEWING = "sewing"
     PACKAGING = "packaging"
@@ -183,10 +186,96 @@ class ProductionPhase(ProductionPhaseBase):
 # Job Order Print Configuration (JSONB)
 class JobOrderPrintConfig(BaseModel):
     type: str
-    details: Dict[str, str] = {}
+    fields: Dict[str, str] = Field(default_factory=dict)
+    placement_labels: Dict[str, str] = Field(default_factory=dict)
+    color_breakdown: Dict[str, Dict[str, str]] = Field(default_factory=dict)
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_fields(cls, value):
+        if value is None:
+            return None
+
+        if isinstance(value, JobOrderPrintConfig):
+            return value
+
+        if isinstance(value, dict):
+            type_value = value.get("type") or value.get("method") or value.get("mode")
+            if not type_value:
+                return None
+
+            merged_fields: Dict[str, str] = {}
+            placement_labels: Dict[str, str] = {}
+            color_breakdown: Dict[str, Dict[str, str]] = {}
+
+            # Legacy nested details
+            legacy_details = value.get("details")
+            if isinstance(legacy_details, dict):
+                for key, entry_value in legacy_details.items():
+                    if entry_value is None:
+                        continue
+                    merged_fields[key] = str(entry_value)
+
+            # Explicit fields dict
+            explicit_fields = value.get("fields")
+            if isinstance(explicit_fields, dict):
+                for key, entry_value in explicit_fields.items():
+                    if entry_value is None:
+                        continue
+                    merged_fields[key] = str(entry_value)
+
+            labels = value.get("placement_labels")
+            if isinstance(labels, dict):
+                for key, label in labels.items():
+                    if not key or label is None:
+                        continue
+                    placement_labels[key] = str(label)
+
+            breakdown = value.get("color_breakdown")
+            if isinstance(breakdown, dict):
+                for color, placements in breakdown.items():
+                    if not isinstance(placements, dict):
+                        continue
+                    normalized_entries: Dict[str, str] = {}
+                    for placement_key, placement_value in placements.items():
+                        if placement_value is None:
+                            continue
+                        normalized_entries[placement_key] = str(placement_value)
+                    if normalized_entries:
+                        color_breakdown[color] = normalized_entries
+
+            # Any additional root-level entries become key/value pairs
+            for key, entry_value in value.items():
+                if key in {"type", "method", "mode", "details", "fields", "placement_labels", "color_breakdown"}:
+                    continue
+                if entry_value is None:
+                    continue
+                merged_fields[key] = str(entry_value)
+
+            payload: Dict[str, Any] = {
+                "type": type_value,
+                "fields": merged_fields,
+                "placement_labels": placement_labels,
+                "color_breakdown": color_breakdown,
+            }
+
+            return payload
+
+        return value
+
+    @model_serializer(mode="plain")
+    def serialize(self):
+        payload: Dict[str, Any] = {"type": self.type}
+        payload["fields"] = self.fields
+        payload.update(self.fields)
+        if self.placement_labels:
+            payload["placement_labels"] = self.placement_labels
+        if self.color_breakdown:
+            payload["color_breakdown"] = self.color_breakdown
+        return payload
 
 # Job Order schemas
 class JobOrderItemBase(BaseModel):
@@ -225,6 +314,13 @@ class JobOrderItemUpdate(BaseModel):
 class JobOrderItemNotesUpdate(BaseModel):
     notes: str
 
+class JobOrderPriorityUpdate(BaseModel):
+    job_order_id: int
+    priority: int
+
+class BulkJobOrderPriorityUpdate(BaseModel):
+    updates: List[JobOrderPriorityUpdate]
+
 class JobOrderBase(BaseModel):
     model_id: int
     job_order_number: str
@@ -232,6 +328,7 @@ class JobOrderBase(BaseModel):
     image_url: Optional[str] = None
     notes: Optional[str] = None
     print_config: Optional[JobOrderPrintConfig] = None
+    priority: Optional[int] = 0
 
 class JobOrderCreate(BaseModel):
     model_id: int
@@ -240,6 +337,7 @@ class JobOrderCreate(BaseModel):
     client_id: Optional[int] = None
     image_url: Optional[str] = None
     print_config: Optional[JobOrderPrintConfig] = None
+    priority: Optional[int] = 0
 
 class JobOrderCreateWithNames(BaseModel):
     model_name: str
@@ -251,6 +349,7 @@ class JobOrderCreateWithNames(BaseModel):
     materials: Optional[List[Dict[str, Any]]] = None
     print_config: Optional[JobOrderPrintConfig] = None
     notes: Optional[str] = None
+    priority: Optional[int] = 0
 
 class JobOrderUpdate(BaseModel):
     model_id: Optional[int] = None
@@ -261,6 +360,7 @@ class JobOrderUpdate(BaseModel):
     print_config: Optional[JobOrderPrintConfig] = None
     notes: Optional[str] = None
     materials: Optional[List[Dict[str, Any]]] = None
+    priority: Optional[int] = None
 
 class JobOrder(JobOrderBase):
     job_order_id: int
@@ -331,7 +431,13 @@ class SecondDegreeBatchCreate(BaseModel):
     status: str = "In Progress"
     is_second_degree: bool = True
 
+class QuantityDecrementType(str, Enum):
+    REJECTION = "rejection"
+    SECOND_DEGREE = "second_degree"
+    LOST = "lost"
+
 class BatchUpdate(BaseModel):
+    quantity_increment_reason: Optional[str] = None
     job_order_id: Optional[int] = None
     barcode: Optional[str] = None
     size_id: Optional[int] = None
@@ -342,6 +448,12 @@ class BatchUpdate(BaseModel):
     current_phase: Optional[int] = None
     status: Optional[str] = None
     is_second_degree: Optional[bool] = None
+    deduction_to_phase: Optional[int] = None
+    deduction_reason: Optional[str] = None
+    quantity_decrement_type: Optional[QuantityDecrementType] = None
+    quantity_decrement_reason: Optional[str] = None
+    quantity_decrement_phase_id: Optional[int] = None
+    quantity_increment_reason: Optional[str] = None
 
 class BatchResponse(BatchBase):
     batch_id: int
@@ -360,6 +472,129 @@ class BatchResponse(BatchBase):
 class BatchListResponse(BaseModel):
     items: List[BatchResponse]
     total: int
+
+class BatchCompensationCreate(BaseModel):
+    item_id: int
+    phase_id: int
+    quantity: int
+    notes: Optional[str] = None
+
+class BatchCompensationRequest(BaseModel):
+    job_order_id: int
+    compensations: List[BatchCompensationCreate]
+
+class RejectionResolutionType(str, Enum):
+    REWORKED = "reworked"
+    SCRAPPED = "scrapped"
+    CANCELLED = "cancelled"
+    INVALID = "invalid"
+
+class SingleRejectionBase(BaseModel):
+    batch_id: int
+    rejected_from_phase_id: int
+    return_to_phase_id: Optional[int] = None
+    quantity: int = Field(default=1, gt=0)
+    rejection_reason: Optional[str] = None
+
+class SingleRejectionCreate(SingleRejectionBase):
+    pass
+
+class SingleRejectionUpdate(BaseModel):
+    return_to_phase_id: Optional[int] = None
+    rejection_reason: Optional[str] = None
+    is_resolved: Optional[bool] = None
+    resolved_quantity: Optional[int] = Field(None, ge=0)
+
+class SingleRejection(SingleRejectionBase):
+    rejection_id: int
+    job_order_id: int
+    color_id: int
+    size_id: int
+    rejected_from_phase_type: str
+    rejected_by_user_id: Optional[int] = None
+    rejected_at: datetime
+    status_at_rejection: Optional[str] = None
+    is_resolved: bool
+    resolved_quantity: Optional[int] = None
+    resolved_at: Optional[datetime] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def extract_batch_fields(cls, data: Any):
+        if isinstance(data, dict):
+            return data
+        if hasattr(data, 'batch') and data.batch:
+            data_dict = {
+                'rejection_id': data.rejection_id,
+                'batch_id': data.batch_id,
+                'rejected_from_phase_id': data.rejected_from_phase_id,
+                'rejected_from_phase_type': data.rejected_from_phase_type,
+                'return_to_phase_id': data.return_to_phase_id,
+                'quantity': data.quantity,
+                'rejection_reason': data.rejection_reason,
+                'rejected_by_user_id': data.rejected_by_user_id,
+                'rejected_at': data.rejected_at,
+                'status_at_rejection': data.status_at_rejection,
+                'is_resolved': data.is_resolved,
+                'resolved_quantity': data.resolved_quantity,
+                'resolved_at': data.resolved_at,
+                'job_order_id': data.batch.job_order_id,
+                'color_id': data.batch.color_id,
+                'size_id': data.batch.size_id,
+            }
+            return data_dict
+        return data
+
+    class Config:
+        from_attributes = True
+
+class SingleIncrementBase(BaseModel):
+    batch_id: int
+    incremented_in_phase_id: int
+    quantity: int = Field(default=1, gt=0)
+    increment_reason: Optional[str] = None
+
+class SingleIncrementCreate(SingleIncrementBase):
+    pass
+
+class SingleIncrementUpdate(BaseModel):
+    increment_reason: Optional[str] = None
+
+class SingleIncrement(SingleIncrementBase):
+    increment_id: int
+    job_order_id: int
+    color_id: int
+    size_id: int
+    incremented_in_phase_type: str
+    incremented_by_user_id: Optional[int] = None
+    incremented_at: datetime
+    status_at_increment: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def extract_batch_fields(cls, data: Any):
+        if isinstance(data, dict):
+            return data
+        if hasattr(data, 'batch') and data.batch:
+            data_dict = {
+                'increment_id': data.increment_id,
+                'batch_id': data.batch_id,
+                'incremented_in_phase_id': data.incremented_in_phase_id,
+                'incremented_in_phase_type': data.incremented_in_phase_type,
+                'quantity': data.quantity,
+                'increment_reason': data.increment_reason,
+                'incremented_by_user_id': data.incremented_by_user_id,
+                'incremented_at': data.incremented_at,
+                'status_at_increment': data.status_at_increment,
+                'job_order_id': data.batch.job_order_id,
+                'color_id': data.batch.color_id,
+                'size_id': data.batch.size_id,
+            }
+            return data_dict
+        return data
+
+    class Config:
+        from_attributes = True
 
 class BulkBarcodeProcess(BaseModel):
     client: str  # Renamed from brand
@@ -410,8 +645,6 @@ class BarcodeScanEventBase(BaseModel):
     new_phase: Optional[int] = None
     scanned_at: datetime
     user_id: Optional[int] = None
-    notes: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
 
 class BarcodeScanEventCreate(BarcodeScanEventBase):
     pass
@@ -511,16 +744,26 @@ class JobOrderItemSummary(BaseModel):
     expected_quantity: int
     produced_quantity: int
     cut_quantity: int
+    cut_inspection_qty: int
+    second_degree_cut_qty: int
+    sewing_in_qty: int
+    sewing_out_qty: int
+    qc_in_qty: int
+    qc_out_qty: int
+    packaging_in_qty: int
+    packaging_out_qty: int
     second_degree_quantity: int
     completed_quantity: int
     working_quantity: int
     remaining_quantity: int
+    lost_qty: int
     total_batches: int
     has_issues: bool
     completion_percentage: float
     overproduction_quantity: int
     production_status: str
     notes: Optional[str] = None
+    true_consumption: Optional[float] = None
     last_calculated_at: Optional[datetime] = None
     last_quantity_change: Optional[datetime] = None
     last_completion_change: Optional[datetime] = None
@@ -548,6 +791,7 @@ class JobOrderSummary(BaseModel):
     has_stalled_batches: bool
     completion_percentage: float
     overproduction_quantity: int
+    priority: Optional[int] = 0
     last_calculated_at: Optional[datetime] = None
     notes: Optional[str] = None
     image_url: Optional[str] = None
@@ -573,10 +817,16 @@ class PhaseStatusStats(BaseModel):
     pending: int
     in_progress: int
 
+class QCStats(BaseModel):
+    pending: int
+    in_progress: int
+    completed: int
+
 class PhaseStats(BaseModel):
     cutting: PhaseStatusStats
     sewing: PhaseStatusStats
     packaging: PackagingStats
+    qc: QCStats
 
 # Timeline schemas
 class TimelineEntryBase(BaseModel):
@@ -925,3 +1175,144 @@ class ItemLevelStatistics(BaseModel):
 
     class Config:
         from_attributes = True
+
+class CutSizeDetail(BaseModel):
+    size_id: int
+    size_value: str
+    item_id: int
+    total_pieces: int
+    ratio: Optional[float] = None  # Ratio (pieces per layer) for this size
+
+    class Config:
+        from_attributes = True
+
+class CutRoll(BaseModel):
+    roll_id: int
+    cut_id: int
+    roll_number: int
+    weight: float
+    layer_weight: float
+    num_of_layers: int
+    created_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class CutSizeTransition(BaseModel):
+    transition_id: int
+    cut_id: int
+    from_item_id: int
+    to_item_id: int
+    from_size_id: int
+    from_size_value: str
+    to_size_id: int
+    to_size_value: str
+    quantity: int
+    notes: Optional[str] = None
+    created_at: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class CutDetailsResponse(BaseModel):
+    cut_id: int
+    job_order_id: int
+    job_order_number: str
+    model_id: int
+    model_name: str
+    color_id: int
+    color_name: str
+    waste_fabric_weight: Optional[float] = None
+    created_at: Optional[str] = None
+    cut_weight: float
+    num_of_rolls_used: int
+    total_layers: int
+    created_by_user_id: Optional[int] = None
+    notes: Optional[str] = None
+    job_order_items_ratios: Optional[Dict[str, float]] = None  # JSONB ratios: {"item_id": ratio}
+    print_status: Optional[CutPrintStatus] = None
+    requires_printing: bool = False
+    job_order_print_config: Optional[Dict[str, Any]] = None
+    sizes: List[CutSizeDetail]
+    rolls: List[CutRoll] = []
+    transitions: List[CutSizeTransition] = []
+
+    class Config:
+        from_attributes = True
+
+class CutDetailsListResponse(BaseModel):
+    cuts: List[CutDetailsResponse]
+    total: int
+    page: int
+    limit: int
+    total_pages: int
+
+    class Config:
+        from_attributes = True
+
+class CutRollCreate(BaseModel):
+    roll_number: int
+    weight: float
+    layer_weight: float
+    num_of_layers: int
+
+class CutSizeTransitionCreate(BaseModel):
+    from_item_id: int
+    to_item_id: int
+    quantity: int
+    notes: Optional[str] = None
+
+class CutCreate(BaseModel):
+    job_order_id: int
+    color_id: int
+    job_order_items_ratios: Dict[str, float]  # {"item_id": ratio}
+    waste_fabric_weight: Optional[float] = None
+    notes: Optional[str] = None
+    rolls: Optional[List[CutRollCreate]] = []
+    transitions: Optional[List[CutSizeTransitionCreate]] = []
+    print_status: Optional[CutPrintStatus] = None
+
+
+class CutUpdate(BaseModel):
+    job_order_id: Optional[int] = None
+    color_id: Optional[int] = None
+    job_order_items_ratios: Optional[Dict[str, float]] = None
+    waste_fabric_weight: Optional[float] = None
+    notes: Optional[str] = None
+    rolls: Optional[List[CutRollCreate]] = None
+    transitions: Optional[List[CutSizeTransitionCreate]] = None
+    print_status: Optional[CutPrintStatus] = None
+
+
+class CutListItem(BaseModel):
+    cut_number: str
+    cut_id: int
+    color: str
+    color_id: int
+
+    class Config:
+        from_attributes = True
+
+
+class BatchGenerateRequest(BaseModel):
+    job_order_id: int
+    cut_number: str
+    mode: Optional[str] = "auto"
+    quantity_per_batch: Optional[Dict[str, int]] = None
+    extra_pieces_threshold: Optional[int] = 5
+    max_batch_size: Optional[int] = None
+
+
+class GeneratedBatch(BaseModel):
+    batch: int
+    size: str
+    quantity: int
+    barcode: str
+    size_id: Optional[int] = None
+    serial_number: Optional[int] = None
+    layers: Optional[int] = None
+
+class BatchSubmitRequest(BaseModel):
+    batches: List[GeneratedBatch]
+    job_order_id: int
+    color_id: int

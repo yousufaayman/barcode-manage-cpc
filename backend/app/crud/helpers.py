@@ -13,16 +13,20 @@ def encode_model_name(model_name: str, length: int = 2) -> str:
     encoded = base36.dumps(hash_int)
     return encoded[:length].upper()
 
-def generate_barcode_string(job_order_id: int, client_id: int, model_id: int, size_id: int, color_id: int, quantity: int, layers: int, serial: int) -> str:
+def generate_barcode_string(job_order_id: int, size_id: int, color_id: int, layers: int, serial: int) -> str:
+    """Generate barcode string without client_id, model_id, and quantity.
+    
+    Format: {job_order}-{size}-{color}-{layers}-{serial}
+    
+    Note: client_id and model_id are removed from barcode but still displayed in printed labels.
+    Quantity is also removed from barcode string.
+    """
     job_order_code = base36.dumps(job_order_id)
-    client_code = base36.dumps(client_id)
-    model_code = base36.dumps(model_id)
     size_code = base36.dumps(size_id)
     color_code = base36.dumps(color_id)
-    quantity_code = base36.dumps(quantity)
     layers_code = base36.dumps(layers)
     serial_code = base36.dumps(serial)
-    return f"{job_order_code}-{client_code}-{model_code}-{size_code}-{color_code}-{quantity_code}-{layers_code}-{serial_code}"
+    return f"{job_order_code}-{size_code}-{color_code}-{layers_code}-{serial_code}"
 
 def validate_row_data(row_data: Dict[str, Any], required_columns: List[str]) -> Tuple[bool, Optional[str]]:
     missing_fields = [field for field in required_columns if not row_data.get(field)]
@@ -85,11 +89,8 @@ def process_row(db: Session, row_data: Dict[str, Any], job_order: models.JobOrde
     model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first() if job_order.model_id else None
     barcode = generate_barcode_string(
         job_order.job_order_id,
-        client.client_id if client else 0,
-        model.model_id if model else 0,
         size.size_id,
         color.color_id,
-        quantity,
         layers,
         serial_int
     )
@@ -135,11 +136,8 @@ def process_row_with_serial(db: Session, row_data: Dict[str, Any], job_order: mo
     model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first() if job_order.model_id else None
     barcode = generate_barcode_string(
         job_order.job_order_id,
-        client.client_id if client else 0,
-        model.model_id if model else 0,
         size.size_id,
         color.color_id,
-        quantity,
         layers,
         serial_number
     )

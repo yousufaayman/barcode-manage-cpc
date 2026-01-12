@@ -52,13 +52,34 @@ def get_current_active_superuser(
         raise HTTPException(status_code=400, detail="The user doesn't have enough privileges")
     return current_user
 
-def get_current_admin_or_creator(
+def get_current_general_ops_or_above(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> models.User:
+    """Allows access to users with ADMIN or GENERAL_OPERATIONS roles"""
     roles = [r.role for r in get_user_roles_in_system(db=db, user_id=current_user.id, system_name="OPS")]
-    if not any(r in roles for r in ["admin", "creator"]):
-        raise HTTPException(status_code=403, detail="Access denied. Admin or Creator privileges required.")
+    if not any(r in roles for r in ["admin", "general_operations"]):
+        raise HTTPException(status_code=403, detail="Access denied. Admin or General Operations privileges required.")
+    return current_user
+
+def get_current_admin_or_general_ops(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> models.User:
+    """Allows access to users with ADMIN or GENERAL_OPERATIONS roles"""
+    roles = [r.role for r in get_user_roles_in_system(db=db, user_id=current_user.id, system_name="OPS")]
+    if not any(r in roles for r in ["admin", "general_operations"]):
+        raise HTTPException(status_code=403, detail="Access denied. Admin or General Operations privileges required.")
+    return current_user
+
+def get_current_admin_only(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> models.User:
+    """Allows access ONLY to users with ADMIN role (for delete operations)"""
+    roles = [r.role for r in get_user_roles_in_system(db=db, user_id=current_user.id, system_name="OPS")]
+    if "admin" not in roles:
+        raise HTTPException(status_code=403, detail="Access denied. Admin privileges required for this operation.")
     return current_user
 
 def get_optional_current_user(

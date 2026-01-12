@@ -115,7 +115,6 @@ export interface BarcodeScanEvent {
   scanned_at: string;
   user_id?: number;
   user_name?: string;
-  notes?: string;
 }
 
 export interface TimelineSummaryEntry {
@@ -167,6 +166,9 @@ export interface BarcodeUpdate {
   current_phase?: number;
   status?: string;
   notes?: string;
+  quantity?: number;
+  deduction_to_phase?: number;
+  deduction_reason?: string;
 }
 
 export interface BatchStats {
@@ -186,10 +188,17 @@ export interface PhaseStatusStats {
   in_progress: number;
 }
 
+export interface QCStats {
+  pending: number;
+  in_progress: number;
+  completed: number;
+}
+
 export interface PhaseStats {
   cutting: PhaseStatusStats;
   sewing: PhaseStatusStats;
   packaging: PackagingStats;
+  qc: QCStats;
 }
 
 // Types for Advanced Statistics Page
@@ -464,6 +473,7 @@ export interface JobOrder {
   items: JobOrderItem[];
   total_working_quantity?: number;
   notes?: string;
+  priority?: number;
 }
 
 export interface JobOrderCreate {
@@ -549,6 +559,7 @@ export interface JobOrderSummary {
   completion_percentage: number;
   overproduction_quantity: number;
   notes?: string;
+  priority?: number;
   last_calculated_at?: string;
   last_quantity_change?: string;
   last_completion_change?: string;
@@ -583,6 +594,7 @@ export interface JobOrderItemSummary {
   overproduction_quantity: number;
   production_status: string;
   notes?: string;
+  true_consumption?: number;
   last_calculated_at?: string;
   last_quantity_change?: string;
   last_completion_change?: string;
@@ -667,6 +679,67 @@ export const authApi = {
 
   deleteUser: async (userId: number): Promise<User> => {
     const response = await api.delete<User>(`/auth/users/${userId}`);
+    return response.data;
+  },
+};
+
+export interface GeneratedBatch {
+  batch: number;
+  size: string;
+  quantity: number;
+  barcode: string;
+  size_id?: number;
+  serial_number?: number;
+  layers?: number;
+}
+
+export interface BatchSubmitRequest {
+  batches: GeneratedBatch[];
+  job_order_id: number;
+  color_id: number;
+}
+
+export const batchApi = {
+  generate: async (
+    jobOrderId: number,
+    cutNumber: string,
+    mode?: string,
+    quantityPerBatch?: Record<string, number>,
+    extraPiecesThreshold?: number,
+    maxBatchSize?: number
+  ): Promise<GeneratedBatch[]> => {
+    const requestData: any = {
+      job_order_id: jobOrderId,
+      cut_number: cutNumber,
+      mode: mode || 'auto'
+    };
+
+    if (mode === 'manual') {
+      requestData.quantity_per_batch = quantityPerBatch;
+      requestData.extra_pieces_threshold = extraPiecesThreshold || 5;
+    } else {
+      if (maxBatchSize) {
+        requestData.max_batch_size = maxBatchSize;
+      }
+      if (extraPiecesThreshold !== undefined) {
+        requestData.extra_pieces_threshold = extraPiecesThreshold;
+      }
+    }
+
+    const response = await api.post('/batches/generate', requestData);
+    return response.data;
+  },
+  submit: async (request: BatchSubmitRequest) => {
+    const response = await api.post('/batches/submit', request);
+    return response.data;
+  },
+  createCompensation: async (request: {job_order_id: number; compensations: Array<{item_id: number; phase_id: number; quantity: number; notes?: string}>}) => {
+    const response = await api.post<BulkSubmitResponse>('/batches/create-compensation', request);
+    return response.data;
+  },
+
+  createSecondDegree: async (request: {job_order_id: number; items: Array<{item_id: number; count: number}>}) => {
+    const response = await api.post('/batches/create-second-degree', request);
     return response.data;
   },
 };
@@ -784,8 +857,8 @@ export const barcodeApi = {
     return response.data;
   },
 
-  getPhases: async (): Promise<{ phase_id: number; phase_name: string }[]> => {
-    const response = await api.get<{ phase_id: number; phase_name: string }[]>('/phases/');
+  getPhases: async (): Promise<{ phase_id: number; phase_name: string; type?: string; sequence_order?: number }[]> => {
+    const response = await api.get<{ phase_id: number; phase_name: string; type?: string; sequence_order?: number }[]>('/phases/');
     return response.data;
   },
 
@@ -797,6 +870,10 @@ export const barcodeApi = {
   // Event-based timeline API functions
   getBatchScanEvents: async (batch_id: number, limit: number = 100): Promise<BarcodeScanEvent[]> => {
     const response = await api.get<BarcodeScanEvent[]>(`/batches/${batch_id}/events`, { params: { limit } });
+    return response.data;
+  },
+  getBatchVisitedPhases: async (batch_id: number): Promise<Array<{phase_id: number, phase_name: string, sequence_order?: number, type?: string}>> => {
+    const response = await api.get<Array<{phase_id: number, phase_name: string, sequence_order?: number, type?: string}>>(`/batches/${batch_id}/visited-phases`);
     return response.data;
   },
 
@@ -947,6 +1024,35 @@ export const jobOrderApi = {
     return response.data;
   },
 
+  getCompensations: async (jobOrderId: number): Promise<{
+    phase_summary: Array<{
+      phase_id: number;
+      phase_name: string;
+      count: number;
+    }>;
+    color_summary: Array<{
+      color_name: string;
+      count: number;
+    }>;
+    compensations: Array<{
+      compensation_id: number;
+      batch_id: number;
+      item_id: number;
+      phase_id: number;
+      phase_name: string;
+      quantity: number;
+      created_at: string | null;
+      created_by_user_id: number | null;
+      created_by_username: string | null;
+      color_name: string;
+      size_value: string;
+      barcode: string;
+      batch_quantity: number;
+    }>;
+  }> => {
+    const response = await api.get(`/job-orders/${jobOrderId}/compensations`);
+    return response.data;
+  },
   getMaterials: async (jobOrderId: number): Promise<{id:number,material_id:number,material_name:string,color_name?:string,quantity:number,consumption?:number,notes?:string}[]> => {
     const response = await api.get(`/job-orders/${jobOrderId}/materials`);
     return response.data;
@@ -1045,26 +1151,40 @@ export const jobOrderApi = {
     return response.data;
   },
 
-          restoreJobOrder: async (jobOrderId: number): Promise<{message: string, restored_job_order_id: number}> => {
-          const response = await api.post(`/job-orders/archive/${jobOrderId}/restore`);
-          return response.data;
-        },
-        deleteArchivedJobOrder: async (jobOrderId: number): Promise<{message: string, job_order_id: number, deleted_items: number, deleted_batches: number}> => {
-          const response = await api.delete(`/job-orders/archive/${jobOrderId}/delete`);
-          return response.data;
-        },
-        deleteArchivedItem: async (itemId: number): Promise<{message: string, item_id: number, deleted_batches: number}> => {
-          const response = await api.delete(`/job-orders/items/${itemId}/delete`);
-          return response.data;
-        },
-        recoverBatch: async (batchId: number): Promise<{message: string, batch_id: number}> => {
-          const response = await api.post(`/batches/archived/${batchId}/recover`);
-          return response.data;
-        },
-        deleteArchivedBatch: async (batchId: number): Promise<{message: string, batch_id: number}> => {
-          const response = await api.delete(`/batches/archived/${batchId}`);
-          return response.data;
-        },
+  restoreJobOrder: async (jobOrderId: number): Promise<{message: string, restored_job_order_id: number}> => {
+    const response = await api.post(`/job-orders/archive/${jobOrderId}/restore`);
+    return response.data;
+  },
+
+  deleteArchivedJobOrder: async (jobOrderId: number): Promise<{message: string, job_order_id: number, deleted_items: number, deleted_batches: number}> => {
+    const response = await api.delete(`/job-orders/archive/${jobOrderId}/delete`);
+    return response.data;
+  },
+
+  deleteArchivedItem: async (itemId: number): Promise<{message: string, item_id: number, deleted_batches: number}> => {
+    const response = await api.delete(`/job-orders/items/${itemId}/delete`);
+    return response.data;
+  },
+
+  recoverBatch: async (batchId: number): Promise<{message: string, batch_id: number}> => {
+    const response = await api.post(`/batches/archived/${batchId}/recover`);
+    return response.data;
+  },
+
+  deleteArchivedBatch: async (batchId: number): Promise<{message: string, batch_id: number}> => {
+    const response = await api.delete(`/batches/archived/${batchId}`);
+    return response.data;
+  },
+
+  bulkUpdatePriorities: async (updates: Array<{job_order_id: number, priority: number}>): Promise<{message: string, updated_count: number}> => {
+    const response = await api.post('/job-orders/priorities/bulk-update', { updates });
+    return response.data;
+  },
+
+  getCuts: async (jobOrderId: number): Promise<Array<{cut_number: string, cut_id: number, color: string, color_id: number}>> => {
+    const response = await api.get(`/job-orders/${jobOrderId}/cuts`);
+    return response.data;
+  },
 };
 
 export async function refreshJobOrderSummary() {
@@ -1096,6 +1216,166 @@ export const statisticsApi = {
 
   getJobOrderItemBatchDetails: async (itemId: number): Promise<JobOrderItemBatchDetails> => {
     const response = await api.get<JobOrderItemBatchDetails>(`/statistics/job-order-item/${itemId}/batch-details`);
+    return response.data;
+  },
+};
+
+export interface CutSizeDetail {
+  size_id: number;
+  size_value: string;
+  item_id: number;
+  total_pieces: number;
+  ratio?: number | null; // Ratio (pieces per layer) for this size
+}
+
+export type CutPrintStatus = 'pending' | 'in_progress' | 'completed';
+
+export interface CutDetails {
+  cut_id: number;
+  job_order_id: number;
+  job_order_number: string;
+  model_id: number;
+  model_name: string;
+  color_id: number;
+  color_name: string;
+  waste_fabric_weight: number | null;
+  created_at: string | null;
+  cut_weight: number;
+  num_of_rolls_used: number;
+  total_layers: number;
+  created_by_user_id: number | null;
+  notes: string | null;
+  print_status?: CutPrintStatus | null;
+  requires_printing?: boolean;
+  job_order_print_config?: Record<string, any> | null;
+  sizes: CutSizeDetail[];
+}
+
+export interface CutRoll {
+  roll_id: number;
+  cut_id: number;
+  roll_number: number;
+  weight: number;
+  layer_weight: number;
+  num_of_layers: number;
+  created_at: string | null;
+}
+
+export interface CutSizeTransition {
+  transition_id: number;
+  cut_id: number;
+  from_item_id: number;
+  to_item_id: number;
+  from_size_id: number;
+  from_size_value: string;
+  to_size_id: number;
+  to_size_value: string;
+  quantity: number;
+  notes: string | null;
+  created_at: string | null;
+}
+
+export interface CutDetailsFull extends CutDetails {
+  job_order_items_ratios?: { [key: string]: number } | null; // JSONB ratios: {"item_id": ratio}
+  rolls: CutRoll[];
+  transitions: CutSizeTransition[];
+}
+
+export interface CutDetailsListResponse {
+  cuts: CutDetails[];
+  total: number;
+  page: number;
+  limit: number;
+  total_pages: number;
+}
+
+export interface CutFilterOptions {
+  job_orders: Array<{ id: number; number: string }>;
+  models: Array<{ id: number; name: string }>;
+  colors: Array<{ id: number; name: string }>;
+  print_statuses: Array<{ value: string; label: string }>;
+}
+
+export const cutsApi = {
+  getAllCuts: async (
+    page: number = 1, 
+    limit: number = 10,
+    filters?: {
+      job_order_id?: number;
+      model_id?: number;
+      color_id?: number;
+      print_status?: string;
+    }
+  ): Promise<CutDetailsListResponse | CutDetails[]> => {
+    const params: any = { page, limit };
+    if (filters) {
+      if (filters.job_order_id !== undefined) params.job_order_id = filters.job_order_id;
+      if (filters.model_id !== undefined) params.model_id = filters.model_id;
+      if (filters.color_id !== undefined) params.color_id = filters.color_id;
+      if (filters.print_status) params.print_status = filters.print_status;
+    }
+    const response = await api.get('/cuts/', { params });
+    return response.data;
+  },
+
+  getFilterOptions: async (): Promise<CutFilterOptions> => {
+    const response = await api.get<CutFilterOptions>('/cuts/filter-options');
+    return response.data;
+  },
+
+  getCutById: async (cutId: number): Promise<CutDetailsFull> => {
+    const response = await api.get<CutDetailsFull>(`/cuts/${cutId}`);
+    return response.data;
+  },
+
+  createCut: async (cut: {
+    job_order_id: number;
+    color_id: number;
+    job_order_items_ratios: { [key: string]: number };
+    waste_fabric_weight?: number;
+    notes?: string;
+    print_status?: CutPrintStatus;
+    rolls?: Array<{
+      roll_number: number;
+      weight: number;
+      layer_weight: number;
+      num_of_layers: number;
+    }>;
+    transitions?: Array<{
+      from_item_id: number;
+      to_item_id: number;
+      quantity: number;
+      notes?: string;
+    }>;
+  }): Promise<CutDetailsFull> => {
+    const response = await api.post<CutDetailsFull>('/cuts/', cut);
+    return response.data;
+  },
+
+  updateCut: async (
+    cutId: number,
+    cut: {
+      job_order_id?: number;
+      color_id?: number;
+      job_order_items_ratios?: { [key: string]: number };
+      waste_fabric_weight?: number;
+      notes?: string;
+      print_status?: CutPrintStatus;
+      rolls?: Array<{
+        roll_number: number;
+        weight: number;
+        layer_weight: number;
+        num_of_layers: number;
+      }>;
+      transitions?: Array<{
+        from_item_id: number;
+        to_item_id: number;
+        quantity: number;
+        notes?: string;
+      }>;
+    }
+  ): Promise<CutDetailsFull> => {
+    const response = await api.put<CutDetailsFull>(`/cuts/${cutId}`, cut);
     return response.data;
   },
 };

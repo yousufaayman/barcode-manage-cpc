@@ -35,8 +35,15 @@ const DashboardPage: React.FC = () => {
       completed: 0,
       pending: 0,
       in_progress: 0
+    },
+    qc: {
+      pending: 0,
+      in_progress: 0,
+      completed: 0
     }
   });
+
+  const [phases, setPhases] = useState<{ phase_id: number; phase_name: string; type?: string; sequence_order?: number }[]>([]);
 
   const [phaseBarcodes, setPhaseBarcodes] = useState<{
     [key: string]: {
@@ -125,16 +132,18 @@ const DashboardPage: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [batchStats, phaseData] = await Promise.all([
+        const [batchStats, phaseData, phasesData] = await Promise.all([
           barcodeApi.getBatchStats(),
-          barcodeApi.getPhaseStats()
+          barcodeApi.getPhaseStats(),
+          barcodeApi.getPhases()
         ]);
 
         setStats(batchStats);
         setPhaseStats(phaseData);
+        setPhases(phasesData);
 
         // Fetch barcodes for department if user is not admin; aggregate across multi-line phases like Sewing-1, Sewing-2
-        if (user && user.role && user.role !== 'admin' && user.role !== 'creator') {
+        if (user && user.role && user.role !== 'admin' && user.role !== 'general_operations') {
           const roleName = user.role; // e.g., 'Sewing'
           let targetPhaseNames: string[] = [roleName];
           try {
@@ -297,22 +306,64 @@ const DashboardPage: React.FC = () => {
   };
 
   // Phase configuration with proper ordering and colors
-  const phaseConfig = [
-    { key: 'cutting', name: t('phases.cutting'), color: 'rgb(30 64 175)' },
-    { key: 'sewing', name: t('phases.sewing'), color: 'rgb(107 33 168)' },
-    { key: 'packaging', name: t('phases.packaging'), color: 'rgb(154 52 18)' }
-  ];
+  // Map phase types to keys and colors
+  const phaseTypeMap: { [key: string]: { key: string; color: string } } = {
+    'cutting': { key: 'cutting', color: 'rgb(30 64 175)' },
+    'sewing': { key: 'sewing', color: 'rgb(107 33 168)' },
+    'packaging': { key: 'packaging', color: 'rgb(154 52 18)' },
+    'qc': { key: 'qc', color: 'rgb(6 182 212)' }
+  };
+
+  // Build phase config from fetched phases, sorted by sequence_order
+  const phaseConfig = React.useMemo(() => {
+    // Filter phases that have a type we care about and sort by sequence_order
+    const relevantPhases = phases
+      .filter(p => p.type && phaseTypeMap[p.type])
+      .sort((a, b) => {
+        const orderA = a.sequence_order ?? 999;
+        const orderB = b.sequence_order ?? 999;
+        return orderA - orderB;
+      });
+
+    // Group by type to get unique phase types in order
+    const seenTypes = new Set<string>();
+    const orderedPhases: { key: string; name: string; color: string }[] = [];
+    
+    relevantPhases.forEach(phase => {
+      if (phase.type && !seenTypes.has(phase.type)) {
+        seenTypes.add(phase.type);
+        const config = phaseTypeMap[phase.type];
+        orderedPhases.push({
+          key: config.key,
+          name: t(`phases.${config.key}`),
+          color: config.color
+        });
+      }
+    });
+
+    // Fallback to default order if no phases fetched yet
+    if (orderedPhases.length === 0) {
+      return [
+        { key: 'cutting', name: t('phases.cutting'), color: 'rgb(30 64 175)' },
+        { key: 'sewing', name: t('phases.sewing'), color: 'rgb(107 33 168)' },
+        { key: 'packaging', name: t('phases.packaging'), color: 'rgb(154 52 18)' },
+        { key: 'qc', name: t('phases.qc'), color: 'rgb(6 182 212)' }
+      ];
+    }
+
+    return orderedPhases;
+  }, [phases, t]);
 
   // Overall production phase data - dynamically generated based on phase stats
   const productionPhaseData = [
     ...phaseConfig.map(phase => {
       const phaseData = getPhaseStats(phase.key);
       
-      // For packaging, include completed items since it's the final phase
+      // For packaging and QC, include completed items
       let count;
-      if (phase.key === 'packaging') {
-        const packagingData = phaseData as PhaseStats['packaging'];
-        count = packagingData.pending + packagingData.in_progress + packagingData.completed;
+      if (phase.key === 'packaging' || phase.key === 'qc') {
+        const phaseDataWithCompleted = phaseData as PhaseStats['packaging'] | PhaseStats['qc'];
+        count = phaseDataWithCompleted.pending + phaseDataWithCompleted.in_progress + phaseDataWithCompleted.completed;
       } else {
         count = phaseData.pending + phaseData.in_progress;
       }
@@ -598,7 +649,7 @@ const DashboardPage: React.FC = () => {
             >
               {t('dashboard.jobOrders.title')}
             </button>
-            {user.role && user.role !== 'creator' && (
+            {user.role && user.role !== 'general_operations' && (
               <>
                 <button
                   onClick={() => {
@@ -734,7 +785,7 @@ const DashboardPage: React.FC = () => {
             )}
             
             {/* Pending Items Tab */}
-            {user.role && user.role !== 'creator' && activeTab === 'pending' && loadedTabs.has('pending') && (
+            {user.role && user.role !== 'general_operations' && activeTab === 'pending' && loadedTabs.has('pending') && (
               <div className="flex-1 flex flex-col min-h-0">
                 <Card className="flex-1 flex flex-col min-h-0 h-full border-0 shadow-none">
                   <CardHeader className="flex-shrink-0">
@@ -788,7 +839,7 @@ const DashboardPage: React.FC = () => {
             )}
             
             {/* In Progress Items Tab */}
-            {user.role && user.role !== 'creator' && activeTab === 'in-progress' && loadedTabs.has('in-progress') && (
+            {user.role && user.role !== 'general_operations' && activeTab === 'in-progress' && loadedTabs.has('in-progress') && (
               <div className="flex-1 flex flex-col min-h-0">
                 <Card className="flex-1 flex flex-col min-h-0 h-full border-0 shadow-none">
                   <CardHeader className="flex-shrink-0">

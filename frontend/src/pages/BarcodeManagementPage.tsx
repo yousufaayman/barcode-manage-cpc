@@ -397,7 +397,7 @@ const BarcodeManagementPage: React.FC = () => {
         .filter(barcode => selectedBarcodes.includes(barcode.batch_id))
         .map(barcode => ({
           barcode: barcode.barcode,
-          brand: barcode.brand_name,
+          client_name: barcode.client_name || barcode.brand_name || '',
           model: barcode.model_name,
           size: barcode.size_value,
           color: barcode.color_name,
@@ -414,7 +414,7 @@ const BarcodeManagementPage: React.FC = () => {
         // Use Zebra Browser Print for client-side printing
         const zebraPrintData: BarcodePrintData[] = barcodesToPrint.map(item => ({
           barcode: item.barcode,
-          brand: item.brand,
+          brand: item.client_name || '',
           model: item.model,
           size: item.size,
           color: item.color,
@@ -582,7 +582,7 @@ const BarcodeManagementPage: React.FC = () => {
         </div>
       )
       });
-    } else if (user?.role === 'creator') {
+    } else if (user?.role === 'general_operations') {
       baseColumns.push({
       key: 'actions',
       header: t('common.actions'),
@@ -781,7 +781,7 @@ const BarcodeManagementPage: React.FC = () => {
               </div>
             )}
             
-            {user?.role === 'creator' && (
+            {user?.role === 'general_operations' && (
               <div className="form-group">
                 <label className="text-sm font-medium text-gray-700">{t('common.actions')}</label>
                 <div className="flex gap-2">

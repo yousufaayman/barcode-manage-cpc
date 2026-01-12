@@ -2,10 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Dict, Optional, Any
+import logging
 from app.crud import *
 from app import models, schemas
 from app.core.deps import get_db, get_current_active_superuser, get_current_user, get_optional_current_user, get_current_active_user
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -250,7 +253,8 @@ def get_phase_stats(db: Session = Depends(get_db)):
     phase_counts = {
         'Cutting': {'pending': 0, 'in_progress': 0},
         'Sewing': {'pending': 0, 'in_progress': 0},
-        'Packaging': {'completed': 0, 'pending': 0, 'in_progress': 0}
+        'Packaging': {'completed': 0, 'pending': 0, 'in_progress': 0},
+        'QC': {'pending': 0, 'in_progress': 0, 'completed': 0}
     }
     
     # Process the results
@@ -272,11 +276,19 @@ def get_phase_stats(db: Session = Depends(get_db)):
                 phase_counts['Packaging']['pending'] = count
             elif status == 'In Progress':
                 phase_counts['Packaging']['in_progress'] = count
+        elif phase_name == 'QC' or phase_name.startswith('QC'):
+            if status == 'Completed':
+                phase_counts['QC']['completed'] += count
+            elif status == 'Pending':
+                phase_counts['QC']['pending'] += count
+            elif status == 'In Progress':
+                phase_counts['QC']['in_progress'] += count
     
     result = {
         "cutting": phase_counts['Cutting'],
         "sewing": phase_counts['Sewing'],
-        "packaging": phase_counts['Packaging']
+        "packaging": phase_counts['Packaging'],
+        "qc": phase_counts['QC']
     }
     
     # Debug logging
@@ -414,15 +426,9 @@ def recover_archived_batch_endpoint(
     *,
     db: Session = Depends(get_db),
     batch_id: int,
-    current_user: Optional[schemas.User] = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_active_superuser)
 ):
     """Recover an archived batch by moving it back to the active batches table"""
-    # Require admin access for recovery
-    if not current_user or current_user.role != schemas.RoleEnum.ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied. Admin privileges required to recover archived batches."
-        )
     
     try:
         from app.crud.batch import recover_archived_batch as crud_recover_archived_batch
@@ -440,15 +446,9 @@ def recover_archived_batches_bulk_endpoint(
     *,
     db: Session = Depends(get_db),
     request: BulkArchiveRequest,
-    current_user: Optional[schemas.User] = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_active_superuser)
 ):
     """Recover multiple archived batches by moving them back to the active batches table"""
-    # Require admin access for recovery
-    if not current_user or current_user.role != schemas.RoleEnum.ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied. Admin privileges required to recover archived batches."
-        )
     
     if not request.batch_ids:
         raise HTTPException(status_code=400, detail="No batch IDs provided")
@@ -470,14 +470,9 @@ def get_archived_batches_detailed(
     limit: int = 100,
     barcode: Optional[str] = None,
     job_order_id: Optional[int] = None,
-    current_user: schemas.User = Depends(get_current_active_superuser)
+    current_user: models.User = Depends(get_current_active_superuser)
 ):
     """Get all archived batches with filtering and pagination for the archive child page"""
-    if current_user.role != schemas.RoleEnum.ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied. Admin privileges required to view archived batches."
-        )
     
     # Build query
     query = db.query(models.ArchivedBatch)
@@ -588,7 +583,7 @@ def update_batch_by_barcode(
 @router.post("/transition-completed-phases", response_model=Dict[str, int])
 def transition_completed_phases(
     db: Session = Depends(get_db),
-    current_user: Optional[schemas.User] = Depends(get_current_user)
+    current_user: models.User = Depends(get_current_active_superuser)
 ):
     """Manually transition all existing batches from completed phases to next phases:
     - Cutting (Completed) → Sewing - 1 (Pending)
@@ -597,11 +592,6 @@ def transition_completed_phases(
     Note: Automatic transitions are handled by the database trigger 'handle_phase_transitions'
     for new status changes. This endpoint is for bulk transitions of existing batches.
     """
-    if not current_user or current_user.role != schemas.RoleEnum.ADMIN:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied. Admin privileges required."
-        )
     
     from app.crud.batch import transition_all_completed_phases
     transitioned_count = transition_all_completed_phases(db)
@@ -611,6 +601,7 @@ def transition_completed_phases(
 @router.get("/{batch_id}/events", response_model=List[schemas.BarcodeScanEventResponse])
 def get_batch_scan_events(batch_id: int, limit: int = 100, db: Session = Depends(get_db)):
     """Get all scan events for a batch (detailed audit trail)"""
+    from app.crud.batch import get_detailed_events_by_batch
     events = get_detailed_events_by_batch(db, batch_id, limit)
     if not events:
         raise HTTPException(status_code=404, detail="No scan events found for this batch")
@@ -631,7 +622,6 @@ def get_batch_scan_events(batch_id: int, limit: int = 100, db: Session = Depends
             new_phase=event.new_phase,
             scanned_at=event.scanned_at,
             user_id=event.user_id,
-            notes=event.notes,
             phase_name=phase_name,
             user_name=user_name
         ))
@@ -641,6 +631,7 @@ def get_batch_scan_events(batch_id: int, limit: int = 100, db: Session = Depends
 @router.get("/{batch_id}/timeline/summary", response_model=schemas.TimelineSummaryResponse)
 def get_batch_timeline_summary(batch_id: int, db: Session = Depends(get_db)):
     """Get aggregated timeline summary for a batch (optimized for display)"""
+    from app.crud.batch import get_timeline_summary_by_batch
     summary = get_timeline_summary_by_batch(db, batch_id)
     if not summary:
         raise HTTPException(status_code=404, detail="No timeline data found for this batch")
@@ -666,6 +657,13 @@ def get_batch_timeline_summary(batch_id: int, db: Session = Depends(get_db)):
         total_entries=summary['total_entries'],
         total_events=summary['total_events']
     ) 
+
+@router.get("/{batch_id}/visited-phases")
+def get_batch_visited_phases(batch_id: int, db: Session = Depends(get_db)):
+    """Get unique phases that a batch has visited"""
+    from app.crud.batch import get_visited_phases_by_batch
+    phases = get_visited_phases_by_batch(db, batch_id)
+    return phases
 
 @router.get("/barcode/{barcode}/job-order-item")
 def get_job_order_item_by_barcode(
@@ -1101,3 +1099,446 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
                 )
     
     return phases_data
+
+
+@router.post("/generate", response_model=List[schemas.GeneratedBatch])
+def generate_batches(
+    request: schemas.BatchGenerateRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+):
+    """Generate batches from a cut based on rolls, layers, size ratios, and size transitions.
+    
+    Modes:
+    - "auto": One batch per roll (default)
+    - "manual": User defines quantity per batch per size
+    
+    The cut_number should be in format "CUT-{cut_id}" (e.g., "CUT-1")
+    """
+    from app.crud.batch import generate_batches_from_cut, generate_batches_from_cut_manual
+    
+    try:
+        cut_id_str = request.cut_number.replace("CUT-", "").strip()
+        cut_id = int(cut_id_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid cut_number format: {request.cut_number}. Expected format: CUT-{{cut_id}}")
+    
+    try:
+        mode = request.mode or "auto"
+        
+        if mode == "manual":
+            if not request.quantity_per_batch:
+                raise HTTPException(status_code=400, detail="quantity_per_batch is required for manual mode")
+            
+            extra_threshold = request.extra_pieces_threshold or 5
+            max_batch_size = request.max_batch_size
+            batches = generate_batches_from_cut_manual(
+                db,
+                request.job_order_id,
+                cut_id,
+                request.quantity_per_batch,
+                extra_threshold,
+                max_batch_size=max_batch_size
+            )
+        else:
+            max_batch_size = request.max_batch_size
+            extra_threshold = request.extra_pieces_threshold
+            batches = generate_batches_from_cut(
+                db, 
+                request.job_order_id, 
+                cut_id,
+                max_batch_size=max_batch_size,
+                extra_pieces_threshold=extra_threshold
+            )
+        
+        return batches
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating batches: {str(e)}")
+
+@router.post("/submit", response_model=schemas.BulkSubmitResponse)
+def submit_generated_batches(
+    request: schemas.BatchSubmitRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+):
+    """Submit generated batches to database with duplicate checking.
+    
+    Skips duplicates and reports them.
+    """
+    from app.crud.batch import create_batch, get_batch_by_barcode, get_batch
+    from app.crud import cut as cut_crud
+    from app.crud import client, model, size, color, phase
+    from app import models
+    
+    created_batches = []
+    duplicate_barcodes = []
+    
+    # Get cut details to extract color_id if not provided
+    color_id = request.color_id
+    if not color_id and request.batches:
+        # Try to get color_id from the first batch's barcode or cut
+        # For now, we'll require color_id to be provided
+        pass
+    
+    # Validate that all size+color combinations are valid for the job order
+    for batch in request.batches:
+        if not batch.size_id:
+            # Need to look up size_id from size value
+            size = db.query(models.Size).filter(models.Size.size_value == batch.size).first()
+            if not size:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Size '{batch.size}' not found"
+                )
+            batch.size_id = size.size_id
+        
+        # Check if the size+color combination exists in the job order items
+        job_order_item = db.query(models.JobOrderItem).filter(
+            models.JobOrderItem.job_order_id == request.job_order_id,
+            models.JobOrderItem.size_id == batch.size_id,
+            models.JobOrderItem.color_id == color_id
+        ).first()
+        
+        if not job_order_item:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Size and color combination not found in job order {request.job_order_id}. Size: {batch.size}, Color ID: {color_id}"
+            )
+    
+    # Process each batch
+    for batch in request.batches:
+        # Check for duplicates
+        existing_batch = get_batch_by_barcode(db, batch.barcode)
+        if existing_batch:
+            duplicate_barcodes.append({
+                "barcode": batch.barcode,
+                "brand": existing_batch.client_name,
+                "model": existing_batch.model_name,
+                "size": existing_batch.size_value,
+                "color": existing_batch.color_name,
+                "quantity": batch.quantity,
+                "layers": batch.layers or 1,
+                "serial": str(batch.serial_number) if batch.serial_number else "N/A"
+            })
+            continue
+        
+        try:
+            # Convert GeneratedBatch to BatchCreate
+            batch_create = schemas.BatchCreate(
+                job_order_id=request.job_order_id,
+                barcode=batch.barcode,
+                size_id=batch.size_id,
+                color_id=color_id,
+                quantity=batch.quantity,
+                layers=batch.layers or 1,
+                serial=str(batch.serial_number) if batch.serial_number else "1",
+                current_phase=1,
+                status="In Progress",
+                is_second_degree=False
+            )
+            
+            # Create the batch
+            user_id = current_user.id if current_user else None
+            db_batch = create_batch(db, batch_create, user_id=user_id)
+            db.refresh(db_batch)
+            
+            # Get the batch with all related data
+            batch_response = get_batch(db, db_batch.batch_id)
+            if batch_response:
+                created_batches.append(batch_response)
+            else:
+                # Fallback to manual construction
+                brand = client.get_client(db, db_batch.client_id) if db_batch.client_id else None
+                model_obj = model.get_model(db, db_batch.model_id) if db_batch.model_id else None
+                size_obj = size.get_size(db, db_batch.size_id)
+                color_obj = color.get_color(db, db_batch.color_id)
+                phase_obj = phase.get_phase(db, db_batch.current_phase)
+                batch_response = schemas.BatchResponse(
+                    batch_id=db_batch.batch_id,
+                    job_order_id=db_batch.job_order_id,
+                    job_order_number=None,
+                    barcode=db_batch.barcode,
+                    client_id=db_batch.client_id,
+                    model_id=db_batch.model_id,
+                    size_id=db_batch.size_id,
+                    color_id=db_batch.color_id,
+                    quantity=db_batch.quantity,
+                    layers=db_batch.layers,
+                    serial=str(db_batch.serial),
+                    current_phase=db_batch.current_phase,
+                    status=db_batch.status,
+                    client_name=brand.client_name if brand else "",
+                    model_name=model_obj.model_name if model_obj else "",
+                    size_value=size_obj.size_value if size_obj else "",
+                    color_name=color_obj.color_name if color_obj else "",
+                    phase_name=phase_obj.phase_name if phase_obj else "",
+                    last_updated=db_batch.last_updated,
+                    archived_at=None,
+                    is_second_degree=bool(db_batch.is_second_degree)
+                )
+                created_batches.append(batch_response)
+        except Exception as e:
+            logger.error(f"Error creating batch: {str(e)}")
+            continue
+    
+    message = f"Successfully created {len(created_batches)} batches."
+    if duplicate_barcodes:
+        message += f" {len(duplicate_barcodes)} duplicates found."
+    
+    return schemas.BulkSubmitResponse(
+        created_batches=created_batches,
+        duplicate_barcodes=duplicate_barcodes,
+        message=message
+    )
+
+class SecondDegreeBatchRequest(BaseModel):
+    job_order_id: int
+    items: List[Dict[str, int]]
+
+@router.post("/create-second-degree", response_model=schemas.BulkSubmitResponse)
+def create_second_degree_batches(
+    request: SecondDegreeBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+):
+    """Create second degree batches for job order items.
+    
+    items format: [{"item_id": int, "count": int}, ...]
+    where count is the number of second degree batches to create for that item.
+    """
+    job_order = get_job_order(db, job_order_id=request.job_order_id)
+    if not job_order:
+        raise HTTPException(status_code=404, detail=f"Job order {request.job_order_id} not found")
+    
+    created_batches = []
+    duplicate_barcodes = []
+    
+    from app.crud.helpers import generate_barcode_string, get_next_serial_number
+    from app.crud.batch import get_batch_by_barcode, get_batch, create_scan_event
+    
+    for item_request in request.items:
+        item_id = item_request.get("item_id")
+        count = item_request.get("count", 0)
+        
+        if count <= 0:
+            continue
+        
+        job_order_item = db.query(models.JobOrderItem).filter(
+            models.JobOrderItem.item_id == item_id,
+            models.JobOrderItem.job_order_id == request.job_order_id
+        ).first()
+        
+        if not job_order_item:
+            logger.warning(f"Job order item {item_id} not found for job order {request.job_order_id}")
+            continue
+        
+        for _ in range(count):
+            try:
+                serial_number = get_next_serial_number(
+                    db,
+                    request.job_order_id,
+                    job_order_item.size_id,
+                    job_order_item.color_id
+                )
+                
+                barcode = generate_barcode_string(
+                    request.job_order_id,
+                    job_order_item.size_id,
+                    job_order_item.color_id,
+                    1,
+                    serial_number
+                )
+                
+                existing_batch = get_batch_by_barcode(db, barcode)
+                if existing_batch:
+                    duplicate_barcodes.append({
+                        "barcode": barcode,
+                        "size": existing_batch.size_value if hasattr(existing_batch, 'size_value') else "Unknown",
+                        "color": existing_batch.color_name if hasattr(existing_batch, 'color_name') else "Unknown"
+                    })
+                    continue
+                
+                second_degree_batch = schemas.SecondDegreeBatchCreate(
+                    job_order_id=request.job_order_id,
+                    size_id=job_order_item.size_id,
+                    color_id=job_order_item.color_id,
+                    quantity=0,
+                    layers=1,
+                    current_phase=1,
+                    status="In Progress",
+                    is_second_degree=True
+                )
+                
+                batch_data = second_degree_batch.dict()
+                batch_data["barcode"] = barcode
+                batch_data["serial"] = f"{serial_number:03d}"
+                
+                db_batch = models.Batch(**batch_data)
+                db.add(db_batch)
+                db.flush()
+                
+                create_scan_event(
+                    db=db,
+                    batch_id=db_batch.batch_id,
+                    action_type='scan_in',
+                    phase_id=db_batch.current_phase,
+                    old_status=None,
+                    new_status=db_batch.status,
+                    old_quantity=None,
+                    new_quantity=db_batch.quantity,
+                    old_phase=None,
+                    new_phase=db_batch.current_phase,
+                    user_id=current_user.id if current_user else None
+                )
+                
+                db.refresh(db_batch)
+                batch_response = get_batch(db, db_batch.batch_id)
+                if batch_response:
+                    created_batches.append(batch_response)
+                    
+            except Exception as e:
+                logger.error(f"Error creating second degree batch: {str(e)}")
+                continue
+    
+    db.commit()
+    
+    message = f"Successfully created {len(created_batches)} second degree batches."
+    if duplicate_barcodes:
+        message += f" {len(duplicate_barcodes)} duplicates found."
+    
+    return schemas.BulkSubmitResponse(
+        created_batches=created_batches,
+        duplicate_barcodes=duplicate_barcodes,
+        message=message
+    )
+
+class CompensationBatchRequest(BaseModel):
+    job_order_id: int
+    compensations: List[Dict[str, Any]]
+
+@router.post("/create-compensation", response_model=schemas.BulkSubmitResponse)
+def create_compensation_batches(
+    request: CompensationBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+):
+    """Create compensation batches for lost physical barcodes.
+    
+    Compensations format: [{"item_id": int, "phase_id": int, "quantity": int}, ...]
+    These batches are NOT included in cut_qty or phase_in_qty calculations.
+    """
+    job_order = get_job_order(db, job_order_id=request.job_order_id)
+    if not job_order:
+        raise HTTPException(status_code=404, detail=f"Job order {request.job_order_id} not found")
+    
+    created_batches = []
+    duplicate_barcodes = []
+    
+    from app.crud.helpers import generate_barcode_string, get_next_serial_number
+    from app.crud.batch import get_batch_by_barcode, get_batch
+    
+    for comp_request in request.compensations:
+        item_id = comp_request.get("item_id")
+        phase_id = comp_request.get("phase_id")
+        quantity = comp_request.get("quantity", 0)
+        
+        if quantity <= 0:
+            continue
+        
+        job_order_item = db.query(models.JobOrderItem).filter(
+            models.JobOrderItem.item_id == item_id,
+            models.JobOrderItem.job_order_id == request.job_order_id
+        ).first()
+        
+        if not job_order_item:
+            logger.warning(f"Job order item {item_id} not found for job order {request.job_order_id}")
+            continue
+        
+        phase = db.query(models.ProductionPhase).filter(
+            models.ProductionPhase.phase_id == phase_id
+        ).first()
+        
+        if not phase:
+            logger.warning(f"Phase {phase_id} not found")
+            continue
+        
+        try:
+            serial_number = get_next_serial_number(
+                db,
+                request.job_order_id,
+                job_order_item.size_id,
+                job_order_item.color_id
+            )
+            
+            barcode = generate_barcode_string(
+                request.job_order_id,
+                job_order_item.size_id,
+                job_order_item.color_id,
+                1,
+                serial_number
+            )
+            
+            existing_batch = get_batch_by_barcode(db, barcode)
+            if existing_batch:
+                duplicate_barcodes.append({
+                    "barcode": barcode,
+                    "size": existing_batch.size_value if hasattr(existing_batch, 'size_value') else "Unknown",
+                    "color": existing_batch.color_name if hasattr(existing_batch, 'color_name') else "Unknown"
+                })
+                continue
+            
+            compensation_batch = schemas.BatchCreate(
+                job_order_id=request.job_order_id,
+                barcode=barcode,
+                size_id=job_order_item.size_id,
+                color_id=job_order_item.color_id,
+                quantity=quantity,
+                layers=1,
+                serial=f"{serial_number:03d}",
+                current_phase=phase_id,
+                status="In Progress",
+                is_second_degree=False
+            )
+            
+            db_batch = models.Batch(**compensation_batch.dict())
+            db.add(db_batch)
+            db.flush()
+            
+            compensation = models.BatchCompensation(
+                batch_id=db_batch.batch_id,
+                item_id=item_id,
+                phase_id=phase_id,
+                quantity=quantity,
+                created_by_user_id=current_user.id if current_user else None
+            )
+            db.add(compensation)
+            
+            db.refresh(db_batch)
+            batch_response = get_batch(db, db_batch.batch_id)
+            if batch_response:
+                created_batches.append(batch_response)
+                
+        except Exception as e:
+            logger.error(f"Error creating compensation batch: {str(e)}")
+            db.rollback()
+            continue
+    
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to commit compensation batches: {str(e)}")
+    
+    message = f"Successfully created {len(created_batches)} compensation batches."
+    if duplicate_barcodes:
+        message += f" {len(duplicate_barcodes)} duplicates found."
+    
+    return schemas.BulkSubmitResponse(
+        created_batches=created_batches,
+        duplicate_barcodes=duplicate_barcodes,
+        message=message
+    )

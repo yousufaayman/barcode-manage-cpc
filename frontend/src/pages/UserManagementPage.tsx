@@ -207,7 +207,7 @@ const UserManagementPage: React.FC = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green focus:border-transparent"
                 >
                   <option value="admin">{t('userManagement.admin')}</option>
-                  <option value="creator">{t('userManagement.creator')}</option>
+                  <option value="general_operations">{t('userManagement.general_operations')}</option>
                   <option value="cutting">{t('userManagement.cutting')}</option>
                   <option value="sewing">{t('userManagement.sewing')}</option>
                   <option value="packaging">{t('userManagement.packaging')}</option>
@@ -230,7 +230,7 @@ const UserManagementPage: React.FC = () => {
                   <span className="font-medium mr-1">{t('userManagement.admin')}:</span> {t('userManagement.adminPermissions')}
                 </li>
                 <li className="flex items-start">
-                  <span className="font-medium mr-1">{t('userManagement.creator')}:</span> {t('userManagement.creatorPermissions')}
+                  <span className="font-medium mr-1">{t('userManagement.general_operations')}:</span> {t('userManagement.generalOperationsPermissions')}
                 </li>
                 <li className="flex items-start">
                   <span className="font-medium mr-1">{t('userManagement.cutting')}:</span> {t('userManagement.cuttingPermissions')}

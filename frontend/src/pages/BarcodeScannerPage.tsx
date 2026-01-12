@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
 import { Label } from '../components/ui/label';
 import { Card, CardContent } from '../components/ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Eye, Edit3, Scan, Keyboard, Package, RefreshCw, Play, Square, AlertTriangle } from 'lucide-react';
 
 type ScannerMode = 'view' | 'update' | 'updateQuantity' | 'secondDegree' | 'productionIssues';
@@ -15,6 +16,8 @@ const STATUS_OPTIONS = ['Pending', 'In Progress', 'Completed'];
 interface Phase {
   id: number;
   name: string;
+  sequence_order?: number;
+  type?: string;
 }
 
 interface SessionData {
@@ -54,6 +57,11 @@ const BarcodeScannerPage: React.FC = () => {
   const [isUpdatingQuantity, setIsUpdatingQuantity] = useState(false);
   const [isSecondDegreeMode, setIsSecondDegreeMode] = useState(false);
   const [secondDegreeToggle, setSecondDegreeToggle] = useState(true);
+  const [quantityDecrementType, setQuantityDecrementType] = useState<'rejection' | 'second_degree' | 'lost' | null>('second_degree');
+  const [quantityDecrementReason, setQuantityDecrementReason] = useState<string>('');
+  const [quantityDecrementPhaseId, setQuantityDecrementPhaseId] = useState<number | null>(null);
+  const [quantityIncrementReason, setQuantityIncrementReason] = useState<string>('');
+  const [visitedPhases, setVisitedPhases] = useState<Phase[]>([]);
   
   // Production Issues mode state
   const [issueNote, setIssueNote] = useState<string>('');
@@ -114,8 +122,23 @@ const BarcodeScannerPage: React.FC = () => {
 
   // Ensure input is always focused
   useEffect(() => {
-    const focusInput = () => {
+    const focusInput = (e?: Event) => {
       if (barcodeInputRef.current && !showIssueNoteDialog) {
+        const target = e?.target as HTMLElement;
+        if (target) {
+          const isFormElement = target.tagName === 'SELECT' || 
+                               target.tagName === 'INPUT' || 
+                               target.tagName === 'TEXTAREA' ||
+                               target.closest('select') ||
+                               target.closest('input') ||
+                               target.closest('textarea') ||
+                               target.closest('[role="combobox"]') ||
+                               target.closest('[role="listbox"]');
+          
+          if (isFormElement && target !== barcodeInputRef.current) {
+            return;
+          }
+        }
         barcodeInputRef.current.focus();
       }
     };
@@ -123,16 +146,46 @@ const BarcodeScannerPage: React.FC = () => {
     // Focus on mount
     focusInput();
 
-    // Focus on any click or keypress
-    window.addEventListener('click', focusInput);
-    window.addEventListener('keydown', focusInput);
+    // Focus on any click or keypress, but check if it's a form element
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'SELECT' || 
+                     target.closest('select') ||
+                     target.closest('[role="combobox"]') ||
+                     target.closest('[role="listbox"]'))) {
+        return;
+      }
+      focusInput(e);
+    };
 
-    // Focus periodically to ensure it stays focused
-    const focusInterval = setInterval(focusInput, 100);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'SELECT' || 
+                     target.closest('select') ||
+                     target.closest('[role="combobox"]') ||
+                     target.closest('[role="listbox"]'))) {
+        return;
+      }
+      focusInput(e);
+    };
+
+    window.addEventListener('click', handleClick);
+    window.addEventListener('keydown', handleKeyDown);
+
+    // Focus periodically to ensure it stays focused, but only if no form element is active
+    const focusInterval = setInterval(() => {
+      const activeElement = document.activeElement;
+      if (activeElement && (activeElement.tagName === 'SELECT' || 
+                           activeElement.tagName === 'INPUT' && activeElement !== barcodeInputRef.current ||
+                           activeElement.tagName === 'TEXTAREA')) {
+        return;
+      }
+      focusInput();
+    }, 100);
 
     return () => {
-      window.removeEventListener('click', focusInput);
-      window.removeEventListener('keydown', focusInput);
+      window.removeEventListener('click', handleClick);
+      window.removeEventListener('keydown', handleKeyDown);
       clearInterval(focusInterval);
     };
   }, [showIssueNoteDialog]);
@@ -214,7 +267,21 @@ const BarcodeScannerPage: React.FC = () => {
 
   // Fetch phases from backend
   useEffect(() => {
-    barcodeApi.getPhases().then(phases => setPhases(phases.map((p: any) => ({ id: p.phase_id, name: p.phase_name }))));
+    barcodeApi.getPhases().then(phases => {
+      const mappedPhases = phases.map((p: any) => ({ 
+        id: p.phase_id, 
+        name: p.phase_name,
+        sequence_order: p.sequence_order,
+        type: p.type
+      }));
+      // Sort by sequence_order (ascending), with nulls last
+      mappedPhases.sort((a, b) => {
+        const orderA = a.sequence_order ?? 999;
+        const orderB = b.sequence_order ?? 999;
+        return orderA - orderB;
+      });
+      setPhases(mappedPhases);
+    });
   }, []);
 
   // Function to handle input mode switching
@@ -263,6 +330,8 @@ const BarcodeScannerPage: React.FC = () => {
       // Set initial quantity to batch quantity for update quantity mode
       if (mode === 'updateQuantity') {
         setQuantity(data.quantity);
+        setQuantityDecrementType('second_degree');
+        setQuantityDecrementReason('');
       }
 
       // Handle update mode (formerly sessions mode)
@@ -286,7 +355,6 @@ const BarcodeScannerPage: React.FC = () => {
               }
             }
 
-            // Only include fields that have changed
             if (selectedPhase !== data.current_phase) {
               updateData.current_phase = selectedPhase;
             }
@@ -523,6 +591,30 @@ const BarcodeScannerPage: React.FC = () => {
       // Set initial quantity to batch quantity for update quantity mode
       if (mode === 'updateQuantity') {
         setQuantity(data.quantity);
+        setQuantityDecrementType('second_degree');
+        setQuantityDecrementReason('');
+        setQuantityDecrementPhaseId(null);
+        try {
+          const visitedPhasesData = await barcodeApi.getBatchVisitedPhases(data.batch_id);
+          const mappedPhases = visitedPhasesData.map(p => ({
+            id: p.phase_id,
+            name: p.phase_name,
+            sequence_order: p.sequence_order,
+            type: p.type
+          }));
+          setVisitedPhases(mappedPhases);
+          const sortedPhases = [...mappedPhases].sort((a, b) => 
+            (a.sequence_order || 0) - (b.sequence_order || 0)
+          );
+          const currentPhaseIndex = sortedPhases.findIndex(p => p.id === data.current_phase);
+          const previousPhase = currentPhaseIndex > 0 ? sortedPhases[currentPhaseIndex - 1] : null;
+          if (previousPhase) {
+            setQuantityDecrementPhaseId(previousPhase.id);
+          }
+        } catch (err) {
+          console.error('Failed to fetch visited phases:', err);
+          setVisitedPhases([]);
+        }
       }
 
       // Handle update mode (formerly sessions mode)
@@ -595,12 +687,14 @@ const BarcodeScannerPage: React.FC = () => {
             console.log('No update data to send - skipping API call (handleSubmit)');
           }
         } catch (updateErr: any) {
-          // Handle specific error cases
           if (updateErr.response?.status === 404) {
             setError(t('barcode.batchNotFound'));
           } else if (updateErr.response?.status === 500) {
             setError(t('barcode.serverError'));
             console.error('Server error details:', updateErr.response?.data);
+          } else if (updateErr.response?.status === 400) {
+            const errorMessage = updateErr.response?.data?.detail || updateErr.response?.data?.message || updateErr.message;
+            setError(errorMessage || t('barcode.failedToUpdate'));
           } else {
             setError(t('barcode.failedToUpdate'));
           }
@@ -641,6 +735,8 @@ const BarcodeScannerPage: React.FC = () => {
     setIssueNote('');
     setCurrentJobOrderItem(null);
     setShowIssueNoteDialog(false);
+    setQuantityDecrementPhaseId(null);
+    setVisitedPhases([]);
     if (barcodeInputRef.current) {
       barcodeInputRef.current.focus();
     }
@@ -651,6 +747,7 @@ const BarcodeScannerPage: React.FC = () => {
     
     try {
       const updateData: any = {};
+      
       if (phase !== barcodeData.current_phase) {
         updateData.current_phase = phase;
       }
@@ -664,7 +761,13 @@ const BarcodeScannerPage: React.FC = () => {
         setCurrentPhase(updatedData.current_phase);
         setStatus(updatedData.status);
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err.response?.status === 400) {
+        const errorMessage = err.response?.data?.detail || err.response?.data?.message || err.message;
+        setError(errorMessage || t('barcode.failedToUpdate'));
+      } else {
+        setError(t('barcode.failedToUpdate'));
+      }
       console.error('Failed to save changes:', err);
     }
   };
@@ -699,18 +802,22 @@ const BarcodeScannerPage: React.FC = () => {
   };
 
   // Helper function to get next phase based on current phase and status
+  // Note: Backend automatically handles phase transitions via database trigger
+  // Cutting + Completed → Sewing phase with highest sequence_order
+  // Any Sewing + Completed → Packaging
   const getNextPhaseForCompleted = (currentPhase: number, status: string): { nextPhase: number; nextStatus: string } | null => {
     if (status !== 'Completed') {
       return null;
     }
 
-    // Phase progression logic:
-    // Cutting (1) + Completed → Sewing (2) + Pending
-    // Any Sewing (2,3,4,7) + Completed → Packaging (8) + Pending
-    // Packaging (8) + Completed → No progression (stays in Packaging)
+    // Phase progression logic (handled by backend trigger, but kept for reference):
+    // Cutting + Completed → Sewing phase with highest sequence_order + Pending
+    // Any Sewing + Completed → Packaging + Pending
+    // Packaging + Completed → No progression (stays in Packaging)
     
     if (currentPhase === 1) { // Cutting
-      return { nextPhase: 2, nextStatus: 'Pending' };
+      // Backend will automatically transition to highest sequence_order sewing phase
+      return null; // Let backend handle it
     } else if ([2, 3, 4, 7].includes(currentPhase)) { // Any Sewing phase
       return { nextPhase: 8, nextStatus: 'Pending' };
     } else if (currentPhase === 8) { // Packaging
@@ -731,13 +838,41 @@ const BarcodeScannerPage: React.FC = () => {
     setError('');
 
     try {
-      const updatedData = await barcodeApi.updateBarcode(barcodeData.barcode, {
+      const updatePayload: any = {
         quantity: quantity
-      });
+      };
+
+      const oldQuantity = barcodeData.quantity || 0;
+      const isIncrement = quantity > oldQuantity;
+      const isDecrement = quantity < oldQuantity;
+
+      if (isIncrement && quantityIncrementReason.trim()) {
+        updatePayload.quantity_increment_reason = quantityIncrementReason.trim();
+      }
+
+      if (isDecrement && quantityDecrementType) {
+        updatePayload.quantity_decrement_type = quantityDecrementType;
+        if (quantityDecrementType === 'rejection' && quantityDecrementReason.trim()) {
+          updatePayload.quantity_decrement_reason = quantityDecrementReason.trim();
+        } else if (quantityDecrementType === 'lost') {
+          updatePayload.quantity_decrement_reason = 'lost/untracked';
+        }
+        if (quantityDecrementType === 'rejection' && quantityDecrementPhaseId) {
+          updatePayload.quantity_decrement_phase_id = quantityDecrementPhaseId;
+        }
+      }
+
+      const updatedData = await barcodeApi.updateBarcode(barcodeData.barcode, updatePayload);
 
       // Update local state with new data
       setBarcodeData(updatedData);
       setQuantity(updatedData.quantity);
+      
+      // Reset decrement and increment state
+      setQuantityDecrementType(null);
+      setQuantityDecrementReason('');
+      setQuantityDecrementPhaseId(null);
+      setQuantityIncrementReason('');
       
       // Show success message
       setError('');
@@ -904,6 +1039,7 @@ const BarcodeScannerPage: React.FC = () => {
   useEffect(() => {
     if (mode !== 'updateQuantity') {
       setQuantity(0);
+      setQuantityIncrementReason('');
     }
     if (mode !== 'productionIssues') {
       setIssueNote('');
@@ -1135,26 +1271,26 @@ const BarcodeScannerPage: React.FC = () => {
                       {phases
                         .filter(phase => user?.role === 'admin' || getAllowedPhasesForRole(user?.role || '').includes(phase.id))
                         .map((phase) => (
-                        <button
-                          key={phase.id}
-                          onClick={() => {
-                            if (!sessionData.isActive) {
-                              setSessionData(prev => ({ ...prev, phase: phase.id }));
-                              setSelectedPhase(phase.id);
-                            }
-                          }}
-                          disabled={sessionData.isActive}
-                          className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors min-w-[80px] ${
-                            sessionData.phase === phase.id
-                              ? 'bg-green text-white'
-                              : sessionData.isActive
-                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                          }`}
-                        >
-                          {phase.name}
-                        </button>
-                      ))}
+                            <button
+                              key={phase.id}
+                              onClick={() => {
+                                if (!sessionData.isActive) {
+                                  setSessionData(prev => ({ ...prev, phase: phase.id }));
+                                  setSelectedPhase(phase.id);
+                                }
+                              }}
+                              disabled={sessionData.isActive}
+                              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors min-w-[80px] ${
+                                sessionData.phase === phase.id
+                                  ? 'bg-green text-white'
+                                  : sessionData.isActive
+                                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
+                            >
+                              {phase.name}
+                            </button>
+                          ))}
                     </div>
                   </div>
                   
@@ -1352,6 +1488,212 @@ const BarcodeScannerPage: React.FC = () => {
                     </button>
                   ))}
                 </div>
+
+                {/* Increment Options */}
+                {quantity > barcodeData.quantity && (
+                  <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+                    <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                      Increment Reason (Optional)
+                    </Label>
+                    <input
+                      type="text"
+                      value={quantityIncrementReason}
+                      onChange={(e) => setQuantityIncrementReason(e.target.value)}
+                      placeholder="e.g., Additional pieces found, Correction"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                    />
+                  </div>
+                )}
+
+                {/* Deduction Options */}
+                {quantity < barcodeData.quantity && (
+                  <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                    <Label className="text-sm font-medium text-gray-700 mb-4 block">
+                      Quantity Decrement Type
+                    </Label>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuantityDecrementType('rejection');
+                          setQuantityDecrementReason('');
+                          if (barcodeData && phases.length > 0) {
+                            const currentPhase = phases.find(p => p.id === barcodeData.current_phase);
+                            if (currentPhase && currentPhase.type) {
+                              const differentTypePhases = phases.filter(p => 
+                                p.type && p.type !== currentPhase.type && p.id !== barcodeData.current_phase
+                              );
+                              if (differentTypePhases.length > 0) {
+                                const sortedDifferentPhases = [...differentTypePhases].sort((a, b) => 
+                                  (a.sequence_order || 0) - (b.sequence_order || 0)
+                                );
+                                setQuantityDecrementPhaseId(sortedDifferentPhases[0].id);
+                              }
+                            }
+                          }
+                        }}
+                        className={`p-4 rounded-lg border-2 transition-all duration-200 touch-manipulation ${
+                          quantityDecrementType === 'rejection'
+                            ? 'border-red-500 bg-red-50 shadow-md scale-105'
+                            : 'border-gray-300 bg-white hover:border-gray-400 hover:shadow-sm active:scale-95'
+                        }`}
+                      >
+                        <div className="flex items-center justify-center mb-2">
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                            quantityDecrementType === 'rejection'
+                              ? 'border-red-500 bg-red-500'
+                              : 'border-gray-400'
+                          }`}>
+                            {quantityDecrementType === 'rejection' && (
+                              <div className="w-2 h-2 rounded-full bg-white"></div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-sm font-medium text-gray-900 text-center">
+                          Set as Rejection
+                        </div>
+                        <div className="text-xs text-gray-500 text-center mt-1">
+                          Rejected piece
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuantityDecrementType('second_degree');
+                          setQuantityDecrementReason('');
+                        }}
+                        className={`p-4 rounded-lg border-2 transition-all duration-200 touch-manipulation ${
+                          quantityDecrementType === 'second_degree'
+                            ? 'border-orange-500 bg-orange-50 shadow-md scale-105'
+                            : 'border-gray-300 bg-white hover:border-gray-400 hover:shadow-sm active:scale-95'
+                        }`}
+                      >
+                        <div className="flex items-center justify-center mb-2">
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                            quantityDecrementType === 'second_degree'
+                              ? 'border-orange-500 bg-orange-500'
+                              : 'border-gray-400'
+                          }`}>
+                            {quantityDecrementType === 'second_degree' && (
+                              <div className="w-2 h-2 rounded-full bg-white"></div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-sm font-medium text-gray-900 text-center">
+                          Second Degree
+                        </div>
+                        <div className="text-xs text-gray-500 text-center mt-1">
+                          Not a rejection
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuantityDecrementType('lost');
+                          setQuantityDecrementReason('');
+                          if (barcodeData) {
+                            setQuantityDecrementPhaseId(barcodeData.current_phase);
+                          }
+                        }}
+                        className={`p-4 rounded-lg border-2 transition-all duration-200 touch-manipulation ${
+                          quantityDecrementType === 'lost'
+                            ? 'border-gray-500 bg-gray-50 shadow-md scale-105'
+                            : 'border-gray-300 bg-white hover:border-gray-400 hover:shadow-sm active:scale-95'
+                        }`}
+                      >
+                        <div className="flex items-center justify-center mb-2">
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                            quantityDecrementType === 'lost'
+                              ? 'border-gray-500 bg-gray-500'
+                              : 'border-gray-400'
+                          }`}>
+                            {quantityDecrementType === 'lost' && (
+                              <div className="w-2 h-2 rounded-full bg-white"></div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-sm font-medium text-gray-900 text-center">
+                          Lost/Not Tracked
+                        </div>
+                        <div className="text-xs text-gray-500 text-center mt-1">
+                          Creates rejection record
+                        </div>
+                      </button>
+                    </div>
+
+                    {(quantityDecrementType === 'rejection' || quantityDecrementType === 'lost') && (() => {
+                      const currentPhaseId = barcodeData.current_phase;
+                      let availablePhases: Phase[] = [];
+                      
+                      if (quantityDecrementType === 'rejection') {
+                        const currentPhase = phases.find(p => p.id === currentPhaseId);
+                        if (currentPhase && currentPhase.type) {
+                          availablePhases = phases.filter(p => 
+                            p.type && p.type !== currentPhase.type && p.id !== currentPhaseId
+                          ).sort((a, b) => (a.sequence_order || 0) - (b.sequence_order || 0));
+                        }
+                      } else {
+                        const currentPhase = phases.find(p => p.id === currentPhaseId);
+                        availablePhases = currentPhase ? [currentPhase] : [];
+                        
+                        if (currentPhase && currentPhase.type && visitedPhases.length > 0) {
+                          const sortedVisitedPhases = [...visitedPhases].sort((a, b) => 
+                            (b.sequence_order || 0) - (a.sequence_order || 0)
+                          );
+                          const currentPhaseIndex = sortedVisitedPhases.findIndex(p => p.id === currentPhaseId);
+                          const previousPhases = sortedVisitedPhases.slice(currentPhaseIndex + 1);
+                          const nearestDifferentTypePhase = previousPhases.find(p => 
+                            p.type && p.type !== currentPhase.type
+                          );
+                          if (nearestDifferentTypePhase) {
+                            availablePhases = [currentPhase, nearestDifferentTypePhase];
+                          }
+                        }
+                      }
+                      
+                      return (
+                        <div className="mt-4 space-y-4">
+                          <div>
+                            <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                              Responsible Phase
+                            </Label>
+                            <Select
+                              value={quantityDecrementPhaseId?.toString() || ''}
+                              onValueChange={(value) => setQuantityDecrementPhaseId(parseInt(value))}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue placeholder="Select phase" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {availablePhases.map((phase) => (
+                                  <SelectItem key={phase.id} value={phase.id.toString()}>
+                                    {phase.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          {quantityDecrementType === 'rejection' && (
+                            <div>
+                              <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                                Rejection Reason (Optional)
+                              </Label>
+                              <input
+                                type="text"
+                                value={quantityDecrementReason}
+                                onChange={(e) => setQuantityDecrementReason(e.target.value)}
+                                placeholder="e.g., Stitching defect, Quality issue"
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
 
                 {/* Update Button */}
                 <div className="text-center">
@@ -1741,6 +2083,7 @@ const BarcodeScannerPage: React.FC = () => {
           </div>
         </div>
       )}
+
     </Layout>
   );
 };

@@ -19,12 +19,15 @@ const BulkBarcodeCreatePage = lazy(() => import('./pages/BulkBarcodeCreatePage')
 const BarcodeManagementPage = lazy(() => import('./pages/BarcodeManagementPage'));
 const JobOrdersPage = lazy(() => import('./pages/JobOrdersPage'));
 const AddJobOrderPage = lazy(() => import('./pages/AddJobOrderPage'));
-const ArchivedBatchesPage = lazy(() => import('./pages/ArchivedBatchesPage'));
+const ArchivePage = lazy(() => import('./pages/ArchivePage'));
 const UnauthorizedPage = lazy(() => import('./pages/UnauthorizedPage'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 const AdvancedStatisticsPage = lazy(() => import('./pages/AdvancedStatisticsPage'));
 const JobOrderDetailsPage = lazy(() => import('./pages/JobOrderDetailsPage'));
 const BarcodeDetailsPage = lazy(() => import('./pages/BarcodeDetailsPage'));
+const CuttingPage = lazy(() => import('./pages/CuttingPage'));
+const CutDetailsPage = lazy(() => import('./pages/CutDetailsPage'));
+const AddCutPage = lazy(() => import('./pages/AddCutPage'));
 
 const queryClient = new QueryClient();
 
@@ -53,15 +56,18 @@ const AppContent: React.FC = () => {
             <Route path="/barcode-management" element={<BarcodeManagementPage />} />
             <Route path="/job-orders/:jobOrderId" element={<JobOrderDetailsPage />} />
             <Route path="/barcode-details/:batchId" element={<BarcodeDetailsPage />} />
+            <Route path="/cutting" element={<CuttingPage />} />
+            <Route path="/cutting/createcut" element={<AddCutPage />} />
+            <Route path="/cutting/:cutId" element={<CutDetailsPage />} />
           </Route>
           
-          {/* Admin, Creator, and Cutting Only Routes */}
-          <Route element={<PrivateRoute allowedRoles={['admin', 'creator', 'cutting']} />}>
+          {/* Admin, General Operations, and Cutting Only Routes */}
+          <Route element={<PrivateRoute allowedRoles={['admin', 'general_operations', 'cutting']} />}>
             <Route path="/bulk-create" element={<BulkBarcodeCreatePage />} />
           </Route>
-          
-          {/* Admin and Creator Only Routes */}
-          <Route element={<PrivateRoute allowedRoles={['admin', 'creator']} />}>
+
+          {/* Admin and General Operations Only Routes */}
+          <Route element={<PrivateRoute allowedRoles={['admin', 'general_operations']} />}>
             <Route path="/job-orders" element={<JobOrdersPage />} />
             <Route path="/add-job-order" element={<AddJobOrderPage />} />
             <Route path="/advanced-statistics" element={<AdvancedStatisticsPage />} />
@@ -69,7 +75,7 @@ const AppContent: React.FC = () => {
           
           {/* Admin Only Routes */}
           <Route element={<PrivateRoute allowedRoles={['admin']} />}>
-            <Route path="/archive" element={<ArchivedBatchesPage />} />
+            <Route path="/archive" element={<ArchivePage />} />
             <Route path="/users" element={<UserManagementPage />} />
           </Route>
           

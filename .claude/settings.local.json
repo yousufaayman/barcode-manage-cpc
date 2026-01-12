@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pg_restore:*)",
+      "Bash(set PGPASSWORD=Y@m8dcln)",
+      "Bash(psql:*)",
+      "Bash(python analyze_db.py:*)",
+      "Bash(python:*)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "outputStyle": "default"
+}
