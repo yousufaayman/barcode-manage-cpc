@@ -262,9 +262,14 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
         backward_movement_detected = is_backward_movement(db, old_phase, new_phase)
         
         if backward_movement_detected:
+            # Check if this is a compensation batch - compensation batches may not have events to reverse
+            is_compensation_batch = db.query(models.BatchCompensation).filter(
+                models.BatchCompensation.batch_id == db_batch.batch_id
+            ).first() is not None
+            
             events_to_reverse = get_events_to_reverse(db, db_batch.batch_id, old_phase, new_phase)
             
-            if not events_to_reverse:
+            if not events_to_reverse and not is_compensation_batch:
                 raise ValueError(
                     f"Cannot move batch {db_batch.batch_id} backward from phase {old_phase} to {new_phase}: "
                     "No events found to reverse. Backward movement requires reversal events."
@@ -1213,7 +1218,7 @@ def create_scan_event(db: Session, batch_id: int, action_type: str, phase_id: in
     batch_quantity = batch.quantity if batch else None
     
     affects_phase_type = determine_affects_phase_type(
-        db, action_type, phase_id, old_phase, new_phase
+        db, action_type, phase_id, old_phase, new_phase, old_quantity, new_quantity
     )
     
     quantity_delta = calculate_quantity_delta(

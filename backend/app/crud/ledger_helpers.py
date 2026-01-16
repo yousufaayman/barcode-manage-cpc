@@ -108,7 +108,9 @@ def determine_affects_phase_type(
     action_type: str,
     phase_id: int,
     old_phase: Optional[int],
-    new_phase: Optional[int]
+    new_phase: Optional[int],
+    old_quantity: Optional[int] = None,
+    new_quantity: Optional[int] = None
 ) -> Optional[str]:
     """
     Determine which phase_type is affected by this event.
@@ -118,7 +120,9 @@ def determine_affects_phase_type(
     Rules:
     - scan_in: Only if crossing INTO a new phase type (e.g., cutting → sewing-*)
     - scan_out: Only if crossing OUT OF a phase type to a different one (e.g., sewing-* → qc)
-    - quantity_update: Affects current phase type
+    - quantity_update: Only affects phase type for DECREMENTS (not increments)
+      - Increments should not affect existing phase quantities, only future scans
+      - Decrements should affect phase quantities (rejection, loss, etc.)
     - phase_change: Only if crossing a boundary
     """
     if action_type == 'scan_in':
@@ -141,7 +145,17 @@ def determine_affects_phase_type(
         return None
     
     elif action_type == 'quantity_update':
-        return get_phase_type(db, phase_id)
+        # Only affect phase quantities for DECREMENTS, not increments
+        # Increments should only affect future scans, not existing phase quantities
+        if old_quantity is not None and new_quantity is not None:
+            if new_quantity < old_quantity:
+                # This is a decrement - affect phase quantities
+                return get_phase_type(db, phase_id)
+            else:
+                # This is an increment - do NOT affect phase quantities
+                return None
+        # If we can't determine, default to not affecting (safer)
+        return None
     
     elif action_type == 'phase_change':
         if old_phase and new_phase:
@@ -257,4 +271,3 @@ def create_ledger_entry(
     )
     db.add(ledger_entry)
     return ledger_entry
-

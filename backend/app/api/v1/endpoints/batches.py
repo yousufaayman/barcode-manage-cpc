@@ -1516,6 +1516,21 @@ def create_compensation_batches(
                 created_by_user_id=current_user.id if current_user else None
             )
             db.add(compensation)
+            db.flush()
+            
+            db.query(models.BatchPhaseHistory).filter(
+                models.BatchPhaseHistory.batch_id == db_batch.batch_id
+            ).update({
+                'compensation': True,
+                'inspection_qty': 0,
+                'sewing_in_qty': 0,
+                'sewing_out_qty': 0,
+                'qc_in_qty': 0,
+                'qc_out_qty': 0,
+                'packaging_in_qty': 0,
+                'packaging_out_qty': 0,
+                'quantity_at_phase': 0
+            })
             
             db.refresh(db_batch)
             batch_response = get_batch(db, db_batch.batch_id)

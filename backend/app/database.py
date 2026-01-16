@@ -332,6 +332,7 @@ def create_batch_phase_history_functions():
             v_is_compensation BOOLEAN := FALSE;
             v_compensation_phase_id INTEGER;
             v_compensation_phase_rank INTEGER;
+            v_old_quantity_at_phase INTEGER;
         BEGIN
             IF TG_OP = 'DELETE' THEN
                 DELETE FROM ops.batch_phase_history WHERE batch_id = OLD.batch_id;
@@ -407,6 +408,12 @@ def create_batch_phase_history_functions():
             WHERE batch_id = NEW.batch_id AND is_resolved = FALSE;
             v_original_qty := v_current_qty + v_rejected_qty;
             
+            -- Get the old quantity_at_phase BEFORE we update it
+            -- This preserves the quantity that was used when entering the previous phase
+            SELECT COALESCE(quantity_at_phase, 0) INTO v_old_quantity_at_phase
+            FROM ops.batch_phase_history
+            WHERE batch_id = NEW.batch_id;
+            
             -- Insert or update the single row for this batch
             -- Always preserve existing values, only update relevant columns based on current phase and status
             INSERT INTO ops.batch_phase_history (
@@ -447,9 +454,14 @@ def create_batch_phase_history_functions():
                 -- If only quantity changed, preserve all phase-specific values
                 -- IMPORTANT: Check OLD phase/status for out quantities since phase transitions happen BEFORE this trigger
                 inspection_qty = CASE 
+                    -- Compensation batches: Keep cutting (rank 1) at 0 if compensation phase rank >= 1
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 1 THEN 0
                     -- If currently in cutting with Completed status
-                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'cutting' AND NEW.status = 'Completed' THEN v_current_qty
+                    -- Use CURRENT quantity (v_current_qty) because quantity may have been incremented while in progress
+                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'cutting' AND NEW.status = 'Completed'
+                        THEN v_current_qty
                     -- If phase changed from cutting to sewing (cutting was completed and auto-transitioned)
+                    -- Use CURRENT quantity because quantity may have been incremented while in progress
                     WHEN v_phase_changed AND v_old_phase_type IS NOT NULL AND v_old_phase_type = 'cutting' 
                         AND v_phase_type = 'sewing' THEN v_current_qty
                     -- If moved back to cutting (backward movement), clear inspection_qty
@@ -461,26 +473,36 @@ def create_batch_phase_history_functions():
                 END,
                 sewing_in_qty = CASE 
                     -- Compensation batches: Keep sewing (rank 2) at 0 if compensation phase rank >= 2
-                    WHEN v_is_compensation AND v_compensation_phase_rank >= 2 THEN 0
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 2 THEN 0
                     -- Backward movement: Clear if moved to cutting or earlier (rank < 2)
                     WHEN v_backward_movement AND v_phase_rank < 2 THEN 0
-                    -- If currently in sewing with In Progress status
-                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'sewing' AND NEW.status = 'In Progress' THEN v_current_qty
-                    -- If batch moved to qc/packaging, it must have been in sewing, so set sewing_in_qty if not already set
-                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type IN ('qc', 'packaging') 
-                        AND COALESCE(batch_phase_history.sewing_in_qty, 0) = 0 THEN v_current_qty
+                    -- If currently in sewing with In Progress status (only for non-compensation batches, only on phase change, not status change)
+                    WHEN NOT v_is_compensation AND v_phase_changed AND v_phase_type = 'sewing' AND NEW.status = 'In Progress' THEN v_current_qty
+                    -- If batch moved to qc/packaging, it must have been in sewing, so set sewing_in_qty if not already set (only for non-compensation batches)
+                    -- Use old quantity_at_phase to preserve the quantity from when entering the previous phase
+                    WHEN NOT v_is_compensation AND v_phase_changed AND v_phase_type IN ('qc', 'packaging') 
+                        AND COALESCE(batch_phase_history.sewing_in_qty, 0) = 0
+                        THEN COALESCE(v_old_quantity_at_phase, batch_phase_history.quantity_at_phase, v_current_qty)
                     -- Preserve existing value if already set
                     ELSE COALESCE(batch_phase_history.sewing_in_qty, 0)
                 END,
                 sewing_out_qty = CASE 
+                    -- Compensation batches: Keep sewing_out (rank 2) at 0 if compensation phase rank > 2 (using > because out quantities use <)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 2 THEN 0
                     -- If currently in sewing with Completed status (before auto-transition, but this is rare)
-                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'sewing' AND NEW.status = 'Completed' THEN v_current_qty
+                    -- Use CURRENT quantity (v_current_qty) because quantity may have been incremented while in progress
+                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'sewing' AND NEW.status = 'Completed'
+                        THEN v_current_qty
                     -- CRITICAL: If phase changed from sewing to qc/packaging, sewing was completed (forward transition)
+                    -- Use CURRENT quantity because quantity may have been incremented while in progress
                     WHEN v_phase_changed AND v_old_phase_type IS NOT NULL AND v_old_phase_type = 'sewing' 
-                        AND v_phase_type IN ('qc', 'packaging') THEN v_current_qty
+                        AND v_phase_type IN ('qc', 'packaging')
+                        THEN v_current_qty
                     -- If batch is in qc/packaging with Completed status (manually set), infer sewing was completed
+                    -- Use CURRENT quantity because quantity may have been incremented while in progress
                     WHEN (v_phase_changed OR v_status_changed) AND v_phase_type IN ('qc', 'packaging') AND NEW.status = 'Completed' 
-                        AND COALESCE(batch_phase_history.sewing_out_qty, 0) = 0 THEN v_current_qty
+                        AND COALESCE(batch_phase_history.sewing_out_qty, 0) = 0
+                        THEN v_current_qty
                     -- If currently in sewing (and not Completed), out_qty must be 0 (not completed if we're in this phase)
                     WHEN v_phase_type = 'sewing' THEN 0
                     -- Backward movement: Clear if moved to cutting or earlier (rank < 2)
@@ -490,26 +512,36 @@ def create_batch_phase_history_functions():
                 END,
                 qc_in_qty = CASE 
                     -- Compensation batches: Keep qc (rank 3) at 0 if compensation phase rank >= 3
-                    WHEN v_is_compensation AND v_compensation_phase_rank >= 3 THEN 0
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 3 THEN 0
                     -- Backward movement: Clear if moved to sewing or earlier (rank <= 2)
                     WHEN v_backward_movement AND v_phase_rank <= 2 THEN 0
-                    -- If currently in qc with In Progress status
-                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'qc' AND NEW.status = 'In Progress' THEN v_current_qty
-                    -- If batch moved to packaging, it must have been in qc, so set qc_in_qty if not already set
-                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'packaging' 
-                        AND COALESCE(batch_phase_history.qc_in_qty, 0) = 0 THEN v_current_qty
+                    -- If currently in qc with In Progress status (only for non-compensation batches, only on phase change, not status change)
+                    WHEN NOT v_is_compensation AND v_phase_changed AND v_phase_type = 'qc' AND NEW.status = 'In Progress' THEN v_current_qty
+                    -- If batch moved to packaging, it must have been in qc, so set qc_in_qty if not already set (only for non-compensation batches)
+                    -- Use old quantity_at_phase to preserve the quantity from when entering QC
+                    WHEN NOT v_is_compensation AND v_phase_changed AND v_phase_type = 'packaging' 
+                        AND COALESCE(batch_phase_history.qc_in_qty, 0) = 0
+                        THEN COALESCE(v_old_quantity_at_phase, batch_phase_history.quantity_at_phase, v_current_qty)
                     -- Preserve existing value if already set
                     ELSE COALESCE(batch_phase_history.qc_in_qty, 0)
                 END,
                 qc_out_qty = CASE 
+                    -- Compensation batches: Keep qc_out (rank 3) at 0 if compensation phase rank > 3 (using > because out quantities use <)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 3 THEN 0
                     -- If currently in qc with Completed status (before auto-transition, but this is rare)
-                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'qc' AND NEW.status = 'Completed' THEN v_current_qty
+                    -- Use CURRENT quantity (v_current_qty) because quantity may have been incremented while in progress
+                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'qc' AND NEW.status = 'Completed'
+                        THEN v_current_qty
                     -- CRITICAL: If phase changed from qc to packaging, qc was completed (forward transition)
+                    -- Use CURRENT quantity because quantity may have been incremented while in progress
                     WHEN v_phase_changed AND v_old_phase_type IS NOT NULL AND v_old_phase_type = 'qc' 
-                        AND v_phase_type = 'packaging' THEN v_current_qty
+                        AND v_phase_type = 'packaging'
+                        THEN v_current_qty
                     -- If batch is in packaging with Completed status (manually set), infer qc was completed
+                    -- Use CURRENT quantity because quantity may have been incremented while in progress
                     WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'packaging' AND NEW.status = 'Completed' 
-                        AND COALESCE(batch_phase_history.qc_out_qty, 0) = 0 THEN v_current_qty
+                        AND COALESCE(batch_phase_history.qc_out_qty, 0) = 0
+                        THEN v_current_qty
                     -- If currently in qc (and not Completed), out_qty must be 0 (not completed if we're in this phase)
                     WHEN v_phase_type = 'qc' THEN 0
                     -- Backward movement: Clear if moved to sewing or earlier (rank <= 2)
@@ -519,17 +551,21 @@ def create_batch_phase_history_functions():
                 END,
                 packaging_in_qty = CASE 
                     -- Compensation batches: Keep packaging (rank 4) at 0 if compensation phase rank >= 4
-                    WHEN v_is_compensation AND v_compensation_phase_rank >= 4 THEN 0
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 4 THEN 0
                     -- Backward movement: Clear if moved to qc or earlier (rank <= 3)
                     WHEN v_backward_movement AND v_phase_rank <= 3 THEN 0
-                    -- If currently in packaging with In Progress status
-                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'packaging' AND NEW.status = 'In Progress' THEN v_current_qty
+                    -- If currently in packaging with In Progress status (only for non-compensation batches, only on phase change, not status change)
+                    WHEN NOT v_is_compensation AND v_phase_changed AND v_phase_type = 'packaging' AND NEW.status = 'In Progress' THEN v_current_qty
                     -- Preserve existing value if already set
                     ELSE COALESCE(batch_phase_history.packaging_in_qty, 0)
                 END,
                 packaging_out_qty = CASE 
+                    -- Compensation batches: Keep packaging_out (rank 4) at 0 if compensation phase rank > 4 (using > because out quantities use <, but rank 4 is max, so this will never match - but keeping for consistency)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 4 THEN 0
                     -- If currently in packaging with Completed status
-                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'packaging' AND NEW.status = 'Completed' THEN v_current_qty
+                    -- Use CURRENT quantity (v_current_qty) because quantity may have been incremented while in progress
+                    WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'packaging' AND NEW.status = 'Completed'
+                        THEN v_current_qty
                     -- If currently in packaging (and not Completed), out_qty must be 0 (not completed if we're in this phase)
                     WHEN v_phase_type = 'packaging' THEN 0
                     -- Backward movement: Clear if moved to qc or earlier (rank <= 3)
@@ -538,7 +574,12 @@ def create_batch_phase_history_functions():
                     ELSE COALESCE(batch_phase_history.packaging_out_qty, 0)
                 END,
                 current_phase_type = CASE WHEN v_phase_changed THEN v_phase_type ELSE batch_phase_history.current_phase_type END,
-                quantity_at_phase = v_current_qty,  -- Always update current quantity
+                quantity_at_phase = CASE
+                    -- Only update quantity_at_phase when entering a NEW phase (forward movement)
+                    -- Preserve existing quantity_at_phase for backward movements and status-only changes
+                    WHEN v_phase_changed AND NOT v_backward_movement THEN v_current_qty
+                    ELSE batch_phase_history.quantity_at_phase
+                END,
                 status_at_phase = CASE WHEN v_status_changed THEN NEW.status ELSE batch_phase_history.status_at_phase END,
                 compensation = CASE WHEN v_is_compensation THEN TRUE ELSE COALESCE(batch_phase_history.compensation, FALSE) END,
                 last_updated = CASE WHEN (v_phase_changed OR v_status_changed) AND NEW.status != 'Pending' THEN NOW() ELSE batch_phase_history.last_updated END;
@@ -565,6 +606,9 @@ def create_batch_phase_history_functions():
             v_current_qty INTEGER;
             v_rejected_qty INTEGER;
             v_original_qty INTEGER;
+            v_is_compensation BOOLEAN := FALSE;
+            v_compensation_phase_id INTEGER;
+            v_compensation_phase_rank INTEGER;
         BEGIN
             SELECT b.*, pp.type as phase_type
             INTO v_batch
@@ -574,6 +618,25 @@ def create_batch_phase_history_functions():
             
             IF v_batch.batch_id IS NULL OR v_batch.phase_type IS NULL THEN
                 RETURN;
+            END IF;
+            
+            -- Check if this is a compensation batch
+            SELECT phase_id INTO v_compensation_phase_id
+            FROM ops.batch_compensations
+            WHERE batch_id = p_batch_id
+            LIMIT 1;
+            
+            IF v_compensation_phase_id IS NOT NULL THEN
+                v_is_compensation := TRUE;
+                SELECT CASE type
+                           WHEN 'cutting' THEN 1
+                           WHEN 'sewing' THEN 2
+                           WHEN 'qc' THEN 3
+                           WHEN 'packaging' THEN 4
+                           ELSE 5
+                       END INTO v_compensation_phase_rank
+                FROM core.production_phases
+                WHERE phase_id = v_compensation_phase_id;
             END IF;
             
             v_phase_type := v_batch.phase_type;
@@ -595,61 +658,60 @@ def create_batch_phase_history_functions():
                 current_phase_type,
                 quantity_at_phase,
                 status_at_phase,
+                compensation,
                 entered_at,
                 last_updated
             )
             VALUES (
                 p_batch_id,
-                CASE WHEN v_phase_type = 'cutting' AND v_batch.status = 'Completed' THEN v_current_qty ELSE 0 END,
-                CASE WHEN v_phase_type = 'cutting' THEN 0
+                CASE WHEN v_is_compensation THEN 0 ELSE CASE WHEN v_phase_type = 'cutting' AND v_batch.status = 'Completed' THEN v_current_qty ELSE 0 END END,
+                CASE WHEN v_is_compensation THEN 0 ELSE CASE WHEN v_phase_type = 'cutting' THEN 0
                      WHEN v_phase_type = 'sewing' AND v_batch.status = 'In Progress' THEN v_current_qty 
                      WHEN v_phase_type IN ('qc', 'packaging') THEN v_current_qty
-                     ELSE 0 END,
-                CASE WHEN v_phase_type = 'sewing' THEN 0
+                     ELSE 0 END END,
+                CASE WHEN v_is_compensation THEN 0 ELSE CASE WHEN v_phase_type = 'sewing' THEN 0
                      WHEN v_phase_type IN ('qc', 'packaging') AND v_batch.status = 'Completed' THEN v_current_qty
-                     ELSE 0 END,
-                CASE WHEN v_phase_type IN ('cutting', 'sewing') THEN 0
+                     ELSE 0 END END,
+                CASE WHEN v_is_compensation THEN 0 ELSE CASE WHEN v_phase_type IN ('cutting', 'sewing') THEN 0
                      WHEN v_phase_type = 'qc' AND v_batch.status = 'In Progress' THEN v_current_qty 
                      WHEN v_phase_type = 'packaging' THEN v_current_qty
-                     ELSE 0 END,
-                CASE WHEN v_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
+                     ELSE 0 END END,
+                CASE WHEN v_is_compensation THEN 0 ELSE CASE WHEN v_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
                      WHEN v_phase_type = 'packaging' AND v_batch.status = 'Completed' THEN v_current_qty
-                     ELSE 0 END,
-                CASE WHEN v_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
+                     ELSE 0 END END,
+                CASE WHEN v_is_compensation THEN 0 ELSE CASE WHEN v_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
                      WHEN v_phase_type = 'packaging' AND v_batch.status = 'In Progress' THEN v_current_qty 
-                     ELSE 0 END,
-                CASE WHEN v_phase_type = 'packaging' THEN 0
-                     ELSE 0 END,
+                     ELSE 0 END END,
+                CASE WHEN v_is_compensation THEN 0 ELSE CASE WHEN v_phase_type = 'packaging' THEN 0
+                     ELSE 0 END END,
                 v_phase_type,
                 v_current_qty,
                 v_batch.status,
+                v_is_compensation,
                 NOW(),
                 NOW()
             )
             ON CONFLICT (batch_id) DO UPDATE SET
                 inspection_qty = CASE 
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 1 THEN 0
                     WHEN v_phase_type = 'cutting' AND v_batch.status = 'Completed' THEN v_current_qty
                     ELSE batch_phase_history.inspection_qty
                 END,
                 sewing_in_qty = CASE 
-                    -- If moved backward to cutting, clear sewing_in_qty
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 2 THEN 0
                     WHEN v_phase_type = 'cutting' THEN 0
-                    WHEN v_phase_type = 'sewing' AND v_batch.status = 'In Progress' THEN v_current_qty
-                    -- If batch moved to qc/packaging, preserve sewing_in_qty
-                    WHEN v_phase_type IN ('qc', 'packaging') THEN 
-                        CASE WHEN batch_phase_history.sewing_in_qty = 0 OR batch_phase_history.sewing_in_qty IS NULL 
-                             THEN v_current_qty 
-                             ELSE batch_phase_history.sewing_in_qty 
-                        END
+                    -- Only update sewing_in_qty when entering sewing phase, not when already past it
+                    -- Preserve existing values once set - never update with current quantity for batches already past sewing
+                    WHEN NOT v_is_compensation AND v_phase_type = 'sewing' AND v_batch.status = 'In Progress' 
+                        AND (batch_phase_history.sewing_in_qty = 0 OR batch_phase_history.sewing_in_qty IS NULL) THEN v_current_qty
+                    -- Always preserve existing sewing_in_qty once it's been set
                     ELSE batch_phase_history.sewing_in_qty
                 END,
                 sewing_out_qty = CASE 
-                    -- If currently in sewing, out_qty must be 0 (not completed if we're in this phase)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 2 THEN 0
                     WHEN v_phase_type = 'sewing' THEN 0
-                    -- If moved backward to cutting, clear sewing_out_qty
                     WHEN v_phase_type = 'cutting' THEN 0
-                    -- If batch is in qc/packaging with Completed status, it must have completed sewing first
-                    WHEN v_phase_type IN ('qc', 'packaging') AND v_batch.status = 'Completed' THEN 
+                    WHEN NOT v_is_compensation AND v_phase_type IN ('qc', 'packaging') AND v_batch.status = 'Completed' THEN 
                         CASE WHEN batch_phase_history.sewing_out_qty = 0 OR batch_phase_history.sewing_out_qty IS NULL 
                              THEN v_current_qty 
                              ELSE batch_phase_history.sewing_out_qty 
@@ -657,20 +719,20 @@ def create_batch_phase_history_functions():
                     ELSE batch_phase_history.sewing_out_qty
                 END,
                 qc_in_qty = CASE 
-                    -- If moved backward to cutting or sewing, clear qc_in_qty
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 3 THEN 0
                     WHEN v_phase_type IN ('cutting', 'sewing') THEN 0
-                    WHEN v_phase_type = 'qc' AND v_batch.status = 'In Progress' THEN v_current_qty
-                    -- If batch moved to packaging, it must have been in qc, so preserve qc_in_qty if not already set
-                    WHEN v_phase_type = 'packaging' AND (batch_phase_history.qc_in_qty = 0 OR batch_phase_history.qc_in_qty IS NULL) THEN v_current_qty
+                    -- Only update qc_in_qty when entering qc phase, not when already past it
+                    -- Preserve existing values once set - never update with current quantity for batches already past qc
+                    WHEN NOT v_is_compensation AND v_phase_type = 'qc' AND v_batch.status = 'In Progress' 
+                        AND (batch_phase_history.qc_in_qty = 0 OR batch_phase_history.qc_in_qty IS NULL) THEN v_current_qty
+                    -- Always preserve existing qc_in_qty once it's been set
                     ELSE batch_phase_history.qc_in_qty
                 END,
                 qc_out_qty = CASE 
-                    -- If currently in qc, out_qty must be 0 (not completed if we're in this phase)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 3 THEN 0
                     WHEN v_phase_type = 'qc' THEN 0
-                    -- If moved backward to cutting or sewing, clear qc_out_qty
                     WHEN v_phase_type IN ('cutting', 'sewing') THEN 0
-                    -- If batch is in packaging with Completed status, it must have completed qc first
-                    WHEN v_phase_type = 'packaging' AND v_batch.status = 'Completed' THEN 
+                    WHEN NOT v_is_compensation AND v_phase_type = 'packaging' AND v_batch.status = 'Completed' THEN 
                         CASE WHEN batch_phase_history.qc_out_qty = 0 OR batch_phase_history.qc_out_qty IS NULL 
                              THEN v_current_qty 
                              ELSE batch_phase_history.qc_out_qty 
@@ -678,21 +740,26 @@ def create_batch_phase_history_functions():
                     ELSE batch_phase_history.qc_out_qty
                 END,
                 packaging_in_qty = CASE 
-                    -- If moved backward to cutting, sewing, or qc, clear packaging_in_qty
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 4 THEN 0
                     WHEN v_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
-                    WHEN v_phase_type = 'packaging' AND v_batch.status = 'In Progress' THEN v_current_qty
+                    WHEN NOT v_is_compensation AND v_phase_type = 'packaging' AND v_batch.status = 'In Progress' THEN v_current_qty
                     ELSE batch_phase_history.packaging_in_qty
                 END,
                 packaging_out_qty = CASE 
-                    -- If currently in packaging, out_qty must be 0 (not completed if we're in this phase)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 4 THEN 0
                     WHEN v_phase_type = 'packaging' THEN 0
-                    -- If moved backward to cutting, sewing, or qc, clear packaging_out_qty
                     WHEN v_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
                     ELSE batch_phase_history.packaging_out_qty
                 END,
                 current_phase_type = v_phase_type,
-                quantity_at_phase = v_current_qty,
+                -- Only update quantity_at_phase if phase changed (not just quantity update)
+                -- This function is called to sync, so preserve existing quantity_at_phase if phase hasn't changed
+                quantity_at_phase = CASE 
+                    WHEN v_phase_type != COALESCE(batch_phase_history.current_phase_type, '') THEN v_current_qty
+                    ELSE batch_phase_history.quantity_at_phase
+                END,
                 status_at_phase = v_batch.status,
+                compensation = CASE WHEN v_is_compensation THEN TRUE ELSE COALESCE(batch_phase_history.compensation, FALSE) END,
                 last_updated = CASE WHEN v_batch.status != 'Pending' THEN NOW() ELSE batch_phase_history.last_updated END;
         END;
         $$ LANGUAGE plpgsql;
@@ -713,95 +780,136 @@ def create_batch_phase_history_functions():
                 current_phase_type,
                 quantity_at_phase,
                 status_at_phase,
+                compensation,
                 entered_at,
                 last_updated
             )
             SELECT 
                 b.batch_id,
-                CASE WHEN pp.type = 'cutting' AND b.status = 'Completed' THEN b.quantity
+                CASE WHEN bc.batch_id IS NOT NULL THEN 0
+                     WHEN pp.type = 'cutting' AND b.status = 'Completed' THEN b.quantity
                 ELSE 0 END as inspection_qty,
-                CASE WHEN pp.type = 'cutting' THEN 0
+                CASE WHEN bc.batch_id IS NOT NULL THEN 0
+                     WHEN pp.type = 'cutting' THEN 0
                      WHEN pp.type = 'sewing' AND b.status = 'In Progress' THEN b.quantity 
                      WHEN pp.type IN ('qc', 'packaging') THEN b.quantity
                      ELSE 0 END as sewing_in_qty,
-                CASE WHEN pp.type = 'sewing' THEN 0
+                CASE WHEN bc.batch_id IS NOT NULL THEN 0
+                     WHEN pp.type = 'sewing' THEN 0
                      WHEN pp.type IN ('qc', 'packaging') AND b.status = 'Completed' THEN b.quantity
                      ELSE 0 END as sewing_out_qty,
-                CASE WHEN pp.type IN ('cutting', 'sewing') THEN 0
+                CASE WHEN bc.batch_id IS NOT NULL THEN 0
+                     WHEN pp.type IN ('cutting', 'sewing') THEN 0
                      WHEN pp.type = 'qc' AND b.status = 'In Progress' THEN b.quantity 
                      WHEN pp.type = 'packaging' THEN b.quantity
                      ELSE 0 END as qc_in_qty,
-                CASE WHEN pp.type IN ('cutting', 'sewing', 'qc') THEN 0
+                CASE WHEN bc.batch_id IS NOT NULL THEN 0
+                     WHEN pp.type IN ('cutting', 'sewing', 'qc') THEN 0
                      WHEN pp.type = 'packaging' AND b.status = 'Completed' THEN b.quantity
                      ELSE 0 END as qc_out_qty,
-                CASE WHEN pp.type IN ('cutting', 'sewing', 'qc') THEN 0
+                CASE WHEN bc.batch_id IS NOT NULL THEN 0
+                     WHEN pp.type IN ('cutting', 'sewing', 'qc') THEN 0
                      WHEN pp.type = 'packaging' AND b.status = 'In Progress' THEN b.quantity 
                      ELSE 0 END as packaging_in_qty,
-                CASE WHEN pp.type = 'packaging' THEN 0
+                CASE WHEN bc.batch_id IS NOT NULL THEN 0
+                     WHEN pp.type = 'packaging' THEN 0
                      ELSE 0 END as packaging_out_qty,
                 pp.type as current_phase_type,
                 b.quantity as quantity_at_phase,
                 b.status as status_at_phase,
+                CASE WHEN bc.batch_id IS NOT NULL THEN TRUE ELSE FALSE END as compensation,
                 b.last_updated as entered_at,
                 NOW() as last_updated
             FROM ops.batches b
             JOIN core.production_phases pp ON b.current_phase = pp.phase_id
+            LEFT JOIN ops.batch_compensations bc ON b.batch_id = bc.batch_id
             WHERE b.status != 'Pending'
             ON CONFLICT (batch_id) DO UPDATE SET
                 inspection_qty = CASE 
+                    WHEN EXISTS (SELECT 1 FROM ops.batch_compensations bc2 
+                                 JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
+                                 WHERE bc2.batch_id = EXCLUDED.batch_id 
+                                 AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END >= 1)
+                    THEN 0
                     WHEN EXCLUDED.current_phase_type = 'cutting' AND EXCLUDED.status_at_phase = 'Completed' THEN EXCLUDED.inspection_qty
                     ELSE batch_phase_history.inspection_qty
                 END,
                 sewing_in_qty = CASE 
-                    -- If moved backward to cutting, clear sewing_in_qty
+                    WHEN EXISTS (SELECT 1 FROM ops.batch_compensations bc2 
+                                 JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
+                                 WHERE bc2.batch_id = EXCLUDED.batch_id 
+                                 AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END >= 2)
+                    THEN 0
                     WHEN EXCLUDED.current_phase_type = 'cutting' THEN 0
-                    WHEN EXCLUDED.current_phase_type = 'sewing' AND EXCLUDED.status_at_phase = 'In Progress' THEN EXCLUDED.sewing_in_qty
-                    -- If batch moved to qc/packaging, preserve sewing_in_qty
-                    WHEN EXCLUDED.current_phase_type IN ('qc', 'packaging') THEN EXCLUDED.sewing_in_qty
+                    -- Only set sewing_in_qty when entering sewing, preserve existing values once set
+                    WHEN EXCLUDED.current_phase_type = 'sewing' AND EXCLUDED.status_at_phase = 'In Progress' 
+                        AND (batch_phase_history.sewing_in_qty = 0 OR batch_phase_history.sewing_in_qty IS NULL) THEN EXCLUDED.sewing_in_qty
+                    -- Always preserve existing sewing_in_qty for batches already past sewing phase
                     ELSE batch_phase_history.sewing_in_qty
                 END,
                 sewing_out_qty = CASE 
-                    -- If currently in sewing, out_qty must be 0 (not completed if we're in this phase)
+                    WHEN EXISTS (SELECT 1 FROM ops.batch_compensations bc2 
+                                 JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
+                                 WHERE bc2.batch_id = EXCLUDED.batch_id 
+                                 AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END > 2)
+                    THEN 0
                     WHEN EXCLUDED.current_phase_type = 'sewing' THEN 0
-                    -- If moved backward to cutting, clear sewing_out_qty
                     WHEN EXCLUDED.current_phase_type = 'cutting' THEN 0
-                    -- If batch is in qc/packaging with Completed status, it must have completed sewing first
                     WHEN EXCLUDED.current_phase_type IN ('qc', 'packaging') AND EXCLUDED.status_at_phase = 'Completed' THEN EXCLUDED.sewing_out_qty
                     ELSE batch_phase_history.sewing_out_qty
                 END,
                 qc_in_qty = CASE 
-                    -- If moved backward to cutting or sewing, clear qc_in_qty
+                    WHEN EXISTS (SELECT 1 FROM ops.batch_compensations bc2 
+                                 JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
+                                 WHERE bc2.batch_id = EXCLUDED.batch_id 
+                                 AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END >= 3)
+                    THEN 0
                     WHEN EXCLUDED.current_phase_type IN ('cutting', 'sewing') THEN 0
-                    WHEN EXCLUDED.current_phase_type = 'qc' AND EXCLUDED.status_at_phase = 'In Progress' THEN EXCLUDED.qc_in_qty
-                    -- If batch moved to packaging, it must have been in qc, so preserve qc_in_qty if not already set
-                    WHEN EXCLUDED.current_phase_type = 'packaging' AND (batch_phase_history.qc_in_qty = 0 OR batch_phase_history.qc_in_qty IS NULL) THEN EXCLUDED.qc_in_qty
+                    -- Only set qc_in_qty when entering qc, preserve existing values once set
+                    WHEN EXCLUDED.current_phase_type = 'qc' AND EXCLUDED.status_at_phase = 'In Progress' 
+                        AND (batch_phase_history.qc_in_qty = 0 OR batch_phase_history.qc_in_qty IS NULL) THEN EXCLUDED.qc_in_qty
+                    -- Always preserve existing qc_in_qty for batches already past qc phase
                     ELSE batch_phase_history.qc_in_qty
                 END,
                 qc_out_qty = CASE 
-                    -- If currently in qc, out_qty must be 0 (not completed if we're in this phase)
+                    WHEN EXISTS (SELECT 1 FROM ops.batch_compensations bc2 
+                                 JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
+                                 WHERE bc2.batch_id = EXCLUDED.batch_id 
+                                 AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END > 3)
+                    THEN 0
                     WHEN EXCLUDED.current_phase_type = 'qc' THEN 0
-                    -- If moved backward to cutting or sewing, clear qc_out_qty
                     WHEN EXCLUDED.current_phase_type IN ('cutting', 'sewing') THEN 0
-                    -- If batch is in packaging with Completed status, it must have completed qc first
                     WHEN EXCLUDED.current_phase_type = 'packaging' AND EXCLUDED.status_at_phase = 'Completed' THEN EXCLUDED.qc_out_qty
                     ELSE batch_phase_history.qc_out_qty
                 END,
                 packaging_in_qty = CASE 
-                    -- If moved backward to cutting, sewing, or qc, clear packaging_in_qty
+                    WHEN EXISTS (SELECT 1 FROM ops.batch_compensations bc2 
+                                 JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
+                                 WHERE bc2.batch_id = EXCLUDED.batch_id 
+                                 AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END >= 4)
+                    THEN 0
                     WHEN EXCLUDED.current_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
                     WHEN EXCLUDED.current_phase_type = 'packaging' AND EXCLUDED.status_at_phase = 'In Progress' THEN EXCLUDED.packaging_in_qty
                     ELSE batch_phase_history.packaging_in_qty
                 END,
                 packaging_out_qty = CASE 
-                    -- If currently in packaging, out_qty must be 0 (not completed if we're in this phase)
+                    WHEN EXISTS (SELECT 1 FROM ops.batch_compensations bc2 
+                                 JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
+                                 WHERE bc2.batch_id = EXCLUDED.batch_id 
+                                 AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END > 4)
+                    THEN 0
                     WHEN EXCLUDED.current_phase_type = 'packaging' THEN 0
-                    -- If moved backward to cutting, sewing, or qc, clear packaging_out_qty
                     WHEN EXCLUDED.current_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
                     ELSE batch_phase_history.packaging_out_qty
                 END,
                 current_phase_type = EXCLUDED.current_phase_type,
-                quantity_at_phase = EXCLUDED.quantity_at_phase,
+                -- Only update quantity_at_phase if phase changed (not just quantity update)
+                quantity_at_phase = CASE 
+                    WHEN EXCLUDED.current_phase_type != COALESCE(batch_phase_history.current_phase_type, '') THEN EXCLUDED.quantity_at_phase
+                    ELSE batch_phase_history.quantity_at_phase
+                END,
                 status_at_phase = EXCLUDED.status_at_phase,
+                compensation = EXCLUDED.compensation,
                 last_updated = NOW();
         END;
         $$ LANGUAGE plpgsql;
