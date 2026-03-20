@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { AlertTriangle } from "lucide-react";
 
 interface Cut {
   cut_number: string;
@@ -169,8 +170,15 @@ const BulkBarcodeCreatePage: React.FC = () => {
       
       if (found) {
         jobOrderApi.getCuts(selectedJobOrderId)
-          .then(setCuts)
+          .then(cutsData => {
+            setCuts(cutsData);
+            // Clear error if cuts loaded successfully (even if empty)
+            if (Array.isArray(cutsData)) {
+              setError('');
+            }
+          })
           .catch(err => {
+            // Only set error for actual API errors, not empty results
             setError(err.response?.data?.detail || 'Failed to load cuts');
             setCuts([]);
           });
@@ -372,8 +380,31 @@ const BulkBarcodeCreatePage: React.FC = () => {
                     disabled={cuts.length === 0 || isLoading}
                     className="w-full max-w-md mt-2 mb-4"
                   />
-                  {cuts.length === 0 && !isLoading && (
-                    <p className="text-sm text-gray-500 mt-2">{t('batchGeneration.noCutsMessage', 'No cuts found for this job order')}</p>
+                  {cuts.length === 0 && !isLoading && selectedJobOrderId && (
+                    <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                      <div className="flex items-start gap-3">
+                        <div className="flex-shrink-0">
+                          <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5" />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="text-sm font-semibold text-yellow-800 mb-1">
+                            {t('batchGeneration.noCutsTitle', 'No Cuts Available')}
+                          </h4>
+                          <p className="text-sm text-yellow-700 mb-3">
+                            {t('batchGeneration.noCutsMessage', 'This job order does not have any cuts yet. You need to create a cut before generating batches.')}
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => window.open('/cutting/createcut', '_blank')}
+                            className="text-yellow-800 border-yellow-300 hover:bg-yellow-100"
+                          >
+                            {t('batchGeneration.createCutButton', 'Create Cut')}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
                   )}
                 </div>
 

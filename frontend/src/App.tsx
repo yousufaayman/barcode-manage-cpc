@@ -28,6 +28,15 @@ const BarcodeDetailsPage = lazy(() => import('./pages/BarcodeDetailsPage'));
 const CuttingPage = lazy(() => import('./pages/CuttingPage'));
 const CutDetailsPage = lazy(() => import('./pages/CutDetailsPage'));
 const AddCutPage = lazy(() => import('./pages/AddCutPage'));
+const ProductionManagementPage = lazy(() => import('./pages/ProductionManagementPage'));
+const CreateSewingLineSchematicPage = lazy(() => import('./pages/CreateSewingLineSchematicPage'));
+const WorkersManagementPage = lazy(() => import('./pages/WorkersManagementPage'));
+const SchematicDetailsPage = lazy(() => import('./pages/SchematicDetailsPage'));
+const EditSewingLineSchematicPage = lazy(() => import('./pages/EditSewingLineSchematicPage'));
+const ProductionTrackingPage = lazy(() => import('./pages/ProductionTrackingPage'));
+const SchematicWorkerBreakdownPage = lazy(
+  () => import('./pages/SchematicWorkerBreakdownPage')
+);
 
 const queryClient = new QueryClient();
 
@@ -71,11 +80,29 @@ const AppContent: React.FC = () => {
             <Route path="/job-orders" element={<JobOrdersPage />} />
             <Route path="/add-job-order" element={<AddJobOrderPage />} />
             <Route path="/advanced-statistics" element={<AdvancedStatisticsPage />} />
+        <Route
+          path="/advanced-statistics/schematics/:schematicId/worker-breakdown"
+          element={<SchematicWorkerBreakdownPage />}
+        />
           </Route>
           
+          {/* Admin, General Operations, and Sewing: Production Tracking */}
+          <Route element={<PrivateRoute allowedRoles={['admin', 'general_operations', 'sewing']} />}>
+            <Route path="/production/tracking" element={<ProductionTrackingPage />} />
+          </Route>
+
+          {/* Admin and General Operations: Production Management (view-only for general operations) */}
+          <Route element={<PrivateRoute allowedRoles={['admin', 'general_operations']} />}>
+            <Route path="/production" element={<ProductionManagementPage />} />
+            <Route path="/production/schematics/:schematicId" element={<SchematicDetailsPage />} />
+            <Route path="/production/workers" element={<WorkersManagementPage />} />
+          </Route>
+
           {/* Admin Only Routes */}
           <Route element={<PrivateRoute allowedRoles={['admin']} />}>
             <Route path="/archive" element={<ArchivePage />} />
+            <Route path="/production/create" element={<CreateSewingLineSchematicPage />} />
+            <Route path="/production/schematics/:schematicId/edit" element={<EditSewingLineSchematicPage />} />
             <Route path="/users" element={<UserManagementPage />} />
           </Route>
           

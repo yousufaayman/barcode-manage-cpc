@@ -1,257 +1,99 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from typing import Dict, Any, List
-from app.database import get_db
-from app.core.deps import get_current_user
+from typing import Optional, List, Dict, Any
+
 from app import schemas
-from app.services.pdf_generation_service import PDFGenerationService
-from app.services.gmail_email_service import GmailEmailService
-from app.services.scheduler_service import SchedulerService
-from app.services.file_cleanup_service import FileCleanupService
+from app.core.config import settings
+from app.core.deps import get_current_user
+from app.crud.tracking import get_sewing_daily_report_data
+from app.database import get_db
+from app.services.report_pdf_service import ReportPDFService
 import logging
 import os
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Global scheduler service instance
-scheduler_service = SchedulerService()
-
-@router.get("/status")
-async def get_report_system_status(current_user: schemas.User = Depends(get_current_user)):
-    """Get the current status of the report system"""
-    try:
-        return {
-            "status": "active",
-            "scheduler_running": scheduler_service.is_running,
-            "message": "Report system is operational"
-        }
-    except Exception as e:
-        logger.error(f"Error getting report system status: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to get report system status")
-
-@router.post("/generate")
-async def generate_daily_report(
-    background_tasks: BackgroundTasks,
+@router.get("/daily-cutting-report")
+async def generate_daily_cutting_report(
+    date: str = Query(..., description="Report date in YYYY-MM-DD format"),
+    client_name: Optional[str] = Query(None, description="Filter by client name"),
+    model_name: Optional[str] = Query(None, description="Filter by model name"),
+    job_order_number: Optional[str] = Query(
+        None, description="Filter by job order number"
+    ),
+    db: Session = Depends(get_db),
     current_user: schemas.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
 ):
-    """Manually trigger daily report generation"""
-    try:
-        from app.services.daily_report_service import DailyReportService
-        
-        # Generate report data
-        report_service = DailyReportService(db)
-        report_data = report_service.generate_daily_production_report()
-        
-        # Generate PDF
-        pdf_service = PDFGenerationService(reports_dir=settings.REPORTS_DIR)
-        pdf_filepath = pdf_service.generate_daily_report_pdf(report_data)
-        
-        if not pdf_filepath or not os.path.exists(pdf_filepath):
-            raise HTTPException(status_code=500, detail="Failed to generate PDF report")
-        
-        return {
-            "success": True,
-            "message": "Daily report generated successfully",
-            "pdf_path": pdf_filepath,
-            "file_size": os.path.getsize(pdf_filepath)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error generating daily report: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
+    """
+    Generate a daily Cutting production PDF report with an appended Sewing section.
 
-@router.post("/send-test-email")
-async def send_test_email(current_user: schemas.User = Depends(get_current_user)):
-    """Send a test email to verify email configuration"""
+    The report uses the same aggregation logic as the Cutting breakdown view:
+    it groups by Client / Model, then by Job Order, then by Color, and
+    shows per-cut rows with size breakdown, printing status, and
+    consumption (m/kg), plus color and job-order totals.
+    """
     try:
-        # Get email configuration
-        sender_email = os.getenv("REPORT_SENDER_EMAIL")
-        sender_password = os.getenv("REPORT_SENDER_PASSWORD")
-        recipient_emails_str = os.getenv("REPORT_RECIPIENT_EMAILS", "")
-        
-        if not all([sender_email, sender_password, recipient_emails_str]):
+        from datetime import datetime as _dt
+
+        try:
+            target_date = _dt.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
             raise HTTPException(
-                status_code=400, 
-                detail="Email configuration missing. Please set REPORT_SENDER_EMAIL, REPORT_SENDER_PASSWORD, and REPORT_RECIPIENT_EMAILS environment variables."
+                status_code=400,
+                detail="Invalid date format. Expected YYYY-MM-DD.",
             )
-        
-        recipient_emails = [email.strip() for email in recipient_emails_str.split(",") if email.strip()]
-        
-        if not recipient_emails:
-            raise HTTPException(status_code=400, detail="No recipient emails configured")
-        
-        # Test email service
-        email_service = GmailEmailService()
-        test_recipient = recipient_emails[0]
-        
-        success = email_service.test_email_connection(
-            sender_email=sender_email,
-            sender_password=sender_password,
-            test_recipient=test_recipient
+
+        service = ReportPDFService(reports_dir=settings.REPORTS_DIR)
+        pdf_path = service.generate_daily_cutting_report(
+            db=db,
+            target_date=target_date,
+            client_name=client_name,
+            model_name=model_name,
+            job_order_number=job_order_number,
         )
-        
-        if success:
-            return {
-                "success": True,
-                "message": f"Test email sent successfully to {test_recipient}"
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Failed to send test email")
-            
+
+        if not pdf_path or not os.path.exists(pdf_path):
+            raise HTTPException(
+                status_code=500, detail="Failed to generate Cutting report PDF"
+            )
+
+        filename = os.path.basename(pdf_path)
+        return FileResponse(
+            pdf_path,
+            media_type="application/pdf",
+            filename=filename,
+        )
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error sending test email: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to send test email: {str(e)}")
-
-@router.post("/send-report")
-async def send_daily_report(
-    background_tasks: BackgroundTasks,
-    current_user: schemas.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Generate and send daily report via email"""
-    try:
-        from app.services.daily_report_service import DailyReportService
-        
-        # Generate report data
-        report_service = DailyReportService(db)
-        report_data = report_service.generate_daily_production_report()
-        
-        # Generate PDF
-        pdf_service = PDFGenerationService(reports_dir=settings.REPORTS_DIR)
-        pdf_filepath = pdf_service.generate_daily_report_pdf(report_data)
-        
-        if not pdf_filepath or not os.path.exists(pdf_filepath):
-            raise HTTPException(status_code=500, detail="Failed to generate PDF report")
-        
-        # Get email configuration
-        sender_email = os.getenv("REPORT_SENDER_EMAIL")
-        sender_password = os.getenv("REPORT_SENDER_PASSWORD")
-        recipient_emails_str = os.getenv("REPORT_RECIPIENT_EMAILS", "")
-        company_name = os.getenv("COMPANY_NAME", "Production Management System")
-        
-        if not all([sender_email, sender_password, recipient_emails_str]):
-            raise HTTPException(
-                status_code=400, 
-                detail="Email configuration missing. Please set REPORT_SENDER_EMAIL, REPORT_SENDER_PASSWORD, and REPORT_RECIPIENT_EMAILS environment variables."
-            )
-        
-        recipient_emails = [email.strip() for email in recipient_emails_str.split(",") if email.strip()]
-        
-        if not recipient_emails:
-            raise HTTPException(status_code=400, detail="No recipient emails configured")
-        
-        # Send email
-        email_service = GmailEmailService()
-        success = email_service.send_daily_report_email(
-            pdf_filepath=pdf_filepath,
-            recipient_emails=recipient_emails,
-            sender_email=sender_email,
-            sender_password=sender_password,
-            company_name=company_name
+        logger.error(f"Error generating daily cutting report: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate daily cutting report: {str(e)}",
         )
-        
-        if success:
-            return {
-                "success": True,
-                "message": f"Daily report sent successfully to {len(recipient_emails)} recipients",
-                "recipients": recipient_emails,
-                "pdf_path": pdf_filepath
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Failed to send email")
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error sending daily report: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to send report: {str(e)}")
 
-@router.post("/start-scheduler")
-async def start_scheduler(current_user: schemas.User = Depends(get_current_user)):
-    """Start the report scheduler service"""
-    try:
-        if scheduler_service.is_running:
-            return {
-                "success": True,
-                "message": "Scheduler is already running"
-            }
-        
-        scheduler_service.start_scheduler()
-        
-        return {
-            "success": True,
-            "message": "Report scheduler started successfully"
-        }
-        
-    except Exception as e:
-        logger.error(f"Error starting scheduler: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to start scheduler: {str(e)}")
 
-@router.post("/stop-scheduler")
-async def stop_scheduler(current_user: schemas.User = Depends(get_current_user)):
-    """Stop the report scheduler service"""
-    try:
-        if not scheduler_service.is_running:
-            return {
-                "success": True,
-                "message": "Scheduler is not running"
-            }
-        
-        scheduler_service.stop_scheduler()
-        
-        return {
-            "success": True,
-            "message": "Report scheduler stopped successfully"
-        }
-        
-    except Exception as e:
-        logger.error(f"Error stopping scheduler: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to stop scheduler: {str(e)}")
+@router.get("/sewing-daily-data")
+async def get_sewing_daily_data(
+    date: str = Query(..., description="Report date in YYYY-MM-DD format"),
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    """
+    Return Sewing daily report data (phases → schematics → stages) for a single date.
+    """
+    from datetime import datetime as _dt
 
-@router.post("/cleanup-files")
-async def cleanup_old_files(current_user: schemas.User = Depends(get_current_user)):
-    """Manually trigger file cleanup"""
     try:
-        cleanup_service = FileCleanupService()
-        result = cleanup_service.cleanup_old_files()
-        
-        return {
-            "success": True,
-            "message": "File cleanup completed",
-            "files_deleted": result.get("files_deleted", 0),
-            "space_freed": result.get("space_freed", 0)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error during file cleanup: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to cleanup files: {str(e)}")
+        target_date = _dt.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid date format. Expected YYYY-MM-DD.",
+        )
 
-@router.get("/configuration")
-async def get_email_configuration(current_user: schemas.User = Depends(get_current_user)):
-    """Get current email configuration (without sensitive data)"""
-    try:
-        sender_email = os.getenv("REPORT_SENDER_EMAIL", "")
-        recipient_emails_str = os.getenv("REPORT_RECIPIENT_EMAILS", "")
-        company_name = os.getenv("COMPANY_NAME", "Production Management System")
-        retention_days = os.getenv("REPORT_RETENTION_DAYS", "30")
-        
-        recipient_emails = [email.strip() for email in recipient_emails_str.split(",") if email.strip()]
-        
-        return {
-            "sender_email": sender_email,
-            "recipient_emails": recipient_emails,
-            "company_name": company_name,
-            "retention_days": int(retention_days),
-            "scheduler_running": scheduler_service.is_running,
-            "configuration_complete": bool(sender_email and recipient_emails)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error getting configuration: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to get configuration")
+    data = get_sewing_daily_report_data(db, target_date)
+    return data

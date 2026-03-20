@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Use environment variable if available, otherwise use relative URL
-const API_URL = 'http://localhost:8000/api/v1';
+const API_URL = 'http://100.90.201.128:8000/api/v1';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -61,7 +61,7 @@ export interface LoginResponse {
 export interface User {
   id: number;
   username: string;
-  role: 'admin' | 'cutting' | 'sewing' | 'packaging' | 'creator';
+  role: 'admin' | 'general_operations' | 'cutting' | 'sewing' | 'packaging' | 'creator';
 }
 
 export interface UserCreate {
@@ -199,82 +199,6 @@ export interface PhaseStats {
   sewing: PhaseStatusStats;
   packaging: PackagingStats;
   qc: QCStats;
-}
-
-// Types for Advanced Statistics Page
-export interface TurnoverRateByPhase {
-  phase_id: number;
-  phase_name: string;
-  average_minutes: number;
-}
-
-export interface TurnoverStat {
-  batch_id?: number;
-  phase_id: number;
-  phase_name: string;
-  duration_minutes?: number;
-  average_minutes?: number;
-}
-
-export interface StatusDistribution {
-  status: string;
-  count: number;
-}
-
-export interface WIPStat {
-  phase_id: number;
-  phase_name: string;
-  pending: number;
-  in_progress: number;
-  completed: number;
-}
-
-export interface WIPByClientStat {
-  brand_id: number;
-  client_name: string;
-  pending: number;
-  in_progress: number;
-  completed: number;
-  total: number;
-}
-
-export interface WorkingPhaseByClientStat {
-  brand_id: number;
-  client_name: string;
-  phase_id: number;
-  phase_name: string;
-  pending: number;
-  in_progress: number;
-  completed: number;
-  total: number;
-}
-
-export interface WorkingPhaseByModelStat {
-  model_id: number;
-  model_name: string;
-  brand_id: number;
-  client_name: string;
-  phase_id: number;
-  phase_name: string;
-  pending: number;
-  in_progress: number;
-  completed: number;
-  total: number;
-}
-
-export interface AdvancedStatisticsResponse {
-  turnover_rate_by_phase: TurnoverRateByPhase[];
-  slowest_turnover: TurnoverRateByPhase | null;
-  fastest_turnover: TurnoverRateByPhase | null;
-  bottleneck_phase: TurnoverRateByPhase | null;
-  status_distribution: StatusDistribution[];
-  average_batch_size: number;
-  current_wip: WIPStat[];
-  wip_by_client: WIPByClientStat[];
-  working_phase_by_client: WorkingPhaseByClientStat[];
-  working_phase_by_model: WorkingPhaseByModelStat[];
-  // Add other stats as they are implemented
-  [key: string]: any; // Allow other properties for now
 }
 
 export interface ProductionStatisticsResponse {
@@ -677,9 +601,12 @@ export const authApi = {
     return response.data;
   },
 
-  deleteUser: async (userId: number): Promise<User> => {
-    const response = await api.delete<User>(`/auth/users/${userId}`);
-    return response.data;
+  deleteUser: async (userId: number): Promise<void> => {
+    await api.delete(`/auth/users/${userId}`);
+  },
+
+  resetPassword: async (userId: number, newPassword: string): Promise<void> => {
+    await api.put(`/auth/users/${userId}/reset-password`, { new_password: newPassword });
   },
 };
 
@@ -874,6 +801,18 @@ export const barcodeApi = {
   },
   getBatchVisitedPhases: async (batch_id: number): Promise<Array<{phase_id: number, phase_name: string, sequence_order?: number, type?: string}>> => {
     const response = await api.get<Array<{phase_id: number, phase_name: string, sequence_order?: number, type?: string}>>(`/batches/${batch_id}/visited-phases`);
+    return response.data;
+  },
+
+  getBatchProductionStages: async (batch_id: number, phase_id?: number): Promise<Array<{stage_id: number; stage_name: string; schematic_id?: number; schematic_name?: string; stage_order?: number}>> => {
+    const params = phase_id != null ? { phase_id } : {};
+    const response = await api.get<Array<{stage_id: number; stage_name: string; schematic_id?: number; schematic_name?: string; stage_order?: number}>>(`/batches/${batch_id}/production-stages`, { params });
+    return response.data;
+  },
+
+  getBatchProductionDailyAssignments: async (batch_id: number, phase_id?: number): Promise<Array<{daily_assignment_id: number; worker_name: string; stage_name: string; quantity_produced: number; assignment_date?: string}>> => {
+    const params = phase_id != null ? { phase_id } : {};
+    const response = await api.get<Array<{daily_assignment_id: number; worker_name: string; stage_name: string; quantity_produced: number; assignment_date?: string}>>(`/batches/${batch_id}/production-daily-assignments`, { params });
     return response.data;
   },
 
@@ -1192,34 +1131,6 @@ export async function refreshJobOrderSummary() {
   await api.post('/job-orders/items/refresh-summary/');
 }
 
-export const statisticsApi = {
-  getProductionStatistics: async (): Promise<ProductionStatisticsResponse> => {
-    const response = await api.get<ProductionStatisticsResponse>('/statistics/production');
-    return response.data;
-  },
-
-  getClientStatistics: async (clientId: number): Promise<ClientStatisticsResponse> => {
-    const response = await api.get<ClientStatisticsResponse>(`/statistics/client/${clientId}`);
-    return response.data;
-  },
-
-  getModelStatistics: async (modelId: number): Promise<ModelStatisticsResponse> => {
-    const response = await api.get<ModelStatisticsResponse>(`/statistics/model/${modelId}`);
-    return response.data;
-  },
-
-  getModelHistory: async (jobOrderNumber?: string): Promise<ModelHistoryResponse> => {
-    const params = jobOrderNumber ? { job_order_number: jobOrderNumber } : {};
-    const response = await api.get<ModelHistoryResponse>('/statistics/model-history', { params });
-    return response.data;
-  },
-
-  getJobOrderItemBatchDetails: async (itemId: number): Promise<JobOrderItemBatchDetails> => {
-    const response = await api.get<JobOrderItemBatchDetails>(`/statistics/job-order-item/${itemId}/batch-details`);
-    return response.data;
-  },
-};
-
 export interface CutSizeDetail {
   size_id: number;
   size_value: string;
@@ -1239,6 +1150,7 @@ export interface CutDetails {
   color_id: number;
   color_name: string;
   waste_fabric_weight: number | null;
+  marker_length?: number | null;
   created_at: string | null;
   cut_weight: number;
   num_of_rolls_used: number;
@@ -1258,6 +1170,7 @@ export interface CutRoll {
   weight: number;
   layer_weight: number;
   num_of_layers: number;
+  roll_width?: number | null;
   created_at: string | null;
 }
 
@@ -1376,6 +1289,547 @@ export const cutsApi = {
     }
   ): Promise<CutDetailsFull> => {
     const response = await api.put<CutDetailsFull>(`/cuts/${cutId}`, cut);
+    return response.data;
+  },
+
+  deleteCut: async (cutId: number): Promise<{ message: string; cut_id: number }> => {
+    const response = await api.delete<{ message: string; cut_id: number }>(`/cuts/${cutId}`);
+    return response.data;
+  },
+};
+
+export interface SingleIncrement {
+  increment_id: number;
+  batch_id: number;
+  incremented_from_phase_id?: number;
+  incremented_to_phase_id?: number;
+  incremented_from_phase_type?: string;
+  incremented_to_phase_type?: string;
+  responsible_daily_assignment_id?: number;
+  quantity: number;
+  increment_type: 'rejection_resolution';
+  incremented_by_user_id?: number;
+  incremented_at: string;
+  status_at_increment?: string;
+  job_order_id: number;
+  color_id: number;
+  size_id: number;
+}
+
+export interface SingleIncrementCreate {
+  batch_id: number;
+  incremented_from_phase_id?: number;
+  incremented_to_phase_id?: number;
+  responsible_daily_assignment_id?: number;
+  quantity: number;
+  increment_type: 'rejection_resolution';
+}
+
+export const incrementApi = {
+  create: async (increment: SingleIncrementCreate): Promise<SingleIncrement> => {
+    const response = await api.post<SingleIncrement>('/increments/', increment);
+    return response.data;
+  },
+
+  getAll: async (params?: {
+    batch_id?: number;
+    phase_id?: number;
+    job_order_id?: number;
+    skip?: number;
+    limit?: number;
+  }): Promise<SingleIncrement[]> => {
+    const response = await api.get<SingleIncrement[]>('/increments/', { params });
+    return response.data;
+  },
+
+  getById: async (incrementId: number): Promise<SingleIncrement> => {
+    const response = await api.get<SingleIncrement>(`/increments/${incrementId}`);
+    return response.data;
+  },
+
+  update: async (incrementId: number, update: Partial<SingleIncrementCreate>): Promise<SingleIncrement> => {
+    const response = await api.patch<SingleIncrement>(`/increments/${incrementId}`, update);
+    return response.data;
+  },
+
+  delete: async (incrementId: number): Promise<void> => {
+    await api.delete(`/increments/${incrementId}`);
+  },
+};
+
+// Production management - sewing line schematics
+export interface SewingLineSchematic {
+  schematic_id: number;
+  production_phase_id: number;
+  name: string;
+  active: boolean;
+  phase_name?: string | null;
+  working_hours?: number | null;
+  hourly_production?: number | null;
+}
+
+export interface SewingLineStageResponse {
+  stage_id: number;
+  schematic_id: number;
+  stage_name: string;
+  stage_order: number;
+  production_qty?: number | null;
+  active: boolean;
+}
+
+export interface SewingLineSchematicDetail extends SewingLineSchematic {
+  stages: SewingLineStageResponse[];
+}
+
+export interface SewingLineStageCreate {
+  stage_name: string;
+  stage_order: number;
+  production_qty?: number | null;
+  active?: boolean;
+}
+
+export interface SewingLineSchematicCreate {
+  production_phase_id: number;
+  name: string;
+  active?: boolean;
+  working_hours?: number | null;
+  hourly_production?: number | null;
+  stages?: SewingLineStageCreate[];
+}
+
+export interface SewingLineSchematicUpdate {
+  production_phase_id?: number;
+  name?: string;
+  active?: boolean;
+  working_hours?: number | null;
+  hourly_production?: number | null;
+  stages?: SewingLineStageCreate[];
+}
+
+export interface StageOption {
+  stage_id: number;
+  stage_name: string;
+  schematic_id: number;
+  schematic_name: string;
+  stage_order: number;
+}
+
+export interface DailyAssignmentResponse {
+  daily_assignment_id: number;
+  assignment_date: string;
+  worker_id: number;
+  worker_name: string;
+  stage_id: number;
+  stage_name: string;
+  schematic_name: string;
+  working_hours?: number | null;
+  active: boolean;
+}
+
+export interface DailyAssignmentCreate {
+  assignment_date: string;
+  worker_id: number;
+  stage_id: number;
+  active?: boolean;
+}
+
+export interface RecordProductionRequest {
+  daily_assignment_id: number;
+  barcode: string;
+  quantity?: number;
+  /** Date used to validate assignment (e.g. client "today"); must match assignment's date. */
+  tracking_date?: string | null;
+}
+
+export interface RecordProductionResponse {
+  production_id: number;
+  batch_id: number;
+  barcode: string;
+  quantity_produced: number;
+}
+
+export interface MaxProductionQuantityResponse {
+  max_allowed: number | null;
+  total_already: number;
+  batch_quantity: number | null;
+}
+
+export interface Worker {
+  worker_id: number;
+  worker_name: string;
+  worker_group_id?: number | null;
+  active: boolean;
+}
+
+export interface WorkerCreate {
+  worker_name: string;
+  active?: boolean;
+  worker_id?: number | null;  // Optional manual PK; API checks for conflict
+  worker_group_id?: number | null;
+}
+
+export interface WorkerUpdate {
+  worker_name?: string;
+  active?: boolean;
+  worker_group_id?: number | null;
+}
+
+export interface WorkerGroup {
+  group_id: number;
+  group_name: string;
+  working_hours?: number | null;
+}
+
+export interface WorkerGroupCreate {
+  group_name: string;
+  working_hours?: number | null;
+}
+
+export interface WorkerGroupUpdate {
+  group_name?: string;
+  working_hours?: number | null;
+}
+
+export interface WorkerOvertimeRequestCreate {
+  phase_id: number;
+  schematic_id: number;
+  work_date: string;
+  overtime_hours: number;
+  worker_ids: number[];
+  notes?: string | null;
+}
+
+export interface WorkerOvertimeRequestResponse {
+  request_id: number;
+  status: string;
+}
+
+export interface WorkerOvertimePendingWorker {
+  worker_id: number;
+  worker_name: string;
+}
+
+export interface WorkerOvertimePendingRequest {
+  request_id: number;
+  phase_id: number;
+  phase_name: string;
+  schematic_id: number;
+  schematic_name: string;
+  work_date: string;
+  overtime_hours: number;
+  workers: WorkerOvertimePendingWorker[];
+}
+
+export interface PhaseDailyProduction {
+  phase_id: number;
+  date: string;
+  total_quantity: number;
+  first_timestamp?: string | null;
+  last_timestamp?: string | null;
+}
+
+export interface PhaseExpectedWorkRange {
+  phase_id: number;
+  date_from: string;
+  date_to: string;
+  expected_quantity: number;
+  working_days_count: number;
+  expected_hourly_work: number;
+  working_hours_per_day: number;
+  total_possible_working_hours: number;
+}
+
+export interface SchematicWorkRangeStat {
+  schematic_id: number;
+  schematic_name: string;
+  expected_quantity: number;
+  expected_hourly_work: number;
+  true_quantity: number;
+  true_hourly_work: number;
+  efficiency_pct?: number | null;
+}
+
+export interface PhaseSchematicWorkRangeResponse {
+  phase_id: number;
+  date_from: string;
+  date_to: string;
+  schematics: SchematicWorkRangeStat[];
+}
+
+export interface SchematicDailyProductionRecord {
+  phase_id: number;
+  phase_name: string;
+  schematic_id: number;
+  schematic_name: string;
+  work_date: string;
+  expected_output: number;
+  true_output: number;
+}
+
+export interface SchematicWorkerDayRecord {
+  worker_id: number;
+  worker_name: string;
+  stage_id: number;
+  stage_name: string;
+  stage_order: number;
+  work_date: string;
+  expected_output: number;
+  true_output: number;
+  efficiency_pct?: number | null;
+}
+
+export interface SchematicWorkerAggregate {
+  worker_id: number;
+  worker_name: string;
+  total_expected_output: number;
+  total_true_output: number;
+  efficiency_pct?: number | null;
+}
+
+export interface SchematicWorkerBreakdownResponse {
+  schematic_id: number;
+  date_from: string;
+  date_to: string;
+  records: SchematicWorkerDayRecord[];
+  aggregates: SchematicWorkerAggregate[];
+}
+
+export interface WorkerProductionRecord {
+  worker_id: number;
+  worker_name: string;
+  phase_id: number;
+  phase_name: string;
+  schematic_id: number;
+  schematic_name: string;
+  work_date: string;
+  expected_output: number;
+  true_output: number;
+  working_hours: number;
+  overtime_hours: number;
+  efficiency_pct?: number | null;
+}
+
+export interface WorkerProductionAggregate {
+  worker_id: number;
+  worker_name: string;
+  total_expected_output: number;
+  total_true_output: number;
+  total_working_hours: number;
+  total_overtime_hours: number;
+  efficiency_pct?: number | null;
+}
+
+export interface AllWorkersProductionBreakdownResponse {
+  date_from: string;
+  date_to: string;
+  records: WorkerProductionRecord[];
+  aggregates: WorkerProductionAggregate[];
+}
+
+export const productionApi = {
+  getSchematics: async (params?: { skip?: number; limit?: number; active_only?: boolean }): Promise<SewingLineSchematic[]> => {
+    const response = await api.get<SewingLineSchematic[]>('/production/schematics', { params });
+    return response.data;
+  },
+
+  getSchematicById: async (schematicId: number): Promise<SewingLineSchematicDetail> => {
+    const response = await api.get<SewingLineSchematicDetail>(`/production/schematics/${schematicId}`);
+    return response.data;
+  },
+
+  createSchematic: async (data: SewingLineSchematicCreate): Promise<SewingLineSchematic> => {
+    const response = await api.post<SewingLineSchematic>('/production/schematics', data);
+    return response.data;
+  },
+
+  updateSchematic: async (
+    schematicId: number,
+    data: SewingLineSchematicUpdate
+  ): Promise<SewingLineSchematic> => {
+    const response = await api.put<SewingLineSchematic>(`/production/schematics/${schematicId}`, data);
+    return response.data;
+  },
+
+  getWorkers: async (params?: { skip?: number; limit?: number; active_only?: boolean }): Promise<Worker[]> => {
+    const response = await api.get<Worker[]>('/production/workers', { params });
+    return response.data;
+  },
+
+  getWorkerById: async (workerId: number): Promise<Worker> => {
+    const response = await api.get<Worker>(`/production/workers/${workerId}`);
+    return response.data;
+  },
+
+  createWorker: async (data: WorkerCreate): Promise<Worker> => {
+    const response = await api.post<Worker>('/production/workers', data);
+    return response.data;
+  },
+
+  updateWorker: async (workerId: number, data: WorkerUpdate): Promise<Worker> => {
+    const response = await api.put<Worker>(`/production/workers/${workerId}`, data);
+    return response.data;
+  },
+
+  getWorkerGroups: async (params?: { skip?: number; limit?: number }): Promise<WorkerGroup[]> => {
+    const response = await api.get<WorkerGroup[]>('/production/worker-groups', {
+      params,
+    });
+    return response.data;
+  },
+
+  createWorkerGroup: async (data: WorkerGroupCreate): Promise<WorkerGroup> => {
+    const response = await api.post<WorkerGroup>('/production/worker-groups', data);
+    return response.data;
+  },
+
+  updateWorkerGroup: async (groupId: number, data: WorkerGroupUpdate): Promise<WorkerGroup> => {
+    const response = await api.put<WorkerGroup>(`/production/worker-groups/${groupId}`, data);
+    return response.data;
+  },
+
+  getStages: async (): Promise<StageOption[]> => {
+    const response = await api.get<StageOption[]>('/production/stages');
+    return response.data;
+  },
+
+  getAssignments: async (assignmentDate: string): Promise<DailyAssignmentResponse[]> => {
+    const response = await api.get<DailyAssignmentResponse[]>('/production/assignments', {
+      params: { assignment_date: assignmentDate },
+    });
+    return response.data;
+  },
+
+  createAssignment: async (data: DailyAssignmentCreate): Promise<DailyAssignmentResponse> => {
+    const response = await api.post<DailyAssignmentResponse>('/production/assignments', data);
+    return response.data;
+  },
+
+  getMaxProductionQuantity: async (
+    dailyAssignmentId: number,
+    barcode: string,
+    trackingDate?: string | null
+  ): Promise<MaxProductionQuantityResponse> => {
+    const response = await api.get<MaxProductionQuantityResponse>('/production/tracking/max-quantity', {
+      params: {
+        daily_assignment_id: dailyAssignmentId,
+        barcode,
+        ...(trackingDate != null && trackingDate !== '' ? { tracking_date: trackingDate } : {}),
+      },
+    });
+    return response.data;
+  },
+
+  recordProduction: async (data: RecordProductionRequest): Promise<RecordProductionResponse> => {
+    const response = await api.post<RecordProductionResponse>('/production/tracking/record', data);
+    return response.data;
+  },
+
+  getPhaseDailyProduction: async (
+    phaseId: number,
+    targetDate: string,
+  ): Promise<PhaseDailyProduction> => {
+    const response = await api.get<PhaseDailyProduction>('/production/phase-daily-production', {
+      params: { phase_id: phaseId, target_date: targetDate },
+    });
+    return response.data;
+  },
+
+  getPhaseExpectedWorkRange: async (
+    phaseId: number,
+    fromDate: string,
+    toDate: string,
+  ): Promise<PhaseExpectedWorkRange> => {
+    const response = await api.get<PhaseExpectedWorkRange>('/production/phase-expected-work-range', {
+      params: { phase_id: phaseId, date_from: fromDate, date_to: toDate },
+    });
+    return response.data;
+  },
+
+  getPhaseSchematicWorkRange: async (
+    phaseId: number,
+    fromDate: string,
+    toDate: string,
+  ): Promise<PhaseSchematicWorkRangeResponse> => {
+    const response = await api.get<PhaseSchematicWorkRangeResponse>(
+      '/production/phase-schematic-work-range',
+      {
+        params: { phase_id: phaseId, date_from: fromDate, date_to: toDate },
+      }
+    );
+    return response.data;
+  },
+
+  getSchematicWorkerBreakdown: async (
+    schematicId: number,
+    fromDate: string,
+    toDate: string,
+  ): Promise<SchematicWorkerBreakdownResponse> => {
+    const response = await api.get<SchematicWorkerBreakdownResponse>(
+      `/production/schematics/${schematicId}/worker-breakdown`,
+      {
+        params: { date_from: fromDate, date_to: toDate },
+      }
+    );
+    return response.data;
+  },
+
+  getSewingSchematicDailyProduction: async (
+    fromDate: string,
+    toDate: string
+  ): Promise<SchematicDailyProductionRecord[]> => {
+    const response = await api.get<SchematicDailyProductionRecord[]>(
+      '/production/sewing/schematic-daily-production',
+      {
+        params: { date_from: fromDate, date_to: toDate },
+      }
+    );
+    return response.data;
+  },
+
+  getWorkersProductionBreakdown: async (
+    fromDate: string,
+    toDate: string,
+  ): Promise<AllWorkersProductionBreakdownResponse> => {
+    const response = await api.get<AllWorkersProductionBreakdownResponse>(
+      '/production/workers/breakdown',
+      {
+        params: { date_from: fromDate, date_to: toDate },
+      }
+    );
+    return response.data;
+  },
+
+  createOvertimeRequest: async (
+    data: WorkerOvertimeRequestCreate
+  ): Promise<WorkerOvertimeRequestResponse> => {
+    const response = await api.post<WorkerOvertimeRequestResponse>('/production/overtime/requests', data);
+    return response.data;
+  },
+
+  getPendingOvertimeRequests: async (): Promise<WorkerOvertimePendingRequest[]> => {
+    const response = await api.get<WorkerOvertimePendingRequest[]>('/production/overtime/requests/pending');
+    return response.data;
+  },
+
+  approveOvertimeRequest: async (
+    requestId: number,
+    admin_comment?: string | null
+  ): Promise<WorkerOvertimeRequestResponse> => {
+    const response = await api.post<WorkerOvertimeRequestResponse>(
+      `/production/overtime/requests/${requestId}/approve`,
+      { admin_comment: admin_comment ?? null }
+    );
+    return response.data;
+  },
+
+  rejectOvertimeRequest: async (
+    requestId: number,
+    admin_comment?: string | null
+  ): Promise<WorkerOvertimeRequestResponse> => {
+    const response = await api.post<WorkerOvertimeRequestResponse>(
+      `/production/overtime/requests/${requestId}/reject`,
+      { admin_comment: admin_comment ?? null }
+    );
     return response.data;
   },
 };

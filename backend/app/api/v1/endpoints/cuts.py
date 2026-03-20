@@ -109,6 +109,24 @@ def get_filter_options(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving filter options: {str(e)}")
 
+@router.post("/", response_model=schemas.CutDetailsResponse)
+def create_cut(
+    cut_in: schemas.CutCreate,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user)
+):
+    """Create a new cut with optional rolls and transitions"""
+    try:
+        cut = cut_crud.create_cut(db, cut_in, user_id=current_user.id)
+        if not cut:
+            raise HTTPException(status_code=500, detail="Failed to create cut")
+        return schemas.CutDetailsResponse(**cut)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating cut: {str(e)}")
+
+
 @router.get("/{cut_id}", response_model=schemas.CutDetailsResponse)
 def get_cut_by_id(
     cut_id: int,
@@ -133,24 +151,6 @@ def get_cut_by_id(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving cut: {str(e)}")
 
-@router.post("/", response_model=schemas.CutDetailsResponse)
-def create_cut(
-    cut_in: schemas.CutCreate,
-    db: Session = Depends(get_db),
-    current_user: schemas.User = Depends(get_current_user)
-):
-    """Create a new cut with optional rolls and transitions"""
-    try:
-        cut = cut_crud.create_cut(db, cut_in, user_id=current_user.id)
-        if not cut:
-            raise HTTPException(status_code=500, detail="Failed to create cut")
-        return schemas.CutDetailsResponse(**cut)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error creating cut: {str(e)}")
-
-
 @router.put("/{cut_id}", response_model=schemas.CutDetailsResponse)
 def update_cut(
     cut_id: int,
@@ -170,4 +170,22 @@ def update_cut(
         raise HTTPException(status_code=status_code, detail=message)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error updating cut: {str(e)}")
+
+
+@router.delete("/{cut_id}")
+def delete_cut(
+    cut_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user)
+):
+    """Delete a cut and all its associated rolls and transitions."""
+    try:
+        result = cut_crud.delete_cut(db, cut_id=cut_id, user_id=current_user.id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Cut not found")
+        return {"message": f"Cut {cut_id} deleted successfully", "cut_id": cut_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting cut: {str(e)}")
 

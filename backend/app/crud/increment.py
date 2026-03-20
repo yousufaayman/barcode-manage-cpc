@@ -13,36 +13,83 @@ def create_increment(db: Session, increment: schemas.SingleIncrementCreate, user
     if not db_batch:
         raise ValueError(f"Batch {increment.batch_id} not found")
     
-    if db_batch.current_phase != increment.incremented_in_phase_id:
-        raise ValueError(f"Batch is not in phase {increment.incremented_in_phase_id}. Current phase: {db_batch.current_phase}")
+    increment_type = getattr(increment, 'increment_type', 'rejection_resolution')
     
-    phase = db.query(models.ProductionPhase).filter(
-        models.ProductionPhase.phase_id == increment.incremented_in_phase_id
-    ).first()
+    # Validate that rejection_resolution requires incremented_from_phase_id
+    if increment_type == 'rejection_resolution' and not increment.incremented_from_phase_id:
+        raise ValueError("incremented_from_phase_id is required when increment_type is 'rejection_resolution'")
     
-    if not phase:
-        raise ValueError(f"Phase {increment.incremented_in_phase_id} not found")
+    from_phase_type = None
+    to_phase_type = None
     
-    phase_type = phase.type or 'unknown'
+    if increment.incremented_from_phase_id:
+        from_phase = db.query(models.ProductionPhase).filter(
+            models.ProductionPhase.phase_id == increment.incremented_from_phase_id
+        ).first()
+        if from_phase:
+            from_phase_type = from_phase.type or 'unknown'
+    
+    if increment.incremented_to_phase_id:
+        to_phase = db.query(models.ProductionPhase).filter(
+            models.ProductionPhase.phase_id == increment.incremented_to_phase_id
+        ).first()
+        if to_phase:
+            to_phase_type = to_phase.type or 'unknown'
     
     db_increment = models.SingleIncrement(
         batch_id=increment.batch_id,
-        incremented_in_phase_id=increment.incremented_in_phase_id,
-        incremented_in_phase_type=phase_type,
+        incremented_from_phase_id=increment.incremented_from_phase_id,
+        incremented_to_phase_id=increment.incremented_to_phase_id,
+        incremented_from_phase_type=from_phase_type,
+        incremented_to_phase_type=to_phase_type,
+        responsible_daily_assignment_id=increment.responsible_daily_assignment_id,
         quantity=increment.quantity,
-        increment_reason=increment.increment_reason,
+        increment_type=increment_type,
         incremented_by_user_id=user_id,
         status_at_increment=db_batch.status
     )
     
     db.add(db_increment)
     
+    if not commit:
+        db.flush()
+    
+    if increment_type == 'rejection_resolution' and increment.incremented_from_phase_id:
+        db.execute(
+            text("""
+                SELECT ops.apply_rejection_resolution_increment(
+                    :batch_id,
+                    :incremented_from_phase_id,
+                    :quantity,
+                    CAST(:status_at_increment AS VARCHAR(50))
+                )
+            """),
+            {
+                "batch_id": increment.batch_id,
+                "incremented_from_phase_id": increment.incremented_from_phase_id,
+                "quantity": increment.quantity,
+                "status_at_increment": db_batch.status
+            }
+        )
+        # When resolving from a sewing phase, update production_history for the selected stage
+        if from_phase_type and from_phase_type.lower() == 'sewing' and increment.responsible_daily_assignment_id:
+            ph_row = db.query(models.ProductionHistory).filter(
+                models.ProductionHistory.daily_assignment_id == increment.responsible_daily_assignment_id,
+                models.ProductionHistory.batch_id == increment.batch_id,
+            ).with_for_update().first()
+            if ph_row:
+                ph_row.quantity_produced = ph_row.quantity_produced + increment.quantity
+            else:
+                new_row = models.ProductionHistory(
+                    daily_assignment_id=increment.responsible_daily_assignment_id,
+                    batch_id=increment.batch_id,
+                    quantity_produced=increment.quantity,
+                )
+                db.add(new_row)
+    
     if commit:
         db.commit()
         db.refresh(db_increment)
-    
-    if not commit:
-        db.flush()
     
     db.refresh(db_increment)
     db_increment_with_batch = db.query(models.SingleIncrement).options(
@@ -75,7 +122,10 @@ def get_increments(
         query = query.filter(models.SingleIncrement.batch_id == batch_id)
     
     if phase_id:
-        query = query.filter(models.SingleIncrement.incremented_in_phase_id == phase_id)
+        query = query.filter(
+            (models.SingleIncrement.incremented_from_phase_id == phase_id) |
+            (models.SingleIncrement.incremented_to_phase_id == phase_id)
+        )
     
     if job_order_id:
         query = query.join(models.Batch).filter(models.Batch.job_order_id == job_order_id)
@@ -93,9 +143,6 @@ def update_increment(
     db_increment = get_increment(db, increment_id)
     if not db_increment:
         return None
-    
-    if increment_update.increment_reason is not None:
-        db_increment.increment_reason = increment_update.increment_reason
     
     db_batch = db.query(models.Batch).filter(models.Batch.batch_id == db_increment.batch_id).first()
     if db_batch:

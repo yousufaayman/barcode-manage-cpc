@@ -665,6 +665,61 @@ def get_batch_visited_phases(batch_id: int, db: Session = Depends(get_db)):
     phases = get_visited_phases_by_batch(db, batch_id)
     return phases
 
+
+@router.get("/{batch_id}/production-stages", response_model=List[schemas.StageOption])
+def get_batch_production_stages(
+    batch_id: int,
+    phase_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Get distinct stages from production_history for a batch.
+    Queries production_history for batch_id, gets daily_assignment_ids,
+    joins worker_daily_stage_assignments and sewing_line_stages for stage names.
+    If phase_id is provided, filters to stages belonging to that production phase.
+    Used for the responsible-phase stage dropdown when phase type is sewing.
+    """
+    from app.crud.tracking import get_stages_from_batch_production_history
+    rows = get_stages_from_batch_production_history(db, batch_id, phase_id)
+    return [
+        schemas.StageOption(
+            stage_id=sid,
+            stage_name=name,
+            schematic_id=schem_id,
+            schematic_name=schem_name,
+            stage_order=order,
+        )
+        for sid, name, schem_id, schem_name, order in rows
+    ]
+
+
+@router.get("/{batch_id}/production-daily-assignments", response_model=List[schemas.BatchProductionDailyAssignmentOption])
+def get_batch_production_daily_assignments(
+    batch_id: int,
+    phase_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Get daily assignments with production for a batch from production_history.
+    Returns worker name, stage name, quantity produced for each assignment.
+    If phase_id is provided, filters to assignments whose stage belongs to that phase.
+    Used for the responsible-phase dropdown when phase type is sewing (user picks
+    which worker's production to attribute the rejection to).
+    """
+    from app.crud.tracking import get_daily_assignments_from_batch_production_history
+    rows = get_daily_assignments_from_batch_production_history(db, batch_id, phase_id)
+    return [
+        schemas.BatchProductionDailyAssignmentOption(
+            daily_assignment_id=daid,
+            worker_name=worker_name,
+            stage_name=stage_name,
+            quantity_produced=qty,
+            assignment_date=asgn_date,
+        )
+        for daid, worker_name, stage_name, qty, asgn_date in rows
+    ]
+
+
 @router.get("/barcode/{barcode}/job-order-item")
 def get_job_order_item_by_barcode(
     barcode: str,

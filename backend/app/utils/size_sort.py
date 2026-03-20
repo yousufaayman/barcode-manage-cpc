@@ -9,7 +9,8 @@ from typing import Tuple
 @lru_cache()
 def _load_size_order() -> Tuple[dict, int, int]:
     """Load size ordering metadata from shared JSON file."""
-    root = Path(__file__).resolve().parents[2]
+    # Project root is one level above backend (backend/..)
+    root = Path(__file__).resolve().parents[3]
     json_path = root / "shared" / "size_order.json"
     with json_path.open("r", encoding="utf-8") as f:
         data = json.load(f)

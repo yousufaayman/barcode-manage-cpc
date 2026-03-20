@@ -47,6 +47,7 @@ const AddCutPage: React.FC = () => {
   const [selectedColorId, setSelectedColorId] = useState<number | null>(null);
   const [ratios, setRatios] = useState<{ [item_id: string]: number }>({});
   const [wasteWeight, setWasteWeight] = useState<string>('');
+  const [markerLength, setMarkerLength] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
   
   // Rolls state
@@ -55,6 +56,7 @@ const AddCutPage: React.FC = () => {
     weight: string;
     layer_weight: string;
     num_of_layers: string;
+    roll_width: string;
   }>>([]);
   
   // Transitions state
@@ -150,6 +152,11 @@ const AddCutPage: React.FC = () => {
             ? existingCut.waste_fabric_weight.toString()
             : ''
         );
+        setMarkerLength(
+          existingCut.marker_length !== null && existingCut.marker_length !== undefined
+            ? existingCut.marker_length.toString()
+            : ''
+        );
         setNotes(existingCut.notes || '');
         setRolls(
           (existingCut.rolls || []).map((roll) => ({
@@ -157,6 +164,7 @@ const AddCutPage: React.FC = () => {
             weight: roll.weight !== null && roll.weight !== undefined ? roll.weight.toString() : '',
             layer_weight: roll.layer_weight !== null && roll.layer_weight !== undefined ? roll.layer_weight.toString() : '',
             num_of_layers: roll.num_of_layers !== null && roll.num_of_layers !== undefined ? roll.num_of_layers.toString() : '',
+            roll_width: roll.roll_width !== null && roll.roll_width !== undefined ? roll.roll_width.toString() : '',
           }))
         );
         setTransitions(
@@ -202,6 +210,7 @@ const AddCutPage: React.FC = () => {
       weight: '',
       layer_weight: '',
       num_of_layers: '',
+      roll_width: '',
     }]);
   };
 
@@ -301,12 +310,14 @@ const AddCutPage: React.FC = () => {
         color_id: selectedColorId,
         job_order_items_ratios: ratios,
         waste_fabric_weight: wasteWeight ? parseFloat(wasteWeight) : undefined,
+        marker_length: markerLength ? parseFloat(markerLength) : undefined,
         notes: notes || undefined,
         rolls: rolls.map(roll => ({
           roll_number: roll.roll_number,
           weight: parseFloat(roll.weight),
           layer_weight: parseFloat(roll.layer_weight),
           num_of_layers: parseInt(roll.num_of_layers),
+          roll_width: roll.roll_width ? parseFloat(roll.roll_width) : undefined,
         })),
         transitions: transitions.map(transition => ({
           from_item_id: transition.from_item_id,
@@ -499,7 +510,7 @@ const AddCutPage: React.FC = () => {
                           <X className="w-4 h-4" />
                         </Button>
                       </div>
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-4 gap-3">
                         <div>
                           <Label>Weight (kg)</Label>
                           <Input
@@ -531,6 +542,17 @@ const AddCutPage: React.FC = () => {
                             value={roll.num_of_layers}
                             onChange={(e) => handleRollChange(index, 'num_of_layers', e.target.value)}
                             placeholder="0"
+                          />
+                        </div>
+                        <div>
+                          <Label>Roll Width (M)</Label>
+                          <Input
+                            type="number"
+                            step="0.001"
+                            min="0"
+                            value={roll.roll_width}
+                            onChange={(e) => handleRollChange(index, 'roll_width', e.target.value)}
+                            placeholder="0.000"
                           />
                         </div>
                       </div>
@@ -641,6 +663,18 @@ const AddCutPage: React.FC = () => {
                     min="0"
                     value={wasteWeight}
                     onChange={(e) => setWasteWeight(e.target.value)}
+                    placeholder="0.000"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="marker-length">Marker Length (M)</Label>
+                  <Input
+                    id="marker-length"
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={markerLength}
+                    onChange={(e) => setMarkerLength(e.target.value)}
                     placeholder="0.000"
                   />
                 </div>

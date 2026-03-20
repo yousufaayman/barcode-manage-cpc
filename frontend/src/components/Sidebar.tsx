@@ -7,15 +7,17 @@ import {
   QrCode, 
   Package, 
   Users, 
-  BarChart3, 
   Archive, 
   LogOut, 
   X,
   User,
   FileText,
   Scissors,
+  LayoutGrid,
+  Activity,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  BarChart3,
 } from 'lucide-react';
 import LanguageSwitcher from './LanguageSwitcher';
 
@@ -116,6 +118,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
             {(user?.role === 'admin' || user?.role === 'general_operations' || user?.role === 'cutting') && (
               <NavItem to="/bulk-create" label={t('navigation.barcodeCreate')} icon={Package} />
             )}
+            {(user?.role === 'admin' || user?.role === 'general_operations' || user?.role === 'sewing') && (
+              <NavItem to="/production/tracking" label={t('navigation.productionTracking')} icon={Activity} />
+            )}
           </div>
         </div>
 
@@ -126,19 +131,28 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
             </h3>
             <div className="space-y-1">
               <NavItem to="/archive" label={t('navigation.archivedBatches')} icon={Archive} />
+              <NavItem to="/production" label={t('navigation.productionManagement')} icon={LayoutGrid} />
               <NavItem to="/advanced-statistics" label={t('navigation.advancedStatistics')} icon={BarChart3} />
               <NavItem to="/users" label={t('navigation.userManagement')} icon={Users} />
             </div>
           </div>
         )}
 
-        {user?.role === 'general_operations' && (
+        {(user?.role === 'general_operations' || user?.role === 'sewing') && (
           <div className="mb-4">
             <h3 className={`text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2 ${isCollapsed ? 'hidden' : ''}`}>
               {t('navigation.additional')}
             </h3>
             <div className="space-y-1">
-              <NavItem to="/advanced-statistics" label={t('navigation.advancedStatistics')} icon={BarChart3} />
+              {(user?.role === 'general_operations') && (
+                <>
+                  <NavItem to="/production" label={t('navigation.productionManagement')} icon={LayoutGrid} />
+                  <NavItem to="/advanced-statistics" label={t('navigation.advancedStatistics')} icon={BarChart3} />
+                </>
+              )}
+              {user?.role === 'sewing' && (
+                <NavItem to="/production" label={t('navigation.productionManagement')} icon={LayoutGrid} />
+              )}
             </div>
           </div>
         )}

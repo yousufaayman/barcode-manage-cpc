@@ -23,10 +23,24 @@ class SummaryRefreshService:
                     {"interval": self.debounce_seconds}
                 )
                 
-                count = result.scalar()
-                if count > 0:
+                count_job_order_summaries = result.scalar() or 0
+
+                worker_stage_refresh_result = db.execute(
+                    text("SELECT reporting.refresh_worker_daily_stage_production(:interval)"),
+                    {"interval": self.debounce_seconds}
+                )
+                count_worker_daily = worker_stage_refresh_result.scalar() or 0
+
+                if count_job_order_summaries > 0 or count_worker_daily > 0:
                     db.commit()
-                    logger.info(f"Refreshed {count} job order summaries")
+                    if count_job_order_summaries > 0:
+                        logger.info(
+                            f"Refreshed {count_job_order_summaries} job order summaries"
+                        )
+                    if count_worker_daily > 0:
+                        logger.info(
+                            f"Refreshed {count_worker_daily} worker daily stage production days"
+                        )
                 else:
                     db.rollback()
                     

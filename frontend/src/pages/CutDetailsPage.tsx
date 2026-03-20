@@ -17,7 +17,10 @@ import {
   ArrowRight,
   FileText,
   Pencil,
-  Printer
+  Printer,
+  Box,
+  Palette,
+  Ruler
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
@@ -70,10 +73,10 @@ const CutDetailsPage: React.FC = () => {
       setCut(cutData);
     } catch (err: any) {
       console.error('Error fetching cut details:', err);
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to fetch cut details';
+      const errorMessage = err.response?.data?.detail || err.message || t('cutDetailsPage.failedToFetchCutDetails');
       setError(errorMessage);
       toast({
-        title: 'Error',
+        title: t('common.error'),
         description: errorMessage,
         variant: 'destructive',
       });
@@ -83,7 +86,7 @@ const CutDetailsPage: React.FC = () => {
   };
 
   const formatDate = (dateString: string | null) => {
-    if (!dateString) return 'N/A';
+    if (!dateString) return t('common.na');
     try {
       return format(new Date(dateString), 'MMM dd, yyyy HH:mm');
     } catch {
@@ -100,24 +103,24 @@ const CutDetailsPage: React.FC = () => {
     () => [
       {
         value: 'pending',
-        label: 'Pending',
-        description: 'Waiting to start printing / embroidery',
+        label: t('cutDetailsPage.statusPending'),
+        description: t('cutDetailsPage.statusPendingDesc'),
         badgeClass: 'bg-yellow-100 text-yellow-900 border-yellow-200',
       },
       {
         value: 'in_progress',
-        label: 'In Progress',
-        description: 'Currently in printing / embroidery',
+        label: t('cutDetailsPage.statusInProgress'),
+        description: t('cutDetailsPage.statusInProgressDesc'),
         badgeClass: 'bg-blue-100 text-blue-900 border-blue-200',
       },
       {
         value: 'completed',
-        label: 'Completed',
-        description: 'Printing / embroidery finished',
+        label: t('cutDetailsPage.statusCompleted'),
+        description: t('cutDetailsPage.statusCompletedDesc'),
         badgeClass: 'bg-green-100 text-green-900 border-green-200',
       },
     ],
-    []
+    [t]
   );
 
   const printConfig = cut?.job_order_print_config;
@@ -198,13 +201,13 @@ const CutDetailsPage: React.FC = () => {
       await cutsApi.updateCut(cut.cut_id, { print_status: nextStatus });
       setCut(prev => (prev ? { ...prev, print_status: nextStatus } : prev));
       toast({
-        title: 'Status Updated',
-        description: `Printing progress marked as ${nextStatus.replace('_', ' ')}`,
+        title: t('cutDetailsPage.statusUpdated'),
+        description: t('cutDetailsPage.statusUpdatedDesc', { status: nextStatus.replace('_', ' ') }),
       });
     } catch (err: any) {
-      const errorMessage = err.response?.data?.detail || err.message || 'Failed to update status';
+      const errorMessage = err.response?.data?.detail || err.message || t('cutDetailsPage.failedToUpdateStatus');
       toast({
-        title: 'Error',
+        title: t('common.error'),
         description: errorMessage,
         variant: 'destructive',
       });
@@ -227,18 +230,18 @@ const CutDetailsPage: React.FC = () => {
     return (
       <Layout>
         <div className="p-6">
-          <Button
+            <Button
             onClick={() => navigate('/cutting')}
             variant="outline"
             className="mb-4"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Cuts
+            {t('cutDetailsPage.backToCuts')}
           </Button>
           <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-            <p className="text-red-800">{error || 'Cut not found'}</p>
+            <p className="text-red-800">{error || t('cutDetailsPage.cutNotFound')}</p>
             <Button onClick={() => cutId && fetchCutDetails(parseInt(cutId))} className="mt-4" variant="outline">
-              Retry
+              {t('cutDetailsPage.retry')}
             </Button>
           </div>
         </div>
@@ -256,14 +259,14 @@ const CutDetailsPage: React.FC = () => {
             className="mb-4"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Cuts
+            {t('cutDetailsPage.backToCuts')}
           </Button>
           
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-3xl font-bold text-gray-800 flex items-center gap-3">
                 <Scissors className="w-8 h-8 text-green" />
-                Cut #{cut.cut_id} Details
+                {t('cutDetailsPage.cutDetails', { cutId: cut.cut_id })}
               </h1>
               <p className="text-gray-600 mt-1">
                 {cut.job_order_number} - {cut.model_name} - {cut.color_name}
@@ -276,7 +279,7 @@ const CutDetailsPage: React.FC = () => {
                   className="flex items-center gap-2"
                 >
                   <Pencil className="w-4 h-4" />
-                  Edit Cut
+                  {t('cutDetailsPage.editCut')}
                 </Button>
               )}
               <Button 
@@ -285,7 +288,7 @@ const CutDetailsPage: React.FC = () => {
                 className="flex items-center gap-2"
               >
                 <RefreshCw className="w-4 h-4" />
-                Refresh
+                {t('cutDetailsPage.refresh')}
               </Button>
             </div>
           </div>
@@ -297,92 +300,109 @@ const CutDetailsPage: React.FC = () => {
             {/* Cut Overview with Statistics */}
             <Card>
               <CardHeader>
-                <CardTitle>Cut Overview</CardTitle>
+                <CardTitle>{t('cutDetailsPage.cutOverview')}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-6 lg:max-h-[520px] overflow-y-auto pr-1">
-                {/* Basic Information */}
+                {/* Cut Overview: 10 details, 5 per row. Row 1: Job Order, Model, Color, Created At, Marker Length. Row 2: Total Layers, Rolls Used, Cut Weight, Total Pieces, Waste Weight. */}
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                  <div className="bg-indigo-50 rounded-lg p-3 border border-indigo-100 flex flex-col min-h-[80px]">
-                    <div className="mb-1.5">
-                      <span className="text-[10px] font-medium text-indigo-700 uppercase tracking-wide leading-tight">Job Order</span>
+                  {/* Row 1 - Detail 1 */}
+                  <div className="bg-indigo-50 rounded-lg p-4 border border-indigo-100 flex flex-col min-h-[100px]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <FileText className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                      <span className="text-xs font-medium text-indigo-700 uppercase tracking-wide">{t('cutDetailsPage.jobOrder')}</span>
                     </div>
-                    <p className="text-base font-bold text-indigo-900 mt-auto leading-tight">{cut.job_order_number}</p>
+                    <p className="text-lg font-bold text-indigo-900 mt-auto leading-tight">{cut.job_order_number}</p>
                   </div>
-                  <div className="bg-teal-50 rounded-lg p-3 border border-teal-100 flex flex-col min-h-[80px]">
-                    <div className="mb-1.5">
-                      <span className="text-[10px] font-medium text-teal-700 uppercase tracking-wide leading-tight">Model</span>
+                  {/* Row 1 - Detail 2 */}
+                  <div className="bg-teal-50 rounded-lg p-4 border border-teal-100 flex flex-col min-h-[100px]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Box className="w-4 h-4 text-teal-600 flex-shrink-0" />
+                      <span className="text-xs font-medium text-teal-700 uppercase tracking-wide">{t('cutDetailsPage.model')}</span>
                     </div>
-                    <p className="text-base font-bold text-teal-900 mt-auto leading-tight">{cut.model_name}</p>
+                    <p className="text-lg font-bold text-teal-900 mt-auto leading-tight">{cut.model_name}</p>
                   </div>
-                  <div className="bg-pink-50 rounded-lg p-3 border border-pink-100 flex flex-col min-h-[80px]">
-                    <div className="mb-1.5">
-                      <span className="text-[10px] font-medium text-pink-700 uppercase tracking-wide leading-tight">Color</span>
+                  {/* Row 1 - Detail 3 */}
+                  <div className="bg-pink-50 rounded-lg p-4 border border-pink-100 flex flex-col min-h-[100px]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Palette className="w-4 h-4 text-pink-600 flex-shrink-0" />
+                      <span className="text-xs font-medium text-pink-700 uppercase tracking-wide">{t('cutDetailsPage.color')}</span>
                     </div>
-                    <p className="text-base font-bold text-pink-900 mt-auto leading-tight">{cut.color_name}</p>
+                    <p className="text-lg font-bold text-pink-900 mt-auto leading-tight">{cut.color_name}</p>
                   </div>
-                  <div className="bg-cyan-50 rounded-lg p-3 border border-cyan-100 flex flex-col min-h-[80px]">
-                    <div className="mb-1.5">
-                      <span className="text-[10px] font-medium text-cyan-700 uppercase tracking-wide leading-tight">Created At</span>
+                  {/* Row 1 - Detail 4 */}
+                  <div className="bg-cyan-50 rounded-lg p-4 border border-cyan-100 flex flex-col min-h-[100px]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Calendar className="w-4 h-4 text-cyan-600 flex-shrink-0" />
+                      <span className="text-xs font-medium text-cyan-700 uppercase tracking-wide">{t('cutDetailsPage.createdAt')}</span>
                     </div>
-                    <p className="text-base font-bold text-cyan-900 mt-auto leading-tight">{formatDate(cut.created_at)}</p>
+                    <p className="text-lg font-bold text-cyan-900 mt-auto leading-tight">{formatDate(cut.created_at)}</p>
                   </div>
-                  <div className="hidden lg:flex"></div>
-                </div>
+                  {/* Row 1 - Detail 5 */}
+                  <div className="bg-slate-50 rounded-lg p-4 border border-slate-100 flex flex-col min-h-[100px]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Ruler className="w-4 h-4 text-slate-600 flex-shrink-0" />
+                      <span className="text-xs font-medium text-slate-700 uppercase tracking-wide">{t('cutDetailsPage.markerLength')}</span>
+                    </div>
+                    <span className="text-lg font-bold text-slate-900 mt-auto">
+                      {cut.marker_length != null && cut.marker_length !== undefined
+                        ? <>{cut.marker_length.toFixed(3)} <span className="text-sm font-normal">M</span></>
+                        : '—'}
+                    </span>
+                  </div>
 
-                {/* Statistics Grid */}
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 pt-6 border-t border-gray-200">
+                  {/* Row 2 - Detail 6 */}
                   <div className="bg-blue-50 rounded-lg p-4 border border-blue-100 flex flex-col min-h-[100px]">
                     <div className="flex items-center gap-2 mb-2">
                       <Layers className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                      <span className="text-xs font-medium text-blue-700 uppercase tracking-wide">Total Layers</span>
+                      <span className="text-xs font-medium text-blue-700 uppercase tracking-wide">{t('cutDetailsPage.totalLayers')}</span>
                     </div>
                     <span className="text-2xl font-bold text-blue-900 mt-auto">{cut.total_layers}</span>
                   </div>
-
+                  {/* Row 2 - Detail 7 */}
                   <div className="bg-green-50 rounded-lg p-4 border border-green-100 flex flex-col min-h-[100px]">
                     <div className="flex items-center gap-2 mb-2">
                       <Package className="w-4 h-4 text-green-600 flex-shrink-0" />
-                      <span className="text-xs font-medium text-green-700 uppercase tracking-wide">Rolls Used</span>
+                      <span className="text-xs font-medium text-green-700 uppercase tracking-wide">{t('cutDetailsPage.rollsUsed')}</span>
                     </div>
                     <span className="text-2xl font-bold text-green-900 mt-auto">{cut.num_of_rolls_used}</span>
                   </div>
-
+                  {/* Row 2 - Detail 8 */}
                   <div className="bg-purple-50 rounded-lg p-4 border border-purple-100 flex flex-col min-h-[100px]">
                     <div className="flex items-center gap-2 mb-2">
                       <Weight className="w-4 h-4 text-purple-600 flex-shrink-0" />
-                      <span className="text-xs font-medium text-purple-700 uppercase tracking-wide">Cut Weight</span>
+                      <span className="text-xs font-medium text-purple-700 uppercase tracking-wide">{t('cutDetailsPage.cutWeight')}</span>
                     </div>
                     <span className="text-2xl font-bold text-purple-900 mt-auto">
                       {cut.cut_weight.toFixed(2)} <span className="text-sm font-normal">kg</span>
                     </span>
                   </div>
-
+                  {/* Row 2 - Detail 9 */}
                   <div className="bg-gray-50 rounded-lg p-4 border border-gray-100 flex flex-col min-h-[100px]">
                     <div className="flex items-center gap-2 mb-2">
                       <Scissors className="w-4 h-4 text-gray-600 flex-shrink-0" />
-                      <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">Total Pieces</span>
+                      <span className="text-xs font-medium text-gray-700 uppercase tracking-wide">{t('cutDetailsPage.totalPieces')}</span>
                     </div>
                     <span className="text-2xl font-bold text-gray-900 mt-auto">
                       {cut.sizes.reduce((sum, size) => sum + size.total_pieces, 0)}
                     </span>
                   </div>
-
-                  {cut.waste_fabric_weight && (
-                    <div className="bg-orange-50 rounded-lg p-4 border border-orange-100 flex flex-col min-h-[100px]">
-                      <div className="flex items-center gap-2 mb-2">
-                        <FileText className="w-4 h-4 text-orange-600 flex-shrink-0" />
-                        <span className="text-xs font-medium text-orange-700 uppercase tracking-wide">Waste Weight</span>
-                      </div>
-                      <span className="text-2xl font-bold text-orange-900 mt-auto">
-                        {cut.waste_fabric_weight.toFixed(2)} <span className="text-sm font-normal">kg</span>
-                      </span>
+                  {/* Row 2 - Detail 10 */}
+                  <div className="bg-orange-50 rounded-lg p-4 border border-orange-100 flex flex-col min-h-[100px]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <FileText className="w-4 h-4 text-orange-600 flex-shrink-0" />
+                      <span className="text-xs font-medium text-orange-700 uppercase tracking-wide">{t('cutDetailsPage.wasteWeight')}</span>
                     </div>
-                  )}
+                    <span className="text-2xl font-bold text-orange-900 mt-auto">
+                      {cut.waste_fabric_weight != null && cut.waste_fabric_weight !== undefined
+                        ? <>{cut.waste_fabric_weight.toFixed(2)} <span className="text-sm font-normal">kg</span></>
+                        : '—'}
+                    </span>
+                  </div>
                 </div>
 
                 {cut.notes && (
                   <div className="pt-6 border-t border-gray-200">
-                    <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2 block">Notes</label>
+                    <label className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2 block">{t('cutDetailsPage.notes')}</label>
                     <p className="text-sm text-gray-700 leading-relaxed">{cut.notes}</p>
                   </div>
                 )}
@@ -394,24 +414,25 @@ const CutDetailsPage: React.FC = () => {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Package className="w-5 h-5" />
-                  Rolls ({(cut.rolls || []).length})
+                  {t('cutDetailsPage.rolls', { count: (cut.rolls || []).length })}
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex-1 flex flex-col lg:max-h-[520px] overflow-y-auto pr-1">
                 {!cut.rolls || cut.rolls.length === 0 ? (
                   <div className="flex-1 flex items-center justify-center">
-                    <p className="text-gray-500">No rolls recorded for this cut</p>
+                    <p className="text-gray-500">{t('cutDetailsPage.noRollsRecorded')}</p>
                   </div>
                 ) : (
                   <div className="flex-1">
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>Roll #</TableHead>
-                          <TableHead>Weight (kg)</TableHead>
-                          <TableHead>Layer Weight (kg)</TableHead>
-                          <TableHead>Layers</TableHead>
-                          <TableHead>Created At</TableHead>
+                          <TableHead>{t('cutDetailsPage.rollNumber')}</TableHead>
+                          <TableHead>{t('cutDetailsPage.weight')}</TableHead>
+                          <TableHead>{t('cutDetailsPage.layerWeight')}</TableHead>
+                          <TableHead>{t('cutDetailsPage.rollWidth')}</TableHead>
+                          <TableHead>{t('cutDetailsPage.layers')}</TableHead>
+                          <TableHead>{t('cutDetailsPage.createdAtColumn')}</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -420,6 +441,11 @@ const CutDetailsPage: React.FC = () => {
                             <TableCell className="font-medium">{roll.roll_number}</TableCell>
                             <TableCell>{roll.weight.toFixed(3)}</TableCell>
                             <TableCell>{roll.layer_weight.toFixed(3)}</TableCell>
+                            <TableCell>
+                              {roll.roll_width !== undefined && roll.roll_width !== null
+                                ? roll.roll_width.toFixed(3)
+                                : '-'}
+                            </TableCell>
                             <TableCell>{roll.num_of_layers}</TableCell>
                             <TableCell className="text-sm text-gray-600">
                               {formatDate(roll.created_at)}
@@ -442,7 +468,7 @@ const CutDetailsPage: React.FC = () => {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Layers className="w-5 h-5" />
-                  Sizes, Ratios & Quantities
+                  {t('cutDetailsPage.sizesRatiosQuantities')}
                 </CardTitle>
               </CardHeader>
               <CardContent className="lg:max-h-[520px] overflow-y-auto pr-1">
@@ -460,13 +486,13 @@ const CutDetailsPage: React.FC = () => {
                           </Badge>
                           {ratio !== null && ratio !== undefined && (
                             <div className="flex flex-col">
-                              <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">Ratio</span>
+                              <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">{t('cutDetailsPage.ratio')}</span>
                               <span className="text-xl font-bold text-blue-700">{ratio}</span>
                             </div>
                           )}
                         </div>
                         <div className="flex flex-col items-end">
-                          <span className="text-xs font-medium text-gray-600">Quantity</span>
+                          <span className="text-xs font-medium text-gray-600">{t('cutDetailsPage.quantity')}</span>
                           <span className="text-lg font-bold text-gray-900">{size.total_pieces}</span>
                         </div>
                       </div>
@@ -475,7 +501,7 @@ const CutDetailsPage: React.FC = () => {
                 </div>
                 <div className="mt-4 pt-4 border-t border-gray-200">
                   <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg border border-blue-200">
-                    <span className="text-sm font-semibold text-blue-900 uppercase tracking-wide">Total Pieces</span>
+                    <span className="text-sm font-semibold text-blue-900 uppercase tracking-wide">{t('cutDetailsPage.totalPiecesLabel')}</span>
                     <span className="text-xl font-bold text-blue-900">
                       {cut.sizes.reduce((sum, size) => sum + size.total_pieces, 0)}
                     </span>
@@ -489,14 +515,14 @@ const CutDetailsPage: React.FC = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Printer className="w-5 h-5" />
-                    Printing / Embroidery Progress
+                    {t('cutDetailsPage.printingEmbroideryProgress')}
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4 lg:max-h-[520px] lg:overflow-y-auto lg:pr-1">
                   <div className="flex flex-col gap-4 lg:flex-row lg:gap-6">
                     <div className="flex-1 border border-gray-100 rounded-lg p-3 bg-gray-50">
                       <span className="text-xs font-medium text-gray-500 uppercase tracking-wide block mb-1">
-                        Current Status
+                        {t('cutDetailsPage.currentStatus')}
                       </span>
                     {currentStatusMeta && (
                       <Badge
@@ -509,19 +535,19 @@ const CutDetailsPage: React.FC = () => {
                     </div>
                     <div className="flex-1 border border-gray-100 rounded-lg p-3 bg-gray-50">
                       <span className="text-xs font-medium text-gray-500 uppercase tracking-wide block mb-2">
-                        Technique
+                        {t('cutDetailsPage.technique')}
                       </span>
                       <Badge
                         variant="outline"
                         className="bg-indigo-50 border-indigo-100 text-indigo-900 text-xs font-semibold px-2.5 py-0.5 inline-flex items-center"
                       >
-                        {printTechniqueLabel || 'Printing'}
+                        {printTechniqueLabel || t('cutDetailsPage.technique')}
                       </Badge>
                     </div>
                   </div>
                   <div className="border border-gray-100 rounded-lg p-3 bg-gray-50">
                     <span className="text-xs font-medium text-gray-500 uppercase tracking-wide block mb-2">
-                      Update Status
+                      {t('cutDetailsPage.updateStatus')}
                     </span>
                     {canEditCut ? (
                       <Select
@@ -530,7 +556,7 @@ const CutDetailsPage: React.FC = () => {
                         disabled={statusUpdating}
                       >
                         <SelectTrigger className="bg-white">
-                          <SelectValue placeholder="Choose status" />
+                          <SelectValue placeholder={t('cutDetailsPage.chooseStatus')} />
                         </SelectTrigger>
                         <SelectContent>
                           {statusOptions.map(option => (
@@ -545,14 +571,14 @@ const CutDetailsPage: React.FC = () => {
                         variant="outline"
                         className="text-gray-700 text-xs font-semibold px-2.5 py-0.5 inline-flex items-center"
                       >
-                        {currentStatusMeta?.label || 'Pending'}
+                        {currentStatusMeta?.label || t('cutDetailsPage.statusPending')}
                       </Badge>
                     )}
                   </div>
                   {printPlacementEntries.length > 0 && (
                     <div className="space-y-2 pt-2 border-t border-gray-100">
                       <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-                        Placements
+                        {t('cutDetailsPage.placements')}
                       </span>
                       <div className="space-y-1">
                         {printPlacementEntries.map(entry => (
@@ -576,12 +602,12 @@ const CutDetailsPage: React.FC = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Printer className="w-5 h-5" />
-                    Printing / Embroidery
+                    {t('cutDetailsPage.printingEmbroideryProgress')}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
                   <p className="text-sm text-gray-500">
-                    This job order does not have printing or embroidery requirements.
+                    {t('cutDetailsPage.noPrintingRequired')}
                   </p>
                 </CardContent>
               </Card>
@@ -593,7 +619,7 @@ const CutDetailsPage: React.FC = () => {
                 <CardHeader>
                   <CardTitle className="text-sm flex items-center gap-2">
                     <ArrowRight className="w-4 h-4" />
-                    Size Transitions ({(cut.transitions || []).length})
+                    {t('cutDetailsPage.sizeTransitions', { count: (cut.transitions || []).length })}
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="lg:max-h-[320px] overflow-y-auto pr-1">
@@ -623,11 +649,11 @@ const CutDetailsPage: React.FC = () => {
                 <CardHeader>
                   <CardTitle className="text-sm flex items-center gap-2">
                     <ArrowRight className="w-4 h-4" />
-                    Size Transitions (0)
+                    {t('cutDetailsPage.sizeTransitions', { count: 0 })}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-gray-400 text-sm text-center py-2">No size transitions</p>
+                  <p className="text-gray-400 text-sm text-center py-2">{t('cutDetailsPage.noSizeTransitions')}</p>
                 </CardContent>
               </Card>
             )}

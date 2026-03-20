@@ -115,6 +115,9 @@ def create_indexes():
         "CREATE INDEX IF NOT EXISTS idx_reporting_job_order_items_summary_status ON reporting.job_order_items_summary (production_status);",
         "CREATE INDEX IF NOT EXISTS idx_reporting_job_order_items_summary_issues ON reporting.job_order_items_summary (has_issues);",
         "CREATE INDEX IF NOT EXISTS idx_reporting_job_orders_summary_completion ON reporting.job_orders_summary (completion_percentage);",
+        "CREATE INDEX IF NOT EXISTS idx_reporting_worker_daily_stage_production_work_date ON reporting.worker_daily_stage_production (work_date);",
+        "CREATE INDEX IF NOT EXISTS idx_reporting_worker_daily_stage_production_worker_work_date ON reporting.worker_daily_stage_production (worker_id, work_date);",
+        "CREATE INDEX IF NOT EXISTS idx_reporting_worker_daily_stage_production_stage_work_date ON reporting.worker_daily_stage_production (stage_id, work_date);",
     ]
     
     with engine.connect() as conn:
@@ -136,6 +139,17 @@ def create_triggers_and_functions():
         "DROP FUNCTION IF EXISTS ops.handle_phase_transition();",
         "DROP FUNCTION IF EXISTS ops.handle_phase_transitions();",
         "DROP FUNCTION IF EXISTS ops.track_item_batch_completion_changes() CASCADE;",
+        """
+        -- New column for Advanced Statistics (WorkersSubTab) to display
+        -- working hours coming from ops.worker_daily_stage_assignments.
+        ALTER TABLE IF EXISTS reporting.worker_daily_stage_production
+        ADD COLUMN IF NOT EXISTS working_hours DECIMAL(6,2) NOT NULL DEFAULT 0;
+
+        -- New column for Advanced Statistics overtime hours coming from
+        -- ops.worker_overtime_history.
+        ALTER TABLE IF EXISTS reporting.worker_daily_stage_production
+        ADD COLUMN IF NOT EXISTS overtime_hours DECIMAL(6,2) NOT NULL DEFAULT 0;
+        """,
         # Phase transition function
         """
         CREATE OR REPLACE FUNCTION ops.handle_phase_transitions()
@@ -270,6 +284,58 @@ def create_triggers_and_functions():
             AFTER UPDATE ON ops.batches
             FOR EACH ROW
             EXECUTE FUNCTION ops.track_item_batch_completion_changes();
+        """,
+        # Rejection-resolution increment: updates batch_phase_history when a rejection-resolution increment is recorded
+        """
+        CREATE OR REPLACE FUNCTION ops.apply_rejection_resolution_increment(
+            p_batch_id INTEGER,
+            p_incremented_from_phase_id INTEGER,
+            p_quantity INTEGER,
+            p_status_at_increment VARCHAR(50)
+        )
+        RETURNS void AS $$
+        DECLARE
+            v_from_phase_type VARCHAR(50);
+            v_from_phase_rank INTEGER;
+            v_status_affects_in BOOLEAN := FALSE;
+            v_status_affects_out BOOLEAN := FALSE;
+        BEGIN
+            SELECT type,
+                   CASE type
+                       WHEN 'cutting' THEN 1
+                       WHEN 'sewing' THEN 2
+                       WHEN 'qc' THEN 3
+                       WHEN 'packaging' THEN 4
+                       ELSE 5
+                   END INTO v_from_phase_type, v_from_phase_rank
+            FROM core.production_phases
+            WHERE phase_id = p_incremented_from_phase_id;
+            IF v_from_phase_type IS NULL THEN
+                RETURN;
+            END IF;
+            -- Pending increments should behave like rejections:
+            -- they affect previous phases but not the current phase \"in\" quantity.
+            IF p_status_at_increment = 'Pending' THEN
+                v_status_affects_out := TRUE;
+            ELSIF p_status_at_increment = 'In Progress' THEN
+                v_status_affects_out := TRUE;
+            ELSIF p_status_at_increment = 'Completed' THEN
+                v_status_affects_in := TRUE;
+                v_status_affects_out := TRUE;
+            END IF;
+            UPDATE ops.batch_phase_history
+            SET
+                inspection_qty = CASE WHEN 1 <= v_from_phase_rank AND v_status_affects_in THEN COALESCE(inspection_qty, 0) + p_quantity ELSE inspection_qty END,
+                sewing_in_qty = CASE WHEN 2 <= v_from_phase_rank AND v_status_affects_in THEN COALESCE(sewing_in_qty, 0) + p_quantity ELSE sewing_in_qty END,
+                sewing_out_qty = CASE WHEN 2 <= v_from_phase_rank AND v_status_affects_out THEN COALESCE(sewing_out_qty, 0) + p_quantity ELSE sewing_out_qty END,
+                qc_in_qty = CASE WHEN 3 <= v_from_phase_rank AND v_status_affects_in THEN COALESCE(qc_in_qty, 0) + p_quantity ELSE qc_in_qty END,
+                qc_out_qty = CASE WHEN 3 <= v_from_phase_rank AND v_status_affects_out THEN COALESCE(qc_out_qty, 0) + p_quantity ELSE qc_out_qty END,
+                packaging_in_qty = CASE WHEN 4 <= v_from_phase_rank AND v_status_affects_in THEN COALESCE(packaging_in_qty, 0) + p_quantity ELSE packaging_in_qty END,
+                packaging_out_qty = CASE WHEN 4 <= v_from_phase_rank AND v_status_affects_out THEN COALESCE(packaging_out_qty, 0) + p_quantity ELSE packaging_out_qty END,
+                last_updated = NOW()
+            WHERE batch_id = p_batch_id;
+        END;
+        $$ LANGUAGE plpgsql;
         """,
     ]
     
@@ -454,8 +520,8 @@ def create_batch_phase_history_functions():
                 -- If only quantity changed, preserve all phase-specific values
                 -- IMPORTANT: Check OLD phase/status for out quantities since phase transitions happen BEFORE this trigger
                 inspection_qty = CASE 
-                    -- Compensation batches: Keep cutting (rank 1) at 0 if compensation phase rank >= 1
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 1 THEN 0
+                    -- Compensation batches: preserve existing (may be negative after rejections)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 1 THEN COALESCE(batch_phase_history.inspection_qty, 0)
                     -- If currently in cutting with Completed status
                     -- Use CURRENT quantity (v_current_qty) because quantity may have been incremented while in progress
                     WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'cutting' AND NEW.status = 'Completed'
@@ -472,8 +538,8 @@ def create_batch_phase_history_functions():
                     ELSE COALESCE(batch_phase_history.inspection_qty, 0)
                 END,
                 sewing_in_qty = CASE 
-                    -- Compensation batches: Keep sewing (rank 2) at 0 if compensation phase rank >= 2
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 2 THEN 0
+                    -- Compensation batches: preserve existing (may be negative after rejections)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 2 THEN COALESCE(batch_phase_history.sewing_in_qty, 0)
                     -- Backward movement: Clear if moved to cutting or earlier (rank < 2)
                     WHEN v_backward_movement AND v_phase_rank < 2 THEN 0
                     -- If currently in sewing with In Progress status (only for non-compensation batches, only on phase change, not status change)
@@ -487,8 +553,8 @@ def create_batch_phase_history_functions():
                     ELSE COALESCE(batch_phase_history.sewing_in_qty, 0)
                 END,
                 sewing_out_qty = CASE 
-                    -- Compensation batches: Keep sewing_out (rank 2) at 0 if compensation phase rank > 2 (using > because out quantities use <)
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 2 THEN 0
+                    -- Compensation batches: preserve existing (may be negative after rejections)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 2 THEN COALESCE(batch_phase_history.sewing_out_qty, 0)
                     -- If currently in sewing with Completed status (before auto-transition, but this is rare)
                     -- Use CURRENT quantity (v_current_qty) because quantity may have been incremented while in progress
                     WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'sewing' AND NEW.status = 'Completed'
@@ -511,8 +577,8 @@ def create_batch_phase_history_functions():
                     ELSE COALESCE(batch_phase_history.sewing_out_qty, 0)
                 END,
                 qc_in_qty = CASE 
-                    -- Compensation batches: Keep qc (rank 3) at 0 if compensation phase rank >= 3
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 3 THEN 0
+                    -- Compensation batches: preserve existing (may be negative after rejections)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 3 THEN COALESCE(batch_phase_history.qc_in_qty, 0)
                     -- Backward movement: Clear if moved to sewing or earlier (rank <= 2)
                     WHEN v_backward_movement AND v_phase_rank <= 2 THEN 0
                     -- If currently in qc with In Progress status (only for non-compensation batches, only on phase change, not status change)
@@ -526,8 +592,8 @@ def create_batch_phase_history_functions():
                     ELSE COALESCE(batch_phase_history.qc_in_qty, 0)
                 END,
                 qc_out_qty = CASE 
-                    -- Compensation batches: Keep qc_out (rank 3) at 0 if compensation phase rank > 3 (using > because out quantities use <)
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 3 THEN 0
+                    -- Compensation batches: preserve existing (may be negative after rejections)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 3 THEN COALESCE(batch_phase_history.qc_out_qty, 0)
                     -- If currently in qc with Completed status (before auto-transition, but this is rare)
                     -- Use CURRENT quantity (v_current_qty) because quantity may have been incremented while in progress
                     WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'qc' AND NEW.status = 'Completed'
@@ -550,8 +616,8 @@ def create_batch_phase_history_functions():
                     ELSE COALESCE(batch_phase_history.qc_out_qty, 0)
                 END,
                 packaging_in_qty = CASE 
-                    -- Compensation batches: Keep packaging (rank 4) at 0 if compensation phase rank >= 4
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 4 THEN 0
+                    -- Compensation batches: preserve existing (may be negative after rejections)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 4 THEN COALESCE(batch_phase_history.packaging_in_qty, 0)
                     -- Backward movement: Clear if moved to qc or earlier (rank <= 3)
                     WHEN v_backward_movement AND v_phase_rank <= 3 THEN 0
                     -- If currently in packaging with In Progress status (only for non-compensation batches, only on phase change, not status change)
@@ -560,8 +626,8 @@ def create_batch_phase_history_functions():
                     ELSE COALESCE(batch_phase_history.packaging_in_qty, 0)
                 END,
                 packaging_out_qty = CASE 
-                    -- Compensation batches: Keep packaging_out (rank 4) at 0 if compensation phase rank > 4 (using > because out quantities use <, but rank 4 is max, so this will never match - but keeping for consistency)
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 4 THEN 0
+                    -- Compensation batches: preserve existing (may be negative after rejections)
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 4 THEN COALESCE(batch_phase_history.packaging_out_qty, 0)
                     -- If currently in packaging with Completed status
                     -- Use CURRENT quantity (v_current_qty) because quantity may have been incremented while in progress
                     WHEN (v_phase_changed OR v_status_changed) AND v_phase_type = 'packaging' AND NEW.status = 'Completed'
@@ -693,12 +759,12 @@ def create_batch_phase_history_functions():
             )
             ON CONFLICT (batch_id) DO UPDATE SET
                 inspection_qty = CASE 
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 1 THEN 0
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 1 THEN COALESCE(batch_phase_history.inspection_qty, 0)
                     WHEN v_phase_type = 'cutting' AND v_batch.status = 'Completed' THEN v_current_qty
                     ELSE batch_phase_history.inspection_qty
                 END,
                 sewing_in_qty = CASE 
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 2 THEN 0
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 2 THEN COALESCE(batch_phase_history.sewing_in_qty, 0)
                     WHEN v_phase_type = 'cutting' THEN 0
                     -- Only update sewing_in_qty when entering sewing phase, not when already past it
                     -- Preserve existing values once set - never update with current quantity for batches already past sewing
@@ -708,7 +774,7 @@ def create_batch_phase_history_functions():
                     ELSE batch_phase_history.sewing_in_qty
                 END,
                 sewing_out_qty = CASE 
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 2 THEN 0
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 2 THEN COALESCE(batch_phase_history.sewing_out_qty, 0)
                     WHEN v_phase_type = 'sewing' THEN 0
                     WHEN v_phase_type = 'cutting' THEN 0
                     WHEN NOT v_is_compensation AND v_phase_type IN ('qc', 'packaging') AND v_batch.status = 'Completed' THEN 
@@ -719,7 +785,7 @@ def create_batch_phase_history_functions():
                     ELSE batch_phase_history.sewing_out_qty
                 END,
                 qc_in_qty = CASE 
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 3 THEN 0
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 3 THEN COALESCE(batch_phase_history.qc_in_qty, 0)
                     WHEN v_phase_type IN ('cutting', 'sewing') THEN 0
                     -- Only update qc_in_qty when entering qc phase, not when already past it
                     -- Preserve existing values once set - never update with current quantity for batches already past qc
@@ -729,7 +795,7 @@ def create_batch_phase_history_functions():
                     ELSE batch_phase_history.qc_in_qty
                 END,
                 qc_out_qty = CASE 
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 3 THEN 0
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 3 THEN COALESCE(batch_phase_history.qc_out_qty, 0)
                     WHEN v_phase_type = 'qc' THEN 0
                     WHEN v_phase_type IN ('cutting', 'sewing') THEN 0
                     WHEN NOT v_is_compensation AND v_phase_type = 'packaging' AND v_batch.status = 'Completed' THEN 
@@ -740,13 +806,13 @@ def create_batch_phase_history_functions():
                     ELSE batch_phase_history.qc_out_qty
                 END,
                 packaging_in_qty = CASE 
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 4 THEN 0
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) >= 4 THEN COALESCE(batch_phase_history.packaging_in_qty, 0)
                     WHEN v_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
                     WHEN NOT v_is_compensation AND v_phase_type = 'packaging' AND v_batch.status = 'In Progress' THEN v_current_qty
                     ELSE batch_phase_history.packaging_in_qty
                 END,
                 packaging_out_qty = CASE 
-                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 4 THEN 0
+                    WHEN v_is_compensation AND COALESCE(v_compensation_phase_rank, 0) > 4 THEN COALESCE(batch_phase_history.packaging_out_qty, 0)
                     WHEN v_phase_type = 'packaging' THEN 0
                     WHEN v_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
                     ELSE batch_phase_history.packaging_out_qty
@@ -830,7 +896,7 @@ def create_batch_phase_history_functions():
                                  JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
                                  WHERE bc2.batch_id = EXCLUDED.batch_id 
                                  AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END >= 1)
-                    THEN 0
+                    THEN COALESCE(batch_phase_history.inspection_qty, 0)
                     WHEN EXCLUDED.current_phase_type = 'cutting' AND EXCLUDED.status_at_phase = 'Completed' THEN EXCLUDED.inspection_qty
                     ELSE batch_phase_history.inspection_qty
                 END,
@@ -839,7 +905,7 @@ def create_batch_phase_history_functions():
                                  JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
                                  WHERE bc2.batch_id = EXCLUDED.batch_id 
                                  AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END >= 2)
-                    THEN 0
+                    THEN COALESCE(batch_phase_history.sewing_in_qty, 0)
                     WHEN EXCLUDED.current_phase_type = 'cutting' THEN 0
                     -- Only set sewing_in_qty when entering sewing, preserve existing values once set
                     WHEN EXCLUDED.current_phase_type = 'sewing' AND EXCLUDED.status_at_phase = 'In Progress' 
@@ -852,7 +918,7 @@ def create_batch_phase_history_functions():
                                  JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
                                  WHERE bc2.batch_id = EXCLUDED.batch_id 
                                  AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END > 2)
-                    THEN 0
+                    THEN COALESCE(batch_phase_history.sewing_out_qty, 0)
                     WHEN EXCLUDED.current_phase_type = 'sewing' THEN 0
                     WHEN EXCLUDED.current_phase_type = 'cutting' THEN 0
                     WHEN EXCLUDED.current_phase_type IN ('qc', 'packaging') AND EXCLUDED.status_at_phase = 'Completed' THEN EXCLUDED.sewing_out_qty
@@ -863,7 +929,7 @@ def create_batch_phase_history_functions():
                                  JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
                                  WHERE bc2.batch_id = EXCLUDED.batch_id 
                                  AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END >= 3)
-                    THEN 0
+                    THEN COALESCE(batch_phase_history.qc_in_qty, 0)
                     WHEN EXCLUDED.current_phase_type IN ('cutting', 'sewing') THEN 0
                     -- Only set qc_in_qty when entering qc, preserve existing values once set
                     WHEN EXCLUDED.current_phase_type = 'qc' AND EXCLUDED.status_at_phase = 'In Progress' 
@@ -876,7 +942,7 @@ def create_batch_phase_history_functions():
                                  JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
                                  WHERE bc2.batch_id = EXCLUDED.batch_id 
                                  AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END > 3)
-                    THEN 0
+                    THEN COALESCE(batch_phase_history.qc_out_qty, 0)
                     WHEN EXCLUDED.current_phase_type = 'qc' THEN 0
                     WHEN EXCLUDED.current_phase_type IN ('cutting', 'sewing') THEN 0
                     WHEN EXCLUDED.current_phase_type = 'packaging' AND EXCLUDED.status_at_phase = 'Completed' THEN EXCLUDED.qc_out_qty
@@ -887,7 +953,7 @@ def create_batch_phase_history_functions():
                                  JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
                                  WHERE bc2.batch_id = EXCLUDED.batch_id 
                                  AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END >= 4)
-                    THEN 0
+                    THEN COALESCE(batch_phase_history.packaging_in_qty, 0)
                     WHEN EXCLUDED.current_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
                     WHEN EXCLUDED.current_phase_type = 'packaging' AND EXCLUDED.status_at_phase = 'In Progress' THEN EXCLUDED.packaging_in_qty
                     ELSE batch_phase_history.packaging_in_qty
@@ -897,7 +963,7 @@ def create_batch_phase_history_functions():
                                  JOIN core.production_phases pp2 ON bc2.phase_id = pp2.phase_id
                                  WHERE bc2.batch_id = EXCLUDED.batch_id 
                                  AND CASE pp2.type WHEN 'cutting' THEN 1 WHEN 'sewing' THEN 2 WHEN 'qc' THEN 3 WHEN 'packaging' THEN 4 ELSE 5 END > 4)
-                    THEN 0
+                    THEN COALESCE(batch_phase_history.packaging_out_qty, 0)
                     WHEN EXCLUDED.current_phase_type = 'packaging' THEN 0
                     WHEN EXCLUDED.current_phase_type IN ('cutting', 'sewing', 'qc') THEN 0
                     ELSE batch_phase_history.packaging_out_qty
@@ -927,6 +993,7 @@ def create_batch_phase_history_functions():
             v_to_phase_type VARCHAR(50);
             v_from_phase_rank INTEGER;
             v_to_phase_rank INTEGER;
+            v_is_compensation BOOLEAN := FALSE;
         BEGIN
             SELECT type,
                    CASE type
@@ -958,37 +1025,40 @@ def create_batch_phase_history_functions():
                 RETURN;
             END IF;
             
+            SELECT EXISTS(SELECT 1 FROM ops.batch_compensations WHERE batch_id = p_batch_id) INTO v_is_compensation;
+            
+            -- Compensation batches: allow negative so sums across batches stay correct; non-compensation floor at 0.
             UPDATE ops.batch_phase_history
             SET
                 inspection_qty = CASE 
-                    WHEN v_to_phase_type = 'cutting' THEN GREATEST(COALESCE(inspection_qty, 0) - p_quantity, 0)
+                    WHEN v_to_phase_type = 'cutting' THEN CASE WHEN v_is_compensation THEN COALESCE(inspection_qty, 0) - p_quantity ELSE GREATEST(COALESCE(inspection_qty, 0) - p_quantity, 0) END
                     ELSE inspection_qty
                 END,
                 sewing_in_qty = CASE 
-                    WHEN v_from_phase_type = 'sewing' THEN GREATEST(COALESCE(sewing_in_qty, 0) - p_quantity, 0)
-                    WHEN v_from_phase_rank > 2 AND v_to_phase_rank < 2 THEN GREATEST(COALESCE(sewing_in_qty, 0) - p_quantity, 0)
+                    WHEN v_from_phase_type = 'sewing' THEN CASE WHEN v_is_compensation THEN COALESCE(sewing_in_qty, 0) - p_quantity ELSE GREATEST(COALESCE(sewing_in_qty, 0) - p_quantity, 0) END
+                    WHEN v_from_phase_rank > 2 AND v_to_phase_rank < 2 THEN CASE WHEN v_is_compensation THEN COALESCE(sewing_in_qty, 0) - p_quantity ELSE GREATEST(COALESCE(sewing_in_qty, 0) - p_quantity, 0) END
                     ELSE sewing_in_qty
                 END,
                 sewing_out_qty = CASE 
-                    WHEN v_to_phase_type = 'sewing' THEN GREATEST(COALESCE(sewing_out_qty, 0) - p_quantity, 0)
-                    WHEN v_from_phase_rank > 2 AND v_to_phase_rank < 2 THEN GREATEST(COALESCE(sewing_out_qty, 0) - p_quantity, 0)
+                    WHEN v_to_phase_type = 'sewing' THEN CASE WHEN v_is_compensation THEN COALESCE(sewing_out_qty, 0) - p_quantity ELSE GREATEST(COALESCE(sewing_out_qty, 0) - p_quantity, 0) END
+                    WHEN v_from_phase_rank > 2 AND v_to_phase_rank < 2 THEN CASE WHEN v_is_compensation THEN COALESCE(sewing_out_qty, 0) - p_quantity ELSE GREATEST(COALESCE(sewing_out_qty, 0) - p_quantity, 0) END
                     ELSE sewing_out_qty
                 END,
                 qc_in_qty = CASE 
-                    WHEN v_from_phase_rank > 3 AND v_to_phase_rank < 3 THEN GREATEST(COALESCE(qc_in_qty, 0) - p_quantity, 0)
+                    WHEN v_from_phase_rank > 3 AND v_to_phase_rank < 3 THEN CASE WHEN v_is_compensation THEN COALESCE(qc_in_qty, 0) - p_quantity ELSE GREATEST(COALESCE(qc_in_qty, 0) - p_quantity, 0) END
                     ELSE qc_in_qty
                 END,
                 qc_out_qty = CASE 
-                    WHEN v_to_phase_type = 'qc' THEN GREATEST(COALESCE(qc_out_qty, 0) - p_quantity, 0)
-                    WHEN v_from_phase_rank > 3 AND v_to_phase_rank < 3 THEN GREATEST(COALESCE(qc_out_qty, 0) - p_quantity, 0)
+                    WHEN v_to_phase_type = 'qc' THEN CASE WHEN v_is_compensation THEN COALESCE(qc_out_qty, 0) - p_quantity ELSE GREATEST(COALESCE(qc_out_qty, 0) - p_quantity, 0) END
+                    WHEN v_from_phase_rank > 3 AND v_to_phase_rank < 3 THEN CASE WHEN v_is_compensation THEN COALESCE(qc_out_qty, 0) - p_quantity ELSE GREATEST(COALESCE(qc_out_qty, 0) - p_quantity, 0) END
                     ELSE qc_out_qty
                 END,
                 packaging_in_qty = CASE 
-                    WHEN v_from_phase_type = 'packaging' THEN GREATEST(COALESCE(packaging_in_qty, 0) - p_quantity, 0)
+                    WHEN v_from_phase_type = 'packaging' THEN CASE WHEN v_is_compensation THEN COALESCE(packaging_in_qty, 0) - p_quantity ELSE GREATEST(COALESCE(packaging_in_qty, 0) - p_quantity, 0) END
                     ELSE packaging_in_qty
                 END,
                 packaging_out_qty = CASE 
-                    WHEN v_to_phase_type = 'packaging' THEN GREATEST(COALESCE(packaging_out_qty, 0) - p_quantity, 0)
+                    WHEN v_to_phase_type = 'packaging' THEN CASE WHEN v_is_compensation THEN COALESCE(packaging_out_qty, 0) - p_quantity ELSE GREATEST(COALESCE(packaging_out_qty, 0) - p_quantity, 0) END
                     ELSE packaging_out_qty
                 END,
                 last_updated = NOW()
@@ -1387,11 +1457,29 @@ def create_summary_refresh_functions():
         """
         CREATE OR REPLACE FUNCTION ops.queue_summary_refresh()
         RETURNS trigger AS $$
+        DECLARE
+            v_job_order_id INTEGER;
         BEGIN
-            INSERT INTO ops.summary_refresh_queue (job_order_id, queued_at)
-            VALUES (NEW.job_order_id, NOW())
-            ON CONFLICT (job_order_id) DO UPDATE SET queued_at = NOW();
-            RETURN NEW;
+            -- Determine job_order_id based on operation type
+            IF TG_OP = 'DELETE' THEN
+                v_job_order_id := OLD.job_order_id;
+            ELSE
+                v_job_order_id := NEW.job_order_id;
+            END IF;
+            
+            -- Only insert if job_order_id is not null
+            IF v_job_order_id IS NOT NULL THEN
+                INSERT INTO ops.summary_refresh_queue (job_order_id, queued_at)
+                VALUES (v_job_order_id, NOW())
+                ON CONFLICT (job_order_id) DO UPDATE SET queued_at = NOW();
+            END IF;
+            
+            -- Return appropriate record based on operation
+            IF TG_OP = 'DELETE' THEN
+                RETURN OLD;
+            ELSE
+                RETURN NEW;
+            END IF;
         END;
         $$ LANGUAGE plpgsql;
         """,
@@ -1402,7 +1490,7 @@ def create_summary_refresh_functions():
         
         """
         CREATE TRIGGER trigger_queue_summary_refresh
-            AFTER INSERT OR UPDATE ON ops.batches
+            AFTER INSERT OR UPDATE OR DELETE ON ops.batches
             FOR EACH ROW
             EXECUTE FUNCTION ops.queue_summary_refresh();
         """,
@@ -1504,6 +1592,268 @@ def create_summary_refresh_functions():
             AFTER INSERT OR UPDATE OR DELETE ON ops.cut_size_transitions
             FOR EACH ROW
             EXECUTE FUNCTION ops.refresh_summary_on_transition_change();
+        """,
+
+        # --------------------------------------------------------------------
+        # Worker daily stage production reporting refresh (expected/true)
+        # --------------------------------------------------------------------
+        """
+        CREATE TABLE IF NOT EXISTS reporting.worker_daily_stage_production_refresh_queue (
+            work_date DATE PRIMARY KEY,
+            queued_at TIMESTAMP DEFAULT NOW()
+        );
+        """,
+
+        """
+        CREATE OR REPLACE FUNCTION reporting.queue_worker_daily_stage_production_refresh_from_assignments()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            v_work_date DATE;
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                v_work_date := OLD.assignment_date;
+            ELSE
+                v_work_date := NEW.assignment_date;
+            END IF;
+
+            IF v_work_date IS NOT NULL THEN
+                INSERT INTO reporting.worker_daily_stage_production_refresh_queue (work_date, queued_at)
+                VALUES (v_work_date, NOW())
+                ON CONFLICT (work_date) DO UPDATE SET queued_at = NOW();
+            END IF;
+
+            IF TG_OP = 'DELETE' THEN
+                RETURN OLD;
+            ELSE
+                RETURN NEW;
+            END IF;
+        END;
+        $$ LANGUAGE plpgsql;
+        """,
+
+        """
+        DROP TRIGGER IF EXISTS trigger_queue_worker_daily_stage_production_refresh_assignments ON ops.worker_daily_stage_assignments;
+        """,
+
+        """
+        CREATE TRIGGER trigger_queue_worker_daily_stage_production_refresh_assignments
+            AFTER INSERT OR UPDATE OR DELETE ON ops.worker_daily_stage_assignments
+            FOR EACH ROW
+            EXECUTE FUNCTION reporting.queue_worker_daily_stage_production_refresh_from_assignments();
+        """,
+
+        """
+        CREATE OR REPLACE FUNCTION reporting.queue_worker_daily_stage_production_refresh_from_production_history()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            v_work_date DATE;
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                v_work_date := DATE(OLD.timestamp);
+            ELSE
+                v_work_date := DATE(NEW.timestamp);
+            END IF;
+
+            IF v_work_date IS NOT NULL THEN
+                INSERT INTO reporting.worker_daily_stage_production_refresh_queue (work_date, queued_at)
+                VALUES (v_work_date, NOW())
+                ON CONFLICT (work_date) DO UPDATE SET queued_at = NOW();
+            END IF;
+
+            IF TG_OP = 'DELETE' THEN
+                RETURN OLD;
+            ELSE
+                RETURN NEW;
+            END IF;
+        END;
+        $$ LANGUAGE plpgsql;
+        """,
+
+        """
+        DROP TRIGGER IF EXISTS trigger_queue_worker_daily_stage_production_refresh_production_history ON ops.production_history;
+        """,
+
+        """
+        CREATE TRIGGER trigger_queue_worker_daily_stage_production_refresh_production_history
+            AFTER INSERT OR UPDATE OR DELETE ON ops.production_history
+            FOR EACH ROW
+            EXECUTE FUNCTION reporting.queue_worker_daily_stage_production_refresh_from_production_history();
+        """,
+
+        """
+        -- Ensure Advanced Statistics reporting refreshes after overtime approvals.
+        DROP TRIGGER IF EXISTS trigger_queue_worker_daily_stage_production_refresh_overtime ON ops.worker_overtime_history;
+        """,
+
+        """
+        CREATE OR REPLACE FUNCTION reporting.queue_worker_daily_stage_production_refresh_from_overtime()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            v_work_date DATE;
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                v_work_date := OLD.work_date;
+            ELSE
+                v_work_date := NEW.work_date;
+            END IF;
+
+            IF v_work_date IS NOT NULL THEN
+                INSERT INTO reporting.worker_daily_stage_production_refresh_queue (work_date, queued_at)
+                VALUES (v_work_date, NOW())
+                ON CONFLICT (work_date) DO UPDATE SET queued_at = NOW();
+            END IF;
+
+            IF TG_OP = 'DELETE' THEN
+                RETURN OLD;
+            ELSE
+                RETURN NEW;
+            END IF;
+        END;
+        $$ LANGUAGE plpgsql;
+        """,
+
+        """
+        CREATE TRIGGER trigger_queue_worker_daily_stage_production_refresh_overtime
+            AFTER INSERT OR UPDATE OR DELETE ON ops.worker_overtime_history
+            FOR EACH ROW
+            EXECUTE FUNCTION reporting.queue_worker_daily_stage_production_refresh_from_overtime();
+        """,
+
+        """
+        DROP FUNCTION IF EXISTS reporting.refresh_worker_daily_stage_production(INTEGER);
+        """,
+
+        """
+        CREATE OR REPLACE FUNCTION reporting.refresh_worker_daily_stage_production(p_interval_seconds INTEGER DEFAULT 5)
+        RETURNS INTEGER AS $$
+        DECLARE
+            v_work_dates DATE[];
+            v_work_date DATE;
+        BEGIN
+            SELECT ARRAY_AGG(DISTINCT work_date)
+            INTO v_work_dates
+            FROM reporting.worker_daily_stage_production_refresh_queue
+            WHERE queued_at <= NOW() - (p_interval_seconds || ' seconds')::INTERVAL;
+
+            IF v_work_dates IS NULL OR array_length(v_work_dates, 1) IS NULL THEN
+                RETURN 0;
+            END IF;
+
+            FOREACH v_work_date IN ARRAY v_work_dates LOOP
+                -- Rebuild all worker/stage rows for this specific day
+                DELETE FROM reporting.worker_daily_stage_production
+                WHERE work_date = v_work_date;
+
+                WITH active_assignments AS (
+                    SELECT
+                        w.worker_id,
+                        w.assignment_date AS work_date,
+                        w.stage_id,
+                        w.daily_assignment_id,
+                        w.created_at,
+                        COALESCE(w.working_hours, 0)::double precision AS working_hours_val,
+                        COALESCE(st.production_qty, 0)::double precision AS production_qty
+                    FROM ops.worker_daily_stage_assignments w
+                    JOIN core.sewing_line_stages st
+                      ON st.stage_id = w.stage_id
+                    WHERE w.assignment_date = v_work_date
+                ),
+                base AS (
+                    SELECT
+                        worker_id,
+                        work_date,
+                        stage_id,
+                        daily_assignment_id,
+                        created_at,
+                        production_qty,
+                        FIRST_VALUE(working_hours_val) OVER (
+                            PARTITION BY worker_id, work_date
+                            ORDER BY created_at ASC NULLS FIRST, daily_assignment_id ASC
+                        ) AS first_working_hours,
+                        MIN(created_at) OVER (PARTITION BY worker_id, work_date) AS first_created_at,
+                        COUNT(*) OVER (PARTITION BY worker_id, work_date) AS assignment_count,
+                        LEAD(created_at) OVER (
+                            PARTITION BY worker_id, work_date
+                            ORDER BY created_at ASC NULLS FIRST, daily_assignment_id ASC
+                        ) AS next_created_at
+                    FROM active_assignments
+                ),
+                expected AS (
+                    -- `ops.worker_daily_stage_assignments.working_hours` is maintained
+                    -- as "total time spent in this stage for this day" (including
+                    -- remaining time for the currently active stage).
+                    SELECT
+                        worker_id,
+                        work_date,
+                        stage_id,
+                        COALESCE(ROUND(SUM(production_qty * working_hours_val)), 0)::int
+                            AS expected_output,
+                        -- Total elapsed hours for this worker/stage/day.
+                        COALESCE(ROUND(SUM(working_hours_val)::numeric, 2), 0)::double precision
+                            AS working_hours
+                    FROM active_assignments
+                    GROUP BY worker_id, work_date, stage_id
+                ),
+                true_output AS (
+                    SELECT
+                        w.worker_id,
+                        w.assignment_date AS work_date,
+                        w.stage_id,
+                        COALESCE(SUM(ph.quantity_produced), 0)::int AS true_output
+                    FROM ops.worker_daily_stage_assignments w
+                    JOIN ops.production_history ph
+                      ON ph.daily_assignment_id = w.daily_assignment_id
+                    WHERE w.assignment_date = v_work_date
+                      AND DATE(ph.timestamp) = v_work_date
+                    GROUP BY w.worker_id, w.assignment_date, w.stage_id
+                ),
+                overtime_hours AS (
+                    -- Sum all overtime applications for this worker/stage/day.
+                    SELECT
+                        h.worker_id,
+                        h.work_date,
+                        h.stage_id,
+                        COALESCE(SUM(h.overtime_hours), 0)::double precision AS overtime_hours
+                    FROM ops.worker_overtime_history h
+                    WHERE h.work_date = v_work_date
+                    GROUP BY h.worker_id, h.work_date, h.stage_id
+                )
+                INSERT INTO reporting.worker_daily_stage_production (
+                    work_date,
+                    worker_id,
+                    stage_id,
+                    expected_output,
+                    true_output,
+                    working_hours,
+                    overtime_hours,
+                    last_calculated_at
+                )
+                SELECT
+                    e.work_date,
+                    e.worker_id,
+                    e.stage_id,
+                    e.expected_output,
+                    COALESCE(t.true_output, 0) AS true_output,
+                    COALESCE(e.working_hours, 0) AS working_hours,
+                    COALESCE(o.overtime_hours, 0) AS overtime_hours,
+                    NOW() AS last_calculated_at
+                FROM expected e
+                LEFT JOIN true_output t
+                  ON t.work_date = e.work_date
+                 AND t.worker_id = e.worker_id
+                 AND t.stage_id = e.stage_id
+                LEFT JOIN overtime_hours o
+                  ON o.work_date = e.work_date
+                 AND o.worker_id = e.worker_id
+                 AND o.stage_id = e.stage_id;
+            END LOOP;
+
+            DELETE FROM reporting.worker_daily_stage_production_refresh_queue
+            WHERE work_date = ANY(v_work_dates);
+
+            RETURN COALESCE(array_length(v_work_dates, 1), 0);
+        END;
+        $$ LANGUAGE plpgsql;
         """
     ]
     

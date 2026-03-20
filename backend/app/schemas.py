@@ -183,6 +183,226 @@ class ProductionPhase(ProductionPhaseBase):
     class Config:
         from_attributes = True
 
+
+# Sewing line schematic (for production management)
+class SewingLineSchematicBase(BaseModel):
+    name: str
+    active: bool = True
+    working_hours: Optional[float] = None
+    hourly_production: Optional[int] = None
+
+
+class SewingLineStageCreate(BaseModel):
+    stage_name: str
+    stage_order: int
+    production_qty: Optional[int] = None
+    active: bool = True
+
+
+class SewingLineSchematicCreate(SewingLineSchematicBase):
+    production_phase_id: int
+    stages: Optional[List[SewingLineStageCreate]] = None
+
+
+class SewingLineSchematicUpdate(BaseModel):
+    """Update schematic; stages if provided replace all existing stages."""
+    production_phase_id: Optional[int] = None
+    name: Optional[str] = None
+    active: Optional[bool] = None
+    working_hours: Optional[float] = None
+    hourly_production: Optional[int] = None
+    stages: Optional[List[SewingLineStageCreate]] = None
+
+
+class SewingLineSchematic(SewingLineSchematicBase):
+    schematic_id: int
+    production_phase_id: int
+    phase_name: Optional[str] = None  # joined from production_phases
+
+    class Config:
+        from_attributes = True
+
+
+class SewingLineStageResponse(BaseModel):
+    stage_id: int
+    schematic_id: int
+    stage_name: str
+    stage_order: int
+    production_qty: Optional[int] = None
+    active: bool = True
+
+    class Config:
+        from_attributes = True
+
+
+class SewingLineSchematicDetail(SewingLineSchematic):
+    stages: List[SewingLineStageResponse] = []
+
+
+# Workers (production management)
+class WorkerBase(BaseModel):
+    worker_name: str
+    active: bool = True
+    worker_group_id: Optional[int] = None
+
+
+class WorkerCreate(WorkerBase):
+    worker_id: Optional[int] = None  # Optional manual PK; checked for conflict on create
+
+
+class WorkerUpdate(BaseModel):
+    worker_name: Optional[str] = None
+    active: Optional[bool] = None
+    worker_group_id: Optional[int] = None
+
+
+class Worker(WorkerBase):
+    worker_id: int
+
+    class Config:
+        from_attributes = True
+
+
+class WorkerGroupBase(BaseModel):
+    group_name: str
+    working_hours: Optional[float] = None
+
+
+class WorkerGroupCreate(WorkerGroupBase):
+    pass
+
+
+class WorkerGroupUpdate(BaseModel):
+    group_name: Optional[str] = None
+    working_hours: Optional[float] = None
+
+
+class WorkerGroup(WorkerGroupBase):
+    group_id: int
+
+    class Config:
+        from_attributes = True
+
+
+# Production tracking (daily assignments + record production)
+class DailyAssignmentResponse(BaseModel):
+    daily_assignment_id: int
+    assignment_date: date
+    worker_id: int
+    worker_name: str
+    stage_id: int
+    stage_name: str
+    schematic_name: str
+    working_hours: Optional[float] = None
+    active: bool = True
+
+    class Config:
+        from_attributes = True
+
+
+class DailyAssignmentCreate(BaseModel):
+    assignment_date: date
+    worker_id: int
+    stage_id: int
+    active: bool = True
+
+
+# ============================================================================
+# Overtime (OPS)
+# ============================================================================
+class WorkerOvertimeRequestCreate(BaseModel):
+    phase_id: int
+    schematic_id: int
+    work_date: date
+    overtime_hours: float
+    worker_ids: List[int]
+    notes: Optional[str] = None
+
+
+class WorkerOvertimeRequestResponse(BaseModel):
+    request_id: int
+    status: str
+
+
+class WorkerOvertimePendingWorker(BaseModel):
+    worker_id: int
+    worker_name: str
+
+
+class WorkerOvertimePendingRequest(BaseModel):
+    request_id: int
+    phase_id: int
+    phase_name: str
+    schematic_id: int
+    schematic_name: str
+    work_date: date
+    overtime_hours: float
+    workers: List[WorkerOvertimePendingWorker]
+
+
+class WorkerOvertimeAdminDecision(BaseModel):
+    admin_comment: Optional[str] = None
+
+
+class RecordProductionRequest(BaseModel):
+    daily_assignment_id: int
+    barcode: str
+    quantity: int = 1
+    tracking_date: Optional[date] = None  # If set, assignment must match this date (e.g. client "today")
+
+
+class RecordProductionResponse(BaseModel):
+    production_id: int
+    batch_id: int
+    barcode: str
+    quantity_produced: int
+
+
+class MaxProductionQuantityResponse(BaseModel):
+    """Max quantity that can be recorded for this batch at this stage type."""
+    max_allowed: Optional[int] = None  # None = no limit (batch has no quantity set)
+    total_already: int = 0
+    batch_quantity: Optional[int] = None
+
+
+class PhaseDailyProductionResponse(BaseModel):
+    """Total quantity produced in a phase for a specific date."""
+    phase_id: int
+    date: date
+    total_quantity: int
+    first_timestamp: Optional[datetime] = None
+    last_timestamp: Optional[datetime] = None
+
+
+class PhaseExpectedWorkRangeResponse(BaseModel):
+    """Expected work and expected hourly work in a phase over a date range."""
+    phase_id: int
+    date_from: date
+    date_to: date
+    expected_quantity: int
+    working_days_count: int
+    expected_hourly_work: float
+    working_hours_per_day: float
+    total_possible_working_hours: float
+
+
+class StageOption(BaseModel):
+    stage_id: int
+    stage_name: str
+    schematic_id: int
+    schematic_name: str
+    stage_order: int
+
+
+class BatchProductionDailyAssignmentOption(BaseModel):
+    """Daily assignment option for responsible-phase dropdown when phase type is sewing."""
+    daily_assignment_id: int
+    worker_name: str
+    stage_name: str
+    quantity_produced: int
+    assignment_date: Optional[date] = None
+
+
 # Job Order Print Configuration (JSONB)
 class JobOrderPrintConfig(BaseModel):
     type: str
@@ -453,6 +673,8 @@ class BatchUpdate(BaseModel):
     quantity_decrement_type: Optional[QuantityDecrementType] = None
     quantity_decrement_reason: Optional[str] = None
     quantity_decrement_phase_id: Optional[int] = None
+    quantity_decrement_stage_id: Optional[int] = None  # Deprecated: use quantity_decrement_daily_assignment_id
+    quantity_decrement_daily_assignment_id: Optional[int] = None
     quantity_increment_reason: Optional[str] = None
 
 class BatchResponse(BatchBase):
@@ -493,6 +715,7 @@ class SingleRejectionBase(BaseModel):
     batch_id: int
     rejected_from_phase_id: int
     return_to_phase_id: Optional[int] = None
+    responsible_daily_assignment_id: Optional[int] = None
     quantity: int = Field(default=1, gt=0)
     rejection_reason: Optional[str] = None
 
@@ -530,6 +753,7 @@ class SingleRejection(SingleRejectionBase):
                 'rejected_from_phase_id': data.rejected_from_phase_id,
                 'rejected_from_phase_type': data.rejected_from_phase_type,
                 'return_to_phase_id': data.return_to_phase_id,
+                'responsible_daily_assignment_id': getattr(data, 'responsible_daily_assignment_id', None),
                 'quantity': data.quantity,
                 'rejection_reason': data.rejection_reason,
                 'rejected_by_user_id': data.rejected_by_user_id,
@@ -550,22 +774,31 @@ class SingleRejection(SingleRejectionBase):
 
 class SingleIncrementBase(BaseModel):
     batch_id: int
-    incremented_in_phase_id: int
+    incremented_from_phase_id: Optional[int] = None
+    incremented_to_phase_id: Optional[int] = None
+    responsible_daily_assignment_id: Optional[int] = None
     quantity: int = Field(default=1, gt=0)
-    increment_reason: Optional[str] = None
+    increment_type: str = Field(default="rejection_resolution", pattern="^rejection_resolution$")
+
+    @model_validator(mode="after")
+    def validate_rejection_resolution_phase(self):
+        if self.increment_type == 'rejection_resolution' and not self.incremented_from_phase_id:
+            raise ValueError("incremented_from_phase_id is required when increment_type is 'rejection_resolution'")
+        return self
 
 class SingleIncrementCreate(SingleIncrementBase):
     pass
 
 class SingleIncrementUpdate(BaseModel):
-    increment_reason: Optional[str] = None
+    pass
 
 class SingleIncrement(SingleIncrementBase):
     increment_id: int
     job_order_id: int
     color_id: int
     size_id: int
-    incremented_in_phase_type: str
+    incremented_from_phase_type: Optional[str] = None
+    incremented_to_phase_type: Optional[str] = None
     incremented_by_user_id: Optional[int] = None
     incremented_at: datetime
     status_at_increment: Optional[str] = None
@@ -579,10 +812,13 @@ class SingleIncrement(SingleIncrementBase):
             data_dict = {
                 'increment_id': data.increment_id,
                 'batch_id': data.batch_id,
-                'incremented_in_phase_id': data.incremented_in_phase_id,
-                'incremented_in_phase_type': data.incremented_in_phase_type,
+                'incremented_from_phase_id': data.incremented_from_phase_id,
+                'incremented_to_phase_id': data.incremented_to_phase_id,
+                'incremented_from_phase_type': data.incremented_from_phase_type,
+                'incremented_to_phase_type': data.incremented_to_phase_type,
+                'responsible_daily_assignment_id': getattr(data, 'responsible_daily_assignment_id', None),
                 'quantity': data.quantity,
-                'increment_reason': data.increment_reason,
+                'increment_type': getattr(data, 'increment_type', 'rejection_resolution'),
                 'incremented_by_user_id': data.incremented_by_user_id,
                 'incremented_at': data.incremented_at,
                 'status_at_increment': data.status_at_increment,
@@ -1055,6 +1291,103 @@ class AdvancedStatisticsResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
+class SchematicWorkRangeStat(BaseModel):
+    """Per-schematic expected and true work over a date range."""
+    schematic_id: int
+    schematic_name: str
+    expected_quantity: int
+    expected_hourly_work: float
+    true_quantity: int
+    true_hourly_work: float
+    efficiency_pct: Optional[float] = None
+
+
+class PhaseSchematicWorkRangeResponse(BaseModel):
+    """Per-phase wrapper for schematic work range statistics."""
+    phase_id: int
+    date_from: date
+    date_to: date
+    schematics: List[SchematicWorkRangeStat]
+
+
+class SchematicWorkerDayRecord(BaseModel):
+    """Per-worker, per-stage, per-day production record within a schematic."""
+    worker_id: int
+    worker_name: str
+    stage_id: int
+    stage_name: str
+    stage_order: int
+    work_date: date
+    expected_output: int
+    true_output: int
+    efficiency_pct: Optional[float] = None
+
+
+class SchematicWorkerAggregate(BaseModel):
+    """Aggregate expected/true output and efficiency per worker."""
+    worker_id: int
+    worker_name: str
+    total_expected_output: int
+    total_true_output: int
+    efficiency_pct: Optional[float] = None
+
+
+class SchematicWorkerBreakdownResponse(BaseModel):
+    """Worker-level breakdown for a schematic over a date range."""
+    schematic_id: int
+    date_from: date
+    date_to: date
+    records: List[SchematicWorkerDayRecord]
+    aggregates: List[SchematicWorkerAggregate]
+
+
+class WorkerProductionRecord(BaseModel):
+    """Per-worker, per-phase, per-schematic, per-day production record (all-workers view)."""
+    worker_id: int
+    worker_name: str
+    phase_id: int
+    phase_name: str
+    schematic_id: int
+    schematic_name: str
+    work_date: date
+    expected_output: int
+    true_output: int
+    working_hours: float
+    overtime_hours: float
+    efficiency_pct: Optional[float] = None
+
+
+class WorkerProductionAggregate(BaseModel):
+    """Aggregate expected/true output and efficiency per worker across all phases/schematics."""
+    worker_id: int
+    worker_name: str
+    total_expected_output: int
+    total_true_output: int
+    total_working_hours: float
+    total_overtime_hours: float
+    efficiency_pct: Optional[float] = None
+
+
+class AllWorkersProductionBreakdownResponse(BaseModel):
+    """All-workers production breakdown over a date range (phase/schematic agnostic)."""
+    date_from: date
+    date_to: date
+    records: List[WorkerProductionRecord]
+    aggregates: List[WorkerProductionAggregate]
+
+
+class SchematicDailyProductionRecord(BaseModel):
+    """Daily expected/true output for a schematic (final stage(s) only)."""
+    phase_id: int
+    phase_name: str
+    schematic_id: int
+    schematic_name: str
+    work_date: date
+    expected_output: int
+    true_output: int
+
+
 # Response models for item-level endpoints
 class JobOrderItemSummaryListResponse(BaseModel):
     items: List[JobOrderItemSummary]
@@ -1193,6 +1526,7 @@ class CutRoll(BaseModel):
     weight: float
     layer_weight: float
     num_of_layers: int
+    roll_width: Optional[float] = None
     created_at: Optional[str] = None
 
     class Config:
@@ -1223,6 +1557,7 @@ class CutDetailsResponse(BaseModel):
     color_id: int
     color_name: str
     waste_fabric_weight: Optional[float] = None
+    marker_length: Optional[float] = None
     created_at: Optional[str] = None
     cut_weight: float
     num_of_rolls_used: int
@@ -1255,6 +1590,7 @@ class CutRollCreate(BaseModel):
     weight: float
     layer_weight: float
     num_of_layers: int
+    roll_width: Optional[float] = None
 
 class CutSizeTransitionCreate(BaseModel):
     from_item_id: int
@@ -1267,6 +1603,7 @@ class CutCreate(BaseModel):
     color_id: int
     job_order_items_ratios: Dict[str, float]  # {"item_id": ratio}
     waste_fabric_weight: Optional[float] = None
+    marker_length: Optional[float] = None
     notes: Optional[str] = None
     rolls: Optional[List[CutRollCreate]] = []
     transitions: Optional[List[CutSizeTransitionCreate]] = []
@@ -1278,6 +1615,7 @@ class CutUpdate(BaseModel):
     color_id: Optional[int] = None
     job_order_items_ratios: Optional[Dict[str, float]] = None
     waste_fabric_weight: Optional[float] = None
+    marker_length: Optional[float] = None
     notes: Optional[str] = None
     rolls: Optional[List[CutRollCreate]] = None
     transitions: Optional[List[CutSizeTransitionCreate]] = None

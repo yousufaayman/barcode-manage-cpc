@@ -163,6 +163,7 @@ def get_all_cut_details(
                 "color_id": row.color_id,
                 "color_name": row.color_name,
                 "waste_fabric_weight": float(row.waste_fabric_weight) if row.waste_fabric_weight else None,
+                "marker_length": None,  # Fetched from ops.cut_details below
                 "created_at": row.created_at.isoformat() if row.created_at else None,
                 "cut_weight": float(row.cut_weight) if row.cut_weight else 0,
                 "num_of_rolls_used": row.num_of_rolls_used,
@@ -180,6 +181,22 @@ def get_all_cut_details(
             "item_id": row.item_id,
             "total_pieces": row.total_pieces
         })
+    
+    # Fetch marker_length from ops.cut_details for list (view may not have it)
+    if cut_ids:
+        placeholders = ','.join([':cut_id_' + str(i) for i in range(len(cut_ids))])
+        marker_params = {f'cut_id_{i}': cid for i, cid in enumerate(cut_ids)}
+        marker_result = db.execute(
+            text(f"""
+                SELECT cut_id, marker_length
+                FROM ops.cut_details
+                WHERE cut_id IN ({placeholders})
+            """),
+            marker_params
+        )
+        for mrow in marker_result.fetchall():
+            if mrow[0] in cuts_dict:
+                cuts_dict[mrow[0]]["marker_length"] = float(mrow[1]) if mrow[1] is not None else None
     
     cuts_list = []
     for cut_id in cut_ids:
@@ -199,11 +216,12 @@ def get_all_cut_details(
 
 def get_cut_details_by_id(db: Session, cut_id: int) -> Optional[Dict[str, Any]]:
     """Get cut details by cut_id from the cut_details_view with rolls and transitions"""
-    # First, get the ratios from the cut_details table directly
+    # First, get the ratios and marker_length from the cut_details table directly
     cut_details_result = db.execute(
         text("""
             SELECT 
-                job_order_items_ratios
+                job_order_items_ratios,
+                marker_length
             FROM ops.cut_details
             WHERE cut_id = :cut_id
         """),
@@ -216,6 +234,7 @@ def get_cut_details_by_id(db: Session, cut_id: int) -> Optional[Dict[str, Any]]:
     
     # Get the ratios JSONB - PostgreSQL JSONB is returned as dict by SQLAlchemy
     ratios = cut_details_row[0] if cut_details_row else {}
+    marker_length_val = float(cut_details_row[1]) if cut_details_row[1] is not None else None
     # If it's a string (shouldn't happen with JSONB, but just in case), parse it
     if isinstance(ratios, str):
         import json
@@ -276,6 +295,7 @@ def get_cut_details_by_id(db: Session, cut_id: int) -> Optional[Dict[str, Any]]:
                 "color_id": row.color_id,
                 "color_name": row.color_name,
                 "waste_fabric_weight": float(row.waste_fabric_weight) if row.waste_fabric_weight else None,
+                "marker_length": marker_length_val,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
                 "cut_weight": float(row.cut_weight) if row.cut_weight else 0,
                 "num_of_rolls_used": row.num_of_rolls_used,
@@ -333,6 +353,7 @@ def get_cut_details_by_id(db: Session, cut_id: int) -> Optional[Dict[str, Any]]:
                     weight,
                     layer_weight,
                     num_of_layers,
+                    roll_width,
                     created_at
                 FROM ops.cut_rolls
                 WHERE cut_id = :cut_id
@@ -350,6 +371,7 @@ def get_cut_details_by_id(db: Session, cut_id: int) -> Optional[Dict[str, Any]]:
                 "weight": float(roll_row.weight) if roll_row.weight else 0,
                 "layer_weight": float(roll_row.layer_weight) if roll_row.layer_weight else 0,
                 "num_of_layers": roll_row.num_of_layers,
+                "roll_width": float(roll_row.roll_width) if getattr(roll_row, "roll_width", None) is not None else 0,
                 "created_at": roll_row.created_at.isoformat() if roll_row.created_at else None,
             })
         
@@ -470,6 +492,7 @@ def create_cut(db: Session, cut: schemas.CutCreate, user_id: Optional[int] = Non
                 color_id,
                 job_order_items_ratios,
                 waste_fabric_weight,
+                marker_length,
                 created_by_user_id,
                 notes,
                 print_status,
@@ -480,6 +503,7 @@ def create_cut(db: Session, cut: schemas.CutCreate, user_id: Optional[int] = Non
                 :color_id,
                 (:ratios)::jsonb,
                 :waste_fabric_weight,
+                :marker_length,
                 :user_id,
                 :notes,
                 :print_status,
@@ -492,6 +516,7 @@ def create_cut(db: Session, cut: schemas.CutCreate, user_id: Optional[int] = Non
             "color_id": cut.color_id,
             "ratios": ratios_jsonb,
             "waste_fabric_weight": cut.waste_fabric_weight,
+            "marker_length": getattr(cut, "marker_length", None),
             "user_id": user_id,
             "notes": cut.notes,
             "print_status": print_status_value
@@ -510,13 +535,15 @@ def create_cut(db: Session, cut: schemas.CutCreate, user_id: Optional[int] = Non
                         roll_number,
                         weight,
                         layer_weight,
-                        num_of_layers
+                        num_of_layers,
+                        roll_width
                     ) VALUES (
                         :cut_id,
                         :roll_number,
                         :weight,
                         :layer_weight,
-                        :num_of_layers
+                        :num_of_layers,
+                        :roll_width
                     )
                 """),
                 {
@@ -524,7 +551,8 @@ def create_cut(db: Session, cut: schemas.CutCreate, user_id: Optional[int] = Non
                     "roll_number": roll.roll_number,
                     "weight": roll.weight,
                     "layer_weight": roll.layer_weight,
-                    "num_of_layers": roll.num_of_layers
+                    "num_of_layers": roll.num_of_layers,
+                    "roll_width": getattr(roll, "roll_width", None),
                 }
             )
         db.commit()
@@ -582,6 +610,7 @@ def update_cut(db: Session, cut_id: int, cut_update: schemas.CutUpdate, user_id:
                 color_id,
                 job_order_items_ratios,
                 waste_fabric_weight,
+                marker_length,
                 notes,
                 print_status
             FROM ops.cut_details
@@ -649,6 +678,7 @@ def update_cut(db: Session, cut_id: int, cut_update: schemas.CutUpdate, user_id:
 
     new_print_status = resolve_print_status(job_order_has_prints, cut_update.print_status, existing_cut.print_status)
 
+    new_marker_length = cut_update.marker_length if cut_update.marker_length is not None else existing_cut.marker_length
     db.execute(
         text("""
             UPDATE ops.cut_details
@@ -656,6 +686,7 @@ def update_cut(db: Session, cut_id: int, cut_update: schemas.CutUpdate, user_id:
                 color_id = :color_id,
                 job_order_items_ratios = (:ratios)::jsonb,
                 waste_fabric_weight = :waste_fabric_weight,
+                marker_length = :marker_length,
                 notes = :notes,
                 print_status = :print_status
             WHERE cut_id = :cut_id
@@ -665,6 +696,7 @@ def update_cut(db: Session, cut_id: int, cut_update: schemas.CutUpdate, user_id:
             "color_id": new_color_id,
             "ratios": ratios_jsonb,
             "waste_fabric_weight": cut_update.waste_fabric_weight,
+            "marker_length": new_marker_length,
             "notes": cut_update.notes,
             "print_status": new_print_status,
             "cut_id": cut_id
@@ -687,13 +719,15 @@ def update_cut(db: Session, cut_id: int, cut_update: schemas.CutUpdate, user_id:
                         roll_number,
                         weight,
                         layer_weight,
-                        num_of_layers
+                        num_of_layers,
+                        roll_width
                     ) VALUES (
                         :cut_id,
                         :roll_number,
                         :weight,
                         :layer_weight,
-                        :num_of_layers
+                        :num_of_layers,
+                        :roll_width
                     )
                 """),
                 {
@@ -701,7 +735,8 @@ def update_cut(db: Session, cut_id: int, cut_update: schemas.CutUpdate, user_id:
                     "roll_number": roll.roll_number,
                     "weight": roll.weight,
                     "layer_weight": roll.layer_weight,
-                    "num_of_layers": roll.num_of_layers
+                    "num_of_layers": roll.num_of_layers,
+                    "roll_width": getattr(roll, "roll_width", None),
                 }
             )
         db.commit()
@@ -809,6 +844,69 @@ def archive_cut_details_by_item_id(db: Session, item_id: int):
     return archived_cuts
 
 
+def delete_cut(db: Session, cut_id: int, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """Delete a cut and all its associated rolls and transitions.
+    
+    This permanently deletes the cut without archiving it.
+    Also triggers summary refresh for the associated job order.
+    """
+    from sqlalchemy import text
+    
+    # First, get the cut details to retrieve job_order_id for summary refresh
+    cut_result = db.execute(
+        text("""
+            SELECT cut_id, job_order_id
+            FROM ops.cut_details
+            WHERE cut_id = :cut_id
+        """),
+        {"cut_id": cut_id}
+    )
+    
+    cut_row = cut_result.fetchone()
+    if not cut_row:
+        return None
+    
+    job_order_id = cut_row[1]
+    
+    # Delete size transitions first (child records)
+    db.execute(
+        text("DELETE FROM ops.cut_size_transitions WHERE cut_id = :cut_id"),
+        {"cut_id": cut_id}
+    )
+    
+    # Delete rolls (child records)
+    db.execute(
+        text("DELETE FROM ops.cut_rolls WHERE cut_id = :cut_id"),
+        {"cut_id": cut_id}
+    )
+    
+    # Delete the cut detail (parent record)
+    db.execute(
+        text("DELETE FROM ops.cut_details WHERE cut_id = :cut_id"),
+        {"cut_id": cut_id}
+    )
+    
+    db.commit()
+    
+    # Trigger summary refresh for the job order
+    if job_order_id:
+        try:
+            db.execute(
+                text("""
+                    INSERT INTO ops.summary_refresh_queue (job_order_id, queued_at)
+                    VALUES (:job_order_id, NOW())
+                    ON CONFLICT (job_order_id) DO UPDATE SET queued_at = NOW()
+                """),
+                {"job_order_id": job_order_id}
+            )
+            db.commit()
+        except Exception:
+            # If summary refresh fails, don't fail the deletion
+            db.rollback()
+    
+    return {"cut_id": cut_id, "deleted": True}
+
+
 def archive_cut_detail(db: Session, cut_id: int):
     """Archive a single cut_detail and its associated rolls and transitions"""
     from sqlalchemy import text
@@ -826,6 +924,7 @@ def archive_cut_detail(db: Session, cut_id: int):
                 total_layers,
                 job_order_items_ratios,
                 waste_fabric_weight,
+                marker_length,
                 created_at,
                 created_by_user_id,
                 notes,
@@ -858,11 +957,12 @@ def archive_cut_detail(db: Session, cut_id: int):
         total_layers=cut_row[4],
         job_order_items_ratios=cut_row[5],
         waste_fabric_weight=cut_row[6],
-        created_at=cut_row[7],
+        marker_length=cut_row[7],
+        created_at=cut_row[8],
         updated_at=None,
-        created_by_user_id=cut_row[8],
-        notes=cut_row[9],
-        print_status=cut_row[10],
+        created_by_user_id=cut_row[9],
+        notes=cut_row[10],
+        print_status=cut_row[11],
         archived_at=func.now()
     )
     db.add(archived_cut)
@@ -875,7 +975,8 @@ def archive_cut_detail(db: Session, cut_id: int):
                 roll_number,
                 weight,
                 layer_weight,
-                num_of_layers
+                num_of_layers,
+                roll_width
             FROM ops.cut_rolls
             WHERE cut_id = :cut_id
         """),
@@ -890,6 +991,7 @@ def archive_cut_detail(db: Session, cut_id: int):
             weight=roll_row[3],
             layer_weight=roll_row[4],
             num_of_layers=roll_row[5],
+            roll_width=roll_row[6],
             archived_at=func.now()
         )
         db.add(archived_roll)
@@ -992,6 +1094,7 @@ def restore_cut_detail(db: Session, cut_id: int):
                 total_layers,
                 job_order_items_ratios,
                 waste_fabric_weight,
+                marker_length,
                 created_at,
                 updated_at,
                 created_by_user_id,
@@ -1025,6 +1128,7 @@ def restore_cut_detail(db: Session, cut_id: int):
                 total_layers,
                 job_order_items_ratios,
                 waste_fabric_weight,
+                marker_length,
                 created_at,
                 created_by_user_id,
                 notes,
@@ -1037,6 +1141,7 @@ def restore_cut_detail(db: Session, cut_id: int):
                 :total_layers,
                 (:job_order_items_ratios)::jsonb,
                 :waste_fabric_weight,
+                :marker_length,
                 :created_at,
                 :created_by_user_id,
                 :notes,
@@ -1051,10 +1156,11 @@ def restore_cut_detail(db: Session, cut_id: int):
             "total_layers": cut_row[4],
             "job_order_items_ratios": json.dumps(cut_row[5]) if cut_row[5] else '{}',
             "waste_fabric_weight": cut_row[6],
-            "created_at": cut_row[7],
-            "created_by_user_id": cut_row[8],
-            "notes": cut_row[9],
-            "print_status": cut_row[10]
+            "marker_length": cut_row[7],
+            "created_at": cut_row[8],
+            "created_by_user_id": cut_row[10],
+            "notes": cut_row[11],
+            "print_status": cut_row[12]
         }
     )
     
@@ -1066,7 +1172,8 @@ def restore_cut_detail(db: Session, cut_id: int):
                 roll_number,
                 weight,
                 layer_weight,
-                num_of_layers
+                num_of_layers,
+                roll_width
             FROM archive.cut_rolls
             WHERE cut_id = :cut_id
         """),
@@ -1082,14 +1189,16 @@ def restore_cut_detail(db: Session, cut_id: int):
                     roll_number,
                     weight,
                     layer_weight,
-                    num_of_layers
+                    num_of_layers,
+                    roll_width
                 ) VALUES (
                     :roll_id,
                     :cut_id,
                     :roll_number,
                     :weight,
                     :layer_weight,
-                    :num_of_layers
+                    :num_of_layers,
+                    :roll_width
                 )
             """),
             {
@@ -1098,7 +1207,8 @@ def restore_cut_detail(db: Session, cut_id: int):
                 "roll_number": roll_row[2],
                 "weight": roll_row[3],
                 "layer_weight": roll_row[4],
-                "num_of_layers": roll_row[5]
+                "num_of_layers": roll_row[5],
+                "roll_width": roll_row[6],
             }
         )
     

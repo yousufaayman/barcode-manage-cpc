@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Enum, UniqueConstraint, DECIMAL, TIMESTAMP, Text, CheckConstraint
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Date, Enum, UniqueConstraint, DECIMAL, TIMESTAMP, Text, CheckConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -143,6 +143,71 @@ class ProductionPhase(Base):
     # Relationships
     batches = relationship("Batch", back_populates="phase")
     barcode_scan_events = relationship("BarcodeScanEvent", back_populates="phase")
+    sewing_line_schematics = relationship("SewingLineSchematic", back_populates="phase")
+
+class Worker(Base):
+    """Core.workers - Workers for sewing line assignments"""
+    __tablename__ = "workers"
+    __table_args__ = {'schema': 'core'}
+
+    worker_id = Column(Integer, primary_key=True, index=True)
+    worker_name = Column(String(255), nullable=False)
+    worker_group_id = Column(
+        Integer,
+        ForeignKey("core.workers_groups.group_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    active = Column(Boolean, nullable=False, default=True, server_default='true')
+
+    # Relationships
+    daily_assignments = relationship("WorkerDailyStageAssignment", back_populates="worker")
+    worker_group = relationship("WorkersGroup", back_populates="workers")
+
+
+class WorkersGroup(Base):
+    """Core.workers_groups - Groups of workers with default working hours"""
+    __tablename__ = "workers_groups"
+    __table_args__ = {'schema': 'core'}
+
+    group_id = Column(Integer, primary_key=True, index=True)
+    group_name = Column(String(255), unique=True, nullable=False, index=True)
+    # Hours per day for this group (e.g. 8.00, 8.50)
+    working_hours = Column(DECIMAL(4, 2), nullable=True)
+
+    workers = relationship("Worker", back_populates="worker_group")
+
+class SewingLineSchematic(Base):
+    """Core.sewing_line_schematics - Line configuration per production phase (e.g. sewing 1, 2, 3)"""
+    __tablename__ = "sewing_line_schematics"
+    __table_args__ = {'schema': 'core'}
+
+    schematic_id = Column(Integer, primary_key=True, index=True)
+    production_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=False)
+    name = Column(String(255), nullable=False)
+    active = Column(Boolean, nullable=False, default=True, server_default='true')
+    working_hours = Column(DECIMAL(4, 2), nullable=True)  # e.g. 8.00, 8.50 hours per day
+    hourly_production = Column(Integer, nullable=True)  # Total hourly production (line capacity) from production management
+
+    # Relationships
+    phase = relationship("ProductionPhase", back_populates="sewing_line_schematics")
+    stages = relationship("SewingLineStage", back_populates="schematic", cascade="all, delete-orphan")
+
+class SewingLineStage(Base):
+    """Core.sewing_line_stages - Operation stages within a schematic; stage_order for sequence"""
+    __tablename__ = "sewing_line_stages"
+    __table_args__ = {'schema': 'core'}
+
+    stage_id = Column(Integer, primary_key=True, index=True)
+    schematic_id = Column(Integer, ForeignKey("core.sewing_line_schematics.schematic_id", ondelete="CASCADE"), nullable=False)
+    stage_name = Column(String(255), nullable=False)
+    stage_order = Column(Integer, nullable=False)
+    production_qty = Column(Integer, nullable=True)
+    active = Column(Boolean, nullable=False, default=True, server_default='true')
+
+    # Relationships
+    schematic = relationship("SewingLineSchematic", back_populates="stages")
+    daily_assignments = relationship("WorkerDailyStageAssignment", back_populates="stage")
 
 class JobOrder(Base):
     """Core.job_orders - Enhanced with print_config JSONB field"""
@@ -248,6 +313,7 @@ class Batch(Base):
     barcode_scan_events = relationship("BarcodeScanEvent", back_populates="batch")
     phase_quantity_ledger = relationship("PhaseQuantityLedger", back_populates="batch")
     phase_history = relationship("BatchPhaseHistory", back_populates="batch", cascade="all, delete-orphan")
+    production_history = relationship("ProductionHistory", back_populates="batch")
 
 class BarcodeScanEvent(Base):
     """Ops.barcode_scan_events"""
@@ -323,6 +389,38 @@ class BatchCompensation(Base):
     def __repr__(self):
         return f"<BatchCompensation {self.compensation_id}: Batch {self.batch_id}, Item {self.item_id}, Phase {self.phase_id}, Qty {self.quantity}>"
 
+class SingleIncrement(Base):
+    """Ops.single_increments - Tracks individual piece increments that increase batch quantities"""
+    __tablename__ = "single_increments"
+    __table_args__ = {'schema': 'ops'}
+
+    increment_id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("ops.batches.batch_id", ondelete="CASCADE"), nullable=False, index=True)
+    incremented_from_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=True, index=True)
+    incremented_to_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=True, index=True)
+    incremented_from_phase_type = Column(String(50), nullable=True, index=True)
+    incremented_to_phase_type = Column(String(50), nullable=True, index=True)
+    responsible_daily_assignment_id = Column(
+        Integer,
+        ForeignKey("ops.worker_daily_stage_assignments.daily_assignment_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    quantity = Column(Integer, nullable=False, default=1)
+    increment_type = Column(String(50), nullable=False, default='rejection_resolution')
+    incremented_by_user_id = Column(Integer, ForeignKey("core.users.id", ondelete="SET NULL"), nullable=True)
+    incremented_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    status_at_increment = Column(String(50), nullable=True, index=True)
+
+    batch = relationship("Batch")
+    incremented_from_phase = relationship("ProductionPhase", foreign_keys=[incremented_from_phase_id])
+    incremented_to_phase = relationship("ProductionPhase", foreign_keys=[incremented_to_phase_id])
+    responsible_daily_assignment = relationship("WorkerDailyStageAssignment", foreign_keys=[responsible_daily_assignment_id])
+    user = relationship("User")
+
+    def __repr__(self):
+        return f"<SingleIncrement {self.increment_id}: Batch {self.batch_id}, Qty {self.quantity}, Type {self.increment_type}>"
+
 class SingleRejection(Base):
     """Ops.single_rejections - Tracks individual piece rejections that move items back between phases"""
     __tablename__ = "single_rejections"
@@ -333,6 +431,12 @@ class SingleRejection(Base):
     rejected_from_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=False, index=True)
     rejected_from_phase_type = Column(String(50), nullable=False, index=True)
     return_to_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=True, index=True)
+    responsible_daily_assignment_id = Column(
+        Integer,
+        ForeignKey("ops.worker_daily_stage_assignments.daily_assignment_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     quantity = Column(Integer, nullable=False, default=1)
     rejection_reason = Column(Text, nullable=True)
     rejected_by_user_id = Column(Integer, ForeignKey("core.users.id"), nullable=True)
@@ -345,6 +449,7 @@ class SingleRejection(Base):
     batch = relationship("Batch")
     rejected_from_phase = relationship("ProductionPhase", foreign_keys=[rejected_from_phase_id])
     return_to_phase = relationship("ProductionPhase", foreign_keys=[return_to_phase_id])
+    responsible_daily_assignment = relationship("WorkerDailyStageAssignment", foreign_keys=[responsible_daily_assignment_id])
     user = relationship("User")
 
     def __repr__(self):
@@ -378,6 +483,115 @@ class BatchPhaseHistory(Base):
 
     def __repr__(self):
         return f"<BatchPhaseHistory batch:{self.batch_id} phase:{self.current_phase_type} qty:{self.quantity_at_phase}>"
+
+class WorkerDailyStageAssignment(Base):
+    """Ops.worker_daily_stage_assignments - Daily assignment of a worker to a stage"""
+    __tablename__ = "worker_daily_stage_assignments"
+    __table_args__ = {'schema': 'ops'}
+
+    daily_assignment_id = Column(Integer, primary_key=True, index=True)
+    assignment_date = Column(Date, nullable=False)
+    worker_id = Column(Integer, ForeignKey("core.workers.worker_id", ondelete="CASCADE"), nullable=False)
+    stage_id = Column(Integer, ForeignKey("core.sewing_line_stages.stage_id", ondelete="RESTRICT"), nullable=False)
+    # Inherited from the parent schematic at record creation time (copy-on-create).
+    # Backfilled for existing rows during DB initialization.
+    working_hours = Column(DECIMAL(4, 2), nullable=True)  # e.g. 8.00 hours per day
+    active = Column(Boolean, nullable=False, default=True, server_default='true')
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+    # Relationships
+    worker = relationship("Worker", back_populates="daily_assignments")
+    stage = relationship("SewingLineStage", back_populates="daily_assignments")
+    production_history_entries = relationship("ProductionHistory", back_populates="daily_assignment", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<WorkerDailyStageAssignment {self.daily_assignment_id}: worker={self.worker_id} stage={self.stage_id} date={self.assignment_date}>"
+
+class ProductionHistory(Base):
+    """Ops.production_history - Quantity produced per assignment per batch"""
+    __tablename__ = "production_history"
+    __table_args__ = {'schema': 'ops'}
+
+    production_id = Column(Integer, primary_key=True, index=True)
+    daily_assignment_id = Column(Integer, ForeignKey("ops.worker_daily_stage_assignments.daily_assignment_id", ondelete="CASCADE"), nullable=False)
+    batch_id = Column(Integer, ForeignKey("ops.batches.batch_id", ondelete="CASCADE"), nullable=False)
+    quantity_produced = Column(Integer, nullable=False)
+    timestamp = Column(DateTime, server_default=func.now(), nullable=False)
+
+    # Relationships
+    daily_assignment = relationship("WorkerDailyStageAssignment", back_populates="production_history_entries")
+    batch = relationship("Batch", back_populates="production_history")
+
+    def __repr__(self):
+        return f"<ProductionHistory {self.production_id}: assignment={self.daily_assignment_id} batch={self.batch_id} qty={self.quantity_produced}>"
+
+
+# ============================================================================
+# OVERTIME MODELS (OPS)
+# ============================================================================
+class WorkerOvertimeRequest(Base):
+    """ops.worker_overtime_requests - Pending/approved overtime requests for worker working_hours adjustments."""
+
+    __tablename__ = "worker_overtime_requests"
+    __table_args__ = {"schema": "ops"}
+
+    request_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=False)
+    schematic_id = Column(
+        Integer,
+        ForeignKey("core.sewing_line_schematics.schematic_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    work_date = Column(Date, nullable=False, index=True)
+
+    overtime_hours = Column(DECIMAL(6, 2), nullable=False)
+    # List of worker_ids encoded at request time (admins approve later).
+    worker_ids = Column(JSONB, nullable=False)
+
+    status = Column(String(20), nullable=False, default="pending", server_default="pending", index=True)
+    requested_by_user_id = Column(Integer, ForeignKey("core.users.id"), nullable=False, index=True)
+    reviewed_by_user_id = Column(Integer, ForeignKey("core.users.id"), nullable=True, index=True)
+    admin_comment = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    reviewed_at = Column(DateTime, nullable=True)
+
+
+class WorkerOvertimeHistory(Base):
+    """ops.worker_overtime_history - Append-only record for each applied overtime delta."""
+
+    __tablename__ = "worker_overtime_history"
+    __table_args__ = (
+        UniqueConstraint("request_id", "worker_id", name="uq_worker_overtime_history_request_worker"),
+        {"schema": "ops"},
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    request_id = Column(
+        Integer,
+        ForeignKey("ops.worker_overtime_requests.request_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    work_date = Column(Date, nullable=False, index=True)
+    worker_id = Column(Integer, ForeignKey("core.workers.worker_id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # We apply overtime to exactly one "latest" assignment per worker, so we record the assignment + stage.
+    daily_assignment_id = Column(
+        Integer,
+        ForeignKey("ops.worker_daily_stage_assignments.daily_assignment_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    stage_id = Column(Integer, ForeignKey("core.sewing_line_stages.stage_id", ondelete="RESTRICT"), nullable=False)
+
+    overtime_hours = Column(DECIMAL(6, 2), nullable=False)
+    previous_working_hours = Column(DECIMAL(6, 2), nullable=False, server_default="0")
+    new_working_hours = Column(DECIMAL(6, 2), nullable=False, server_default="0")
+
+    applied_by_user_id = Column(Integer, ForeignKey("core.users.id"), nullable=False, index=True)
+    applied_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
 
 # ============================================================================
 # ARCHIVE SCHEMA MODELS
@@ -477,6 +691,7 @@ class ArchivedCutDetail(Base):
     total_layers = Column(Integer, nullable=False, default=0)
     job_order_items_ratios = Column(JSONB, nullable=False)
     waste_fabric_weight = Column(DECIMAL(10, 3), nullable=True)
+    marker_length = Column(DECIMAL(10, 3), nullable=True)
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=True)
     created_by_user_id = Column(Integer, nullable=True)
@@ -495,6 +710,7 @@ class ArchivedCutRoll(Base):
     weight = Column(DECIMAL(10, 3), nullable=False)
     layer_weight = Column(DECIMAL(10, 3), nullable=False)
     num_of_layers = Column(Integer, nullable=False)
+    roll_width = Column(DECIMAL(10, 3), nullable=True)
     archived_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 class ArchivedCutSizeTransition(Base):
@@ -583,6 +799,39 @@ class JobOrderSummary(Base):
 
     def __repr__(self):
         return f"<JobOrderSummary {self.job_order_number}>"
+
+
+class WorkerDailyStageProduction(Base):
+    """Reporting.worker_daily_stage_production - Precomputed daily expected/true output per worker/stage."""
+    __tablename__ = "worker_daily_stage_production"
+    __table_args__ = {'schema': 'reporting'}
+
+    work_date = Column(Date, primary_key=True, index=True)
+    worker_id = Column(
+        Integer,
+        ForeignKey("core.workers.worker_id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    stage_id = Column(
+        Integer,
+        ForeignKey("core.sewing_line_stages.stage_id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+
+    expected_output = Column(Integer, default=0, nullable=False)
+    true_output = Column(Integer, default=0, nullable=False)
+    # Total elapsed hours spent in this worker/stage for the day.
+    # Derived from ops.worker_daily_stage_assignments.working_hours (including overtime changes).
+    working_hours = Column(DECIMAL(6, 2), default=0, nullable=False)
+    # Overtime hours applied for this worker/stage/day.
+    # Derived from ops.worker_overtime_history (can contain multiple request entries).
+    overtime_hours = Column(DECIMAL(6, 2), default=0, nullable=False)
+    last_calculated_at = Column(TIMESTAMP, nullable=True)
+
+    def __repr__(self):
+        return f"<WorkerDailyStageProduction {self.work_date} worker:{self.worker_id} stage:{self.stage_id}>"
 
 # ============================================================================
 # PYDANTIC SCHEMAS FOR API

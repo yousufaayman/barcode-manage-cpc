@@ -9,7 +9,6 @@ from .crud import get_users_with_role_in_system
 from .core.config import settings
 from .utils.pool_manager import ConnectionPoolManager
 from .utils.directory_manager import ensure_all_directories, get_directory_info
-from .services.scheduler_service import SchedulerService
 from .services.summary_refresh_service import summary_refresh_service
 import logging
 import uvicorn
@@ -97,14 +96,6 @@ async def startup_event():
     # Log directory information
     dir_info = get_directory_info()
     logger.info(f"Directory structure: {len(dir_info)} directories configured")
-    
-    # Start the report scheduler service
-    try:
-        scheduler_service = SchedulerService()
-        scheduler_service.start_scheduler()
-        logger.info("Report scheduler service started successfully")
-    except Exception as e:
-        logger.error(f"Failed to start report scheduler service: {str(e)}")
     
     # Start the summary refresh service (replaces pg_cron)
     try:
