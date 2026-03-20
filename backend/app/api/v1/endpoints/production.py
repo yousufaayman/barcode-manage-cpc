@@ -2,7 +2,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from app.database import get_db
+from app.db.session import get_db
 from app import crud, schemas, models
 from app.core.deps import get_current_active_superuser, get_current_general_ops_or_above
 from typing import List, Optional

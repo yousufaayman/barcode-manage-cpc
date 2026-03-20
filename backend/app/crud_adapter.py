@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional, Tuple, Union
 from .core.config import settings
-from .database import engine, SessionLocal
+from .db.session import engine, SessionLocal
 
 class CRUDAdapter:
     """Adapter class to handle PostgreSQL database operations"""

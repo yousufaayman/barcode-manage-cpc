@@ -5,7 +5,6 @@ from app.core.config import settings
 from urllib.parse import quote_plus
 import psycopg2
 import logging
-from app.models import Base
 
 # URL encode the password to handle special characters
 password = quote_plus(settings.POSTGRESQL_PASSWORD)
@@ -45,9 +44,6 @@ engine = create_engine(
     future=True,  # Use SQLAlchemy 2.0 style
     isolation_level="READ_COMMITTED"
 )
-
-# Create all tables
-Base.metadata.create_all(bind=engine)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

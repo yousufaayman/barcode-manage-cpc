@@ -148,11 +148,10 @@ def update_increment(
     if db_batch:
         db.execute(
             text("""
-                INSERT INTO reporting.summary_refresh_queue (job_order_id, needs_refresh, changed_at)
-                VALUES (:job_order_id, TRUE, NOW())
+                INSERT INTO ops.summary_refresh_queue (job_order_id, queued_at)
+                VALUES (:job_order_id, NOW())
                 ON CONFLICT (job_order_id) DO UPDATE
-                    SET needs_refresh = TRUE,
-                        changed_at = NOW()
+                    SET queued_at = NOW()
             """),
             {"job_order_id": db_batch.job_order_id}
         )
@@ -180,11 +179,10 @@ def delete_increment(db: Session, increment_id: int):
     if job_order_id:
         db.execute(
             text("""
-                INSERT INTO reporting.summary_refresh_queue (job_order_id, needs_refresh, changed_at)
-                VALUES (:job_order_id, TRUE, NOW())
+                INSERT INTO ops.summary_refresh_queue (job_order_id, queued_at)
+                VALUES (:job_order_id, NOW())
                 ON CONFLICT (job_order_id) DO UPDATE
-                    SET needs_refresh = TRUE,
-                        changed_at = NOW()
+                    SET queued_at = NOW()
             """),
             {"job_order_id": job_order_id}
         )

@@ -673,7 +673,6 @@ class BatchUpdate(BaseModel):
     quantity_decrement_type: Optional[QuantityDecrementType] = None
     quantity_decrement_reason: Optional[str] = None
     quantity_decrement_phase_id: Optional[int] = None
-    quantity_decrement_stage_id: Optional[int] = None  # Deprecated: use quantity_decrement_daily_assignment_id
     quantity_decrement_daily_assignment_id: Optional[int] = None
     quantity_increment_reason: Optional[str] = None
 

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import List
 
-from app.database import SessionLocal
+from app.db.session import SessionLocal
 from app import models
 
 

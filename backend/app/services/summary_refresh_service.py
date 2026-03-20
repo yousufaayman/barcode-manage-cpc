@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from sqlalchemy import text
-from app.database import get_db
+from app.db.session import get_db
 
 logger = logging.getLogger(__name__)
 

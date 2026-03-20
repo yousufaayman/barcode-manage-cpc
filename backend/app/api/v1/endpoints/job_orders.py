@@ -7,8 +7,7 @@ from app.crud import *
 from app import models, schemas
 from app.core.deps import get_db, get_current_active_superuser, get_current_user, get_optional_current_user
 from app.crud.job_order import update_job_order as crud_update_job_order, create_job_order_with_names as crud_create_job_order_with_names
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
+from app.api.v1.endpoints.archive import build_archive_overview
 import os
 from app.core.config import settings
 import json
@@ -16,6 +15,7 @@ import re
 from app.crud.job_order import get_job_order_materials
 
 router = APIRouter()
+image_upload_dir = os.path.abspath(settings.JOB_ORDER_IMAGE_UPLOAD_DIR)
 
 class JobOrderListResponse(BaseModel):
     items: List[schemas.JobOrder]
@@ -24,13 +24,6 @@ class JobOrderListResponse(BaseModel):
 class JobOrderSummaryListResponse(BaseModel):
     items: List[schemas.JobOrderSummary]
     total: int
-
-# Mount static files for images
-app = FastAPI()
-image_upload_dir = os.path.abspath(settings.JOB_ORDER_IMAGE_UPLOAD_DIR)
-# Expose the directory exactly as provided at the '/static' route for serving, but *do not* modify the
-# stored path.  The env variable is assumed to be an absolute filesystem path (e.g. "S:\\...\\static").
-app.mount("/static", StaticFiles(directory=image_upload_dir), name="job_order_images")
 
 @router.get("/", response_model=JobOrderListResponse)
 def read_job_orders(
@@ -1057,60 +1050,7 @@ def get_archive_overview(
     current_user: models.User = Depends(get_current_active_superuser)
 ):
     """Get overview of all archived data"""
-    
-    from app.crud.job_order import get_archived_job_orders as crud_get_archived_job_orders
-    from app.crud.batch import get_archived_batches as crud_get_archived_batches
-    
-    # Get counts
-    archived_job_orders_count = db.query(models.ArchivedJobOrder).count()
-    archived_items_count = db.query(models.ArchivedJobOrderItem).count()
-    archived_batches_count = db.query(models.ArchivedBatch).count()
-    
-    # Get recent archived job orders (last 10)
-    recent_job_orders = db.query(models.ArchivedJobOrder).order_by(
-        models.ArchivedJobOrder.archived_at.desc()
-    ).limit(10).all()
-    
-    # Get recent archived batches (last 10)
-    recent_batches = db.query(models.ArchivedBatch).order_by(
-        models.ArchivedBatch.archived_at.desc()
-    ).limit(10).all()
-    
-    # Format recent job orders
-    recent_job_orders_data = []
-    for jo in recent_job_orders:
-        model = db.query(models.Model).filter(models.Model.model_id == jo.model_id).first()
-        brand = db.query(models.Client).filter(models.Client.client_id == jo.client_id).first() if jo.client_id else None
-        
-        recent_job_orders_data.append({
-            "job_order_id": jo.job_order_id,
-            "job_order_number": jo.job_order_number,
-            "model_name": model.model_name if model else "Unknown",
-            "client_name": brand.client_name if brand else "Unknown",
-            "archived_at": jo.archived_at,
-            "date_created": jo.date_created
-        })
-    
-    # Format recent batches
-    recent_batches_data = []
-    for batch in recent_batches:
-        recent_batches_data.append({
-            "batch_id": batch.batch_id,
-            "barcode": batch.barcode,
-            "job_order_id": batch.job_order_id,
-            "archived_at": batch.archived_at,
-            "status": batch.status
-        })
-    
-    return {
-        "summary": {
-            "archived_job_orders": archived_job_orders_count,
-            "archived_items": archived_items_count,
-            "archived_batches": archived_batches_count
-        },
-        "recent_job_orders": recent_job_orders_data,
-        "recent_batches": recent_batches_data
-    }
+    return build_archive_overview(db)
 
 @router.get("/archive/job-orders/", response_model=List[schemas.ArchivedJobOrderResponse])
 def get_archived_job_orders_detailed(

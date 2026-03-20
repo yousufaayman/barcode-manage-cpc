@@ -1,54 +1,5 @@
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
-from .core.config import settings
-from .models import Base
-from urllib.parse import quote_plus
-import psycopg2
-from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
-
-# URL encode the password to handle special characters
-password = quote_plus(settings.POSTGRESQL_PASSWORD)
-
-# First create engine without database name to create the database if it doesn't exist
-initial_engine = create_engine(
-    f"postgresql://{settings.POSTGRESQL_USER}:{password}@{settings.POSTGRESQL_HOST}:{settings.POSTGRESQL_PORT}",
-    pool_pre_ping=True,
-    pool_recycle=3600,
-    isolation_level=ISOLATION_LEVEL_AUTOCOMMIT
-)
-
-try:
-    with initial_engine.connect() as conn:
-        # Create database if it doesn't exist
-        conn.execute(text(f"CREATE DATABASE {settings.POSTGRESQL_DATABASE}"))
-        print(f"Database {settings.POSTGRESQL_DATABASE} created successfully")
-except Exception as e:
-    if "already exists" in str(e):
-        print(f"Database {settings.POSTGRESQL_DATABASE} already exists")
-    else:
-        print(f"Warning: Could not create database {settings.POSTGRESQL_DATABASE}: {e}")
-
-# Now create engine with database name
-SQLALCHEMY_DATABASE_URL = f"postgresql://{settings.POSTGRESQL_USER}:{password}@{settings.POSTGRESQL_HOST}:{settings.POSTGRESQL_PORT}/{settings.POSTGRESQL_DATABASE}"
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    pool_pre_ping=True,
-    pool_recycle=settings.DB_POOL_RECYCLE,
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
-    pool_timeout=settings.DB_POOL_TIMEOUT
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Base is imported from models.py
-
-# Dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+from sqlalchemy import text
+from .db.session import engine, SessionLocal, get_db
 
 # Function to create schemas
 def create_schemas():

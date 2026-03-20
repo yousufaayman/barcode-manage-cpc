@@ -7,7 +7,7 @@ from app import schemas
 from app.core.config import settings
 from app.core.deps import get_current_user
 from app.crud.tracking import get_sewing_daily_report_data
-from app.database import get_db
+from app.db.session import get_db
 from app.services.report_pdf_service import ReportPDFService
 import logging
 import os

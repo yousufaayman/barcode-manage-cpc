@@ -1,7 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .database import engine
-from . import models
 from .api.v1.api import api_router
 from .db.init_db import init_db, create_initial_admin
 from .database import create_triggers_and_functions
@@ -21,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 def verify_admin_user_exists():
     """Verify that at least one admin user exists in the OPS system"""
-    from .database import SessionLocal
+    from .db.session import SessionLocal
     
     db = SessionLocal()
     try:
@@ -37,8 +35,6 @@ def verify_admin_user_exists():
         logger.error(f"Error verifying admin users: {str(e)}")
     finally:
         db.close()
-
-models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
