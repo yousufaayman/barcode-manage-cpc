@@ -98,7 +98,12 @@ const ProductionManagementPage: React.FC = () => {
                 <Clock className="h-4 w-4" />
                 Overtime approvals
               </CardTitle>
-              <Button variant="outline" disabled={loadingOvertimeRequests} onClick={refreshPendingOvertime}>
+              <Button
+                variant="outline"
+                className="w-full sm:w-auto"
+                disabled={loadingOvertimeRequests}
+                onClick={refreshPendingOvertime}
+              >
                 {loadingOvertimeRequests ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Refresh'}
               </Button>
             </CardHeader>
@@ -237,7 +242,7 @@ const ProductionManagementPage: React.FC = () => {
         <Card>
           <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
             <CardTitle>{t('productionManagement.schematicsList')}</CardTitle>
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2 w-full sm:w-auto sm:flex-row">
               <Button variant="outline" asChild>
                 <Link to="/production/workers">
                   <Users className="mr-2 h-4 w-4" />

@@ -214,6 +214,29 @@ def get_all_cut_details(
     return cuts_list, total_count
 
 
+def get_cut_sequence_per_job_order(db: Session, job_order_id: int, cut_id: int) -> int:
+    """
+    1-based index of this cut among all cuts for the job order (ORDER BY cut_id ASC).
+    Used with roll_number to pack ops.batches.layers as: cut_seq * LAYERS_ROLL_MOD + roll (decimal, no hex).
+    """
+    result = db.execute(
+        text("""
+            SELECT cut_id FROM ops.cut_details
+            WHERE job_order_id = :job_order_id
+            ORDER BY cut_id ASC
+        """),
+        {"job_order_id": job_order_id},
+    )
+    cut_ids = [row[0] for row in result.fetchall()]
+    try:
+        idx = cut_ids.index(cut_id)
+    except ValueError as exc:
+        raise ValueError(
+            f"cut_id {cut_id} is not among cuts for job_order_id {job_order_id}"
+        ) from exc
+    return idx + 1
+
+
 def get_cut_details_by_id(db: Session, cut_id: int) -> Optional[Dict[str, Any]]:
     """Get cut details by cut_id from the cut_details_view with rolls and transitions"""
     # First, get the ratios and marker_length from the cut_details table directly

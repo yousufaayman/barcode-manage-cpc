@@ -403,7 +403,9 @@ const BarcodeManagementPage: React.FC = () => {
           color: barcode.color_name,
           quantity: barcode.quantity,
           layers: barcode.layers,
-          serial: barcode.serial
+          serial: barcode.serial,
+          job_order_number: barcode.job_order_number || '',
+          is_second_degree: Boolean(barcode.is_second_degree),
         }));
 
       // Check if selected printer is a Zebra printer
@@ -420,7 +422,9 @@ const BarcodeManagementPage: React.FC = () => {
           color: item.color,
           quantity: item.quantity,
           layers: item.layers,
-          serial: item.serial
+          serial: item.serial,
+          job_order_number: item.job_order_number,
+          is_second_degree: item.is_second_degree,
         }));
 
         await zebraPrinterService.printMultipleBarcodes(

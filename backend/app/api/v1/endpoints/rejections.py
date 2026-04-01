@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from pydantic import BaseModel
 from app.crud import get_rejection, get_rejections, create_rejection, update_rejection, delete_rejection
 from app import models, schemas
 from app.core.deps import get_db, get_current_active_user, get_current_active_superuser
@@ -66,20 +65,13 @@ def update_rejection_endpoint(
     return rejection
 
 
-class ResolveRejectionRequest(BaseModel):
-    resolved_quantity: Optional[int] = None
-
 @router.patch("/{rejection_id}/resolve", response_model=schemas.SingleRejection)
 def resolve_rejection_endpoint(
     rejection_id: int,
-    request: ResolveRejectionRequest,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user)
 ):
-    rejection_update = schemas.SingleRejectionUpdate(
-        is_resolved=True,
-        resolved_quantity=request.resolved_quantity
-    )
+    rejection_update = schemas.SingleRejectionUpdate(is_resolved=True)
     rejection = update_rejection(db=db, rejection_id=rejection_id, rejection_update=rejection_update, user_id=current_user.id)
     if not rejection:
         raise HTTPException(status_code=404, detail="Rejection not found")

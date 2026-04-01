@@ -196,6 +196,7 @@ class SewingLineStageCreate(BaseModel):
     stage_name: str
     stage_order: int
     production_qty: Optional[int] = None
+    is_in_final_stage: bool = False
     active: bool = True
 
 
@@ -229,6 +230,7 @@ class SewingLineStageResponse(BaseModel):
     stage_name: str
     stage_order: int
     production_qty: Optional[int] = None
+    is_in_final_stage: bool = False
     active: bool = True
 
     class Config:
@@ -397,6 +399,7 @@ class StageOption(BaseModel):
 class BatchProductionDailyAssignmentOption(BaseModel):
     """Daily assignment option for responsible-phase dropdown when phase type is sewing."""
     daily_assignment_id: int
+    worker_id: int
     worker_name: str
     stage_name: str
     quantity_produced: int
@@ -647,8 +650,8 @@ class SecondDegreeBatchCreate(BaseModel):
     color_id: int
     quantity: int = 0  # Always 0 for second degree
     layers: int = 1
-    current_phase: int = 1
-    status: str = "In Progress"
+    current_phase: int
+    status: str
     is_second_degree: bool = True
 
 class QuantityDecrementType(str, Enum):
@@ -657,7 +660,6 @@ class QuantityDecrementType(str, Enum):
     LOST = "lost"
 
 class BatchUpdate(BaseModel):
-    quantity_increment_reason: Optional[str] = None
     job_order_id: Optional[int] = None
     barcode: Optional[str] = None
     size_id: Optional[int] = None
@@ -673,8 +675,8 @@ class BatchUpdate(BaseModel):
     quantity_decrement_type: Optional[QuantityDecrementType] = None
     quantity_decrement_reason: Optional[str] = None
     quantity_decrement_phase_id: Optional[int] = None
-    quantity_decrement_daily_assignment_id: Optional[int] = None
-    quantity_increment_reason: Optional[str] = None
+    quantity_decrement_worker_id: Optional[int] = None
+    quantity_decrement_stage_name: Optional[str] = None
 
 class BatchResponse(BatchBase):
     batch_id: int
@@ -704,6 +706,51 @@ class BatchCompensationRequest(BaseModel):
     job_order_id: int
     compensations: List[BatchCompensationCreate]
 
+
+class ReworkBatchCreate(BaseModel):
+    source_batch_id: int
+    problem_stage_name: str
+
+
+class ReworkBatchUpdate(BaseModel):
+    printed: Optional[bool] = None
+
+
+class ReworkBatchResponse(BaseModel):
+    rework_batch_id: int
+    batch_id: int
+    barcode: Optional[str] = None
+    source_batch_id: Optional[int] = None
+    job_order_id: Optional[int] = None
+    problem_stage_name: str
+    responsible_phase_id: Optional[int] = None
+    printed: bool
+    created_at: datetime
+    created_by_user_id: Optional[int] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def from_rework_orm(cls, data: Any):
+        if isinstance(data, dict):
+            return data
+        rb = data
+        b = getattr(rb, "batch", None)
+        return {
+            "rework_batch_id": rb.rework_batch_id,
+            "batch_id": rb.batch_id,
+            "barcode": getattr(rb, "barcode", None),
+            "source_batch_id": None,
+            "job_order_id": b.job_order_id if b is not None else None,
+            "problem_stage_name": rb.problem_stage_name,
+            "responsible_phase_id": getattr(rb, "responsible_phase_id", None),
+            "printed": rb.printed,
+            "created_at": rb.created_at,
+            "created_by_user_id": rb.created_by_user_id,
+        }
+
+    class Config:
+        from_attributes = True
+
 class RejectionResolutionType(str, Enum):
     REWORKED = "reworked"
     SCRAPPED = "scrapped"
@@ -714,7 +761,8 @@ class SingleRejectionBase(BaseModel):
     batch_id: int
     rejected_from_phase_id: int
     return_to_phase_id: Optional[int] = None
-    responsible_daily_assignment_id: Optional[int] = None
+    new_batch_id: Optional[int] = None
+    worker_id: Optional[int] = None
     quantity: int = Field(default=1, gt=0)
     rejection_reason: Optional[str] = None
 
@@ -725,7 +773,8 @@ class SingleRejectionUpdate(BaseModel):
     return_to_phase_id: Optional[int] = None
     rejection_reason: Optional[str] = None
     is_resolved: Optional[bool] = None
-    resolved_quantity: Optional[int] = Field(None, ge=0)
+    new_batch_id: Optional[int] = None
+    worker_id: Optional[int] = None
 
 class SingleRejection(SingleRejectionBase):
     rejection_id: int
@@ -737,7 +786,6 @@ class SingleRejection(SingleRejectionBase):
     rejected_at: datetime
     status_at_rejection: Optional[str] = None
     is_resolved: bool
-    resolved_quantity: Optional[int] = None
     resolved_at: Optional[datetime] = None
 
     @model_validator(mode="before")
@@ -752,75 +800,15 @@ class SingleRejection(SingleRejectionBase):
                 'rejected_from_phase_id': data.rejected_from_phase_id,
                 'rejected_from_phase_type': data.rejected_from_phase_type,
                 'return_to_phase_id': data.return_to_phase_id,
-                'responsible_daily_assignment_id': getattr(data, 'responsible_daily_assignment_id', None),
+                'new_batch_id': getattr(data, 'new_batch_id', None),
+                'worker_id': getattr(data, 'worker_id', None),
                 'quantity': data.quantity,
                 'rejection_reason': data.rejection_reason,
                 'rejected_by_user_id': data.rejected_by_user_id,
                 'rejected_at': data.rejected_at,
                 'status_at_rejection': data.status_at_rejection,
                 'is_resolved': data.is_resolved,
-                'resolved_quantity': data.resolved_quantity,
                 'resolved_at': data.resolved_at,
-                'job_order_id': data.batch.job_order_id,
-                'color_id': data.batch.color_id,
-                'size_id': data.batch.size_id,
-            }
-            return data_dict
-        return data
-
-    class Config:
-        from_attributes = True
-
-class SingleIncrementBase(BaseModel):
-    batch_id: int
-    incremented_from_phase_id: Optional[int] = None
-    incremented_to_phase_id: Optional[int] = None
-    responsible_daily_assignment_id: Optional[int] = None
-    quantity: int = Field(default=1, gt=0)
-    increment_type: str = Field(default="rejection_resolution", pattern="^rejection_resolution$")
-
-    @model_validator(mode="after")
-    def validate_rejection_resolution_phase(self):
-        if self.increment_type == 'rejection_resolution' and not self.incremented_from_phase_id:
-            raise ValueError("incremented_from_phase_id is required when increment_type is 'rejection_resolution'")
-        return self
-
-class SingleIncrementCreate(SingleIncrementBase):
-    pass
-
-class SingleIncrementUpdate(BaseModel):
-    pass
-
-class SingleIncrement(SingleIncrementBase):
-    increment_id: int
-    job_order_id: int
-    color_id: int
-    size_id: int
-    incremented_from_phase_type: Optional[str] = None
-    incremented_to_phase_type: Optional[str] = None
-    incremented_by_user_id: Optional[int] = None
-    incremented_at: datetime
-    status_at_increment: Optional[str] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def extract_batch_fields(cls, data: Any):
-        if isinstance(data, dict):
-            return data
-        if hasattr(data, 'batch') and data.batch:
-            data_dict = {
-                'increment_id': data.increment_id,
-                'batch_id': data.batch_id,
-                'incremented_from_phase_id': data.incremented_from_phase_id,
-                'incremented_to_phase_id': data.incremented_to_phase_id,
-                'incremented_from_phase_type': data.incremented_from_phase_type,
-                'incremented_to_phase_type': data.incremented_to_phase_type,
-                'responsible_daily_assignment_id': getattr(data, 'responsible_daily_assignment_id', None),
-                'quantity': data.quantity,
-                'increment_type': getattr(data, 'increment_type', 'rejection_resolution'),
-                'incremented_by_user_id': data.incremented_by_user_id,
-                'incremented_at': data.incremented_at,
-                'status_at_increment': data.status_at_increment,
                 'job_order_id': data.batch.job_order_id,
                 'color_id': data.batch.color_id,
                 'size_id': data.batch.size_id,

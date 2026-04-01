@@ -1,13 +1,12 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
 from sqlalchemy import text
-from app.db.session import get_db
+from app.db.session import SessionLocal
 
 logger = logging.getLogger(__name__)
 
 class SummaryRefreshService:
-    def __init__(self, debounce_seconds=5):
+    def __init__(self, debounce_seconds=30):
         self.is_running = False
         self.debounce_seconds = debounce_seconds
         self.poll_interval = 1
@@ -16,38 +15,38 @@ class SummaryRefreshService:
     async def refresh_loop(self):
         while self.is_running:
             try:
-                db = next(get_db())
-                
-                result = db.execute(
-                    text("SELECT reporting.refresh_stale_summaries(:interval)"),
-                    {"interval": self.debounce_seconds}
-                )
-                
-                count_job_order_summaries = result.scalar() or 0
-
-                worker_stage_refresh_result = db.execute(
-                    text("SELECT reporting.refresh_worker_daily_stage_production(:interval)"),
-                    {"interval": self.debounce_seconds}
-                )
-                count_worker_daily = worker_stage_refresh_result.scalar() or 0
-
-                if count_job_order_summaries > 0 or count_worker_daily > 0:
-                    db.commit()
-                    if count_job_order_summaries > 0:
-                        logger.info(
-                            f"Refreshed {count_job_order_summaries} job order summaries"
-                        )
-                    if count_worker_daily > 0:
-                        logger.info(
-                            f"Refreshed {count_worker_daily} worker daily stage production days"
-                        )
-                else:
-                    db.rollback()
-                    
+                # Run job-order summary refresh and worker/stage reporting refresh independently so a
+                # failure in one cannot block the other (both commit their own transaction).
+                # Both functions only process queue rows with
+                # queued_at <= now() - interval_seconds (debounce batching).
+                for label, sql, interval_seconds in (
+                    (
+                        "job order summaries",
+                        "SELECT reporting.refresh_stale_summaries(:interval)",
+                        self.debounce_seconds,
+                    ),
+                    (
+                        "worker daily stage production",
+                        "SELECT reporting.refresh_worker_daily_stage_production(:interval)",
+                        self.debounce_seconds,
+                    ),
+                ):
+                    db = SessionLocal()
+                    try:
+                        result = db.execute(text(sql), {"interval": interval_seconds})
+                        count = result.scalar() or 0
+                        if count > 0:
+                            db.commit()
+                            logger.info(f"Refreshed {count} {label}")
+                        else:
+                            db.rollback()
+                    except Exception as e:
+                        logger.error(f"{label} refresh error: {e}")
+                        db.rollback()
+                    finally:
+                        db.close()
             except Exception as e:
-                logger.error(f"Summary refresh error: {e}")
-                if 'db' in locals():
-                    db.rollback()
+                logger.error(f"Summary refresh loop error: {e}")
             finally:
                 await asyncio.sleep(self.poll_interval)
     
@@ -73,5 +72,5 @@ class SummaryRefreshService:
             except asyncio.CancelledError:
                 pass
 
-summary_refresh_service = SummaryRefreshService(debounce_seconds=5)
+summary_refresh_service = SummaryRefreshService(debounce_seconds=30)
 

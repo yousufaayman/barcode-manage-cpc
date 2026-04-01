@@ -91,8 +91,276 @@ def create_triggers_and_functions():
         "DROP FUNCTION IF EXISTS ops.handle_phase_transitions();",
         "DROP FUNCTION IF EXISTS ops.track_item_batch_completion_changes() CASCADE;",
         """
+        -- Rework-batches table (single FK to ops.batches: batch_id).
+        CREATE TABLE IF NOT EXISTS ops.rework_batches (
+            rework_batch_id SERIAL PRIMARY KEY,
+            batch_id INTEGER UNIQUE REFERENCES ops.batches(batch_id) ON DELETE CASCADE,
+            problem_stage_name VARCHAR(255) NOT NULL,
+            printed BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            created_by_user_id INTEGER NULL REFERENCES core.users(id) ON DELETE SET NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ops_rework_batches_problem_stage_name ON ops.rework_batches(problem_stage_name);
+        CREATE INDEX IF NOT EXISTS idx_ops_rework_batches_printed ON ops.rework_batches(printed);
+        CREATE INDEX IF NOT EXISTS idx_ops_rework_batches_batch_id ON ops.rework_batches(batch_id);
+        CREATE INDEX IF NOT EXISTS idx_ops_rework_batches_responsible_phase_id ON ops.rework_batches(responsible_phase_id);
+
+        -- Rework-batches migration: enforce real operational batch rows.
+        ALTER TABLE IF EXISTS ops.rework_batches
+        ADD COLUMN IF NOT EXISTS batch_id INTEGER;
+
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'ops'
+                  AND table_name = 'rework_batches'
+                  AND column_name = 'source_batch_id'
+            ) THEN
+                INSERT INTO ops.batches (
+                    job_order_id,
+                    barcode,
+                    size_id,
+                    color_id,
+                    quantity,
+                    layers,
+                    serial,
+                    current_phase,
+                    status,
+                    is_second_degree
+                )
+                SELECT
+                    sb.job_order_id,
+                    CONCAT(sb.barcode, '-RW-', rb.rework_batch_id::TEXT),
+                    sb.size_id,
+                    sb.color_id,
+                    COALESCE(sb.quantity, 0),
+                    COALESCE(sb.layers, 1),
+                    LPAD(COALESCE(NULLIF(sb.serial, ''), '1'), 3, '0'),
+                    sb.current_phase,
+                    COALESCE(sb.status, 'In Progress'),
+                    COALESCE(sb.is_second_degree, FALSE)
+                FROM ops.rework_batches rb
+                JOIN ops.batches sb
+                  ON sb.batch_id = rb.source_batch_id
+                WHERE rb.batch_id IS NULL
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM ops.batches b
+                      WHERE b.barcode = CONCAT(sb.barcode, '-RW-', rb.rework_batch_id::TEXT)
+                  );
+
+                UPDATE ops.rework_batches rb
+                SET batch_id = b.batch_id
+                FROM ops.batches b
+                JOIN ops.batches sb
+                  ON sb.batch_id = rb.source_batch_id
+                WHERE rb.batch_id IS NULL
+                  AND b.barcode = CONCAT(sb.barcode, '-RW-', rb.rework_batch_id::TEXT);
+            END IF;
+        END
+        $$;
+
+        ALTER TABLE ops.rework_batches
+        ALTER COLUMN batch_id SET NOT NULL;
+
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'fk_rework_batches_batch_id'
+                  AND conrelid = 'ops.rework_batches'::regclass
+            ) THEN
+                ALTER TABLE ops.rework_batches
+                ADD CONSTRAINT fk_rework_batches_batch_id
+                FOREIGN KEY (batch_id)
+                REFERENCES ops.batches(batch_id)
+                ON DELETE CASCADE;
+            END IF;
+        END
+        $$;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ops_rework_batches_batch_id_unique
+          ON ops.rework_batches(batch_id);
+
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'ops'
+                  AND table_name = 'rework_batches'
+                  AND column_name = 'source_batch_id'
+            ) THEN
+                ALTER TABLE ops.rework_batches
+                DROP CONSTRAINT IF EXISTS rework_batches_source_batch_id_fkey;
+                DROP INDEX IF EXISTS ops.idx_ops_rework_batches_source_batch_id;
+                DROP INDEX IF EXISTS idx_ops_rework_batches_source_batch_id;
+                ALTER TABLE ops.rework_batches DROP COLUMN source_batch_id;
+            END IF;
+        END
+        $$;
+
+        -- Rename/migrate legacy problem_stage_id -> problem_stage_name.
+        ALTER TABLE IF EXISTS ops.rework_batches
+        ADD COLUMN IF NOT EXISTS problem_stage_name VARCHAR(255);
+
+        -- Track responsible sewing phase for rework batches (nullable).
+        ALTER TABLE IF EXISTS ops.rework_batches
+        ADD COLUMN IF NOT EXISTS responsible_phase_id INTEGER;
+
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'fk_rework_batches_responsible_phase_id'
+                  AND conrelid = 'ops.rework_batches'::regclass
+            ) THEN
+                ALTER TABLE ops.rework_batches
+                ADD CONSTRAINT fk_rework_batches_responsible_phase_id
+                FOREIGN KEY (responsible_phase_id)
+                REFERENCES core.production_phases(phase_id)
+                ON DELETE SET NULL;
+            END IF;
+        END
+        $$;
+
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'ops'
+                  AND table_name = 'rework_batches'
+                  AND column_name = 'problem_stage_id'
+            ) THEN
+                UPDATE ops.rework_batches rb
+                SET problem_stage_name = st.stage_name
+                FROM core.sewing_line_stages st
+                WHERE rb.problem_stage_name IS NULL
+                  AND rb.problem_stage_id = st.stage_id;
+            END IF;
+        END
+        $$;
+
+        ALTER TABLE ops.rework_batches
+        ALTER COLUMN problem_stage_name SET NOT NULL;
+
+        ALTER TABLE IF EXISTS ops.rework_batches
+        DROP COLUMN IF EXISTS problem_stage_id;
+
+        -- Remove legacy snapshot columns from rework_batches.
+        ALTER TABLE IF EXISTS ops.rework_batches DROP COLUMN IF EXISTS source_job_order_id;
+        ALTER TABLE IF EXISTS ops.rework_batches DROP COLUMN IF EXISTS source_barcode;
+        ALTER TABLE IF EXISTS ops.rework_batches DROP COLUMN IF EXISTS source_size_id;
+        ALTER TABLE IF EXISTS ops.rework_batches DROP COLUMN IF EXISTS source_color_id;
+        ALTER TABLE IF EXISTS ops.rework_batches DROP COLUMN IF EXISTS source_quantity;
+        ALTER TABLE IF EXISTS ops.rework_batches DROP COLUMN IF EXISTS source_layers;
+        ALTER TABLE IF EXISTS ops.rework_batches DROP COLUMN IF EXISTS source_serial;
+        ALTER TABLE IF EXISTS ops.rework_batches DROP COLUMN IF EXISTS source_current_phase;
+        ALTER TABLE IF EXISTS ops.rework_batches DROP COLUMN IF EXISTS source_status;
+        ALTER TABLE IF EXISTS ops.rework_batches DROP COLUMN IF EXISTS source_is_second_degree;
+
+        -- single_rejections: column renamed rework_batch_id -> new_batch_id; FK retarget to ops.batches.batch_id.
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'ops' AND table_name = 'single_rejections' AND column_name = 'rework_batch_id'
+            ) AND NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'ops' AND table_name = 'single_rejections' AND column_name = 'new_batch_id'
+            ) THEN
+                ALTER TABLE ops.single_rejections RENAME COLUMN rework_batch_id TO new_batch_id;
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'single_rejections_rework_batch_id_fkey'
+                  AND conrelid = 'ops.single_rejections'::regclass
+            ) THEN
+                ALTER TABLE ops.single_rejections
+                RENAME CONSTRAINT single_rejections_rework_batch_id_fkey TO single_rejections_new_batch_id_fkey;
+            END IF;
+        END
+        $$;
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'ops' AND indexname = 'ix_single_rejections_rework_batch_id'
+            ) THEN
+                EXECUTE 'ALTER INDEX ops.ix_single_rejections_rework_batch_id RENAME TO ix_single_rejections_new_batch_id';
+            END IF;
+        END
+        $$;
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint AS c
+                JOIN pg_class AS cl ON c.conrelid = cl.oid
+                JOIN pg_namespace AS n ON cl.relnamespace = n.oid
+                WHERE n.nspname = 'ops' AND cl.relname = 'single_rejections'
+                  AND c.contype = 'f'
+                  AND pg_get_constraintdef(c.oid) LIKE '%rework_batches%rework_batch_id%'
+            ) THEN
+                UPDATE ops.single_rejections AS sr
+                SET new_batch_id = rb.batch_id
+                FROM ops.rework_batches AS rb
+                WHERE sr.new_batch_id IS NOT NULL
+                  AND sr.new_batch_id = rb.rework_batch_id;
+
+                ALTER TABLE ops.single_rejections DROP CONSTRAINT IF EXISTS single_rejections_new_batch_id_fkey;
+                ALTER TABLE ops.single_rejections DROP CONSTRAINT IF EXISTS single_rejections_rework_batch_id_fkey;
+
+                ALTER TABLE ops.single_rejections
+                    ADD CONSTRAINT single_rejections_new_batch_id_fkey
+                    FOREIGN KEY (new_batch_id) REFERENCES ops.batches (batch_id) ON DELETE SET NULL;
+            END IF;
+        END
+        $$;
+
+        -- Drop legacy rework source link on batches (if still present).
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'ops' AND table_name = 'batches' AND column_name = 'rework_source_batch_id'
+            ) THEN
+                ALTER TABLE ops.batches DROP CONSTRAINT IF EXISTS fk_batches_rework_source_batch_id;
+                DROP INDEX IF EXISTS ops.idx_ops_batches_rework_source_batch_id;
+                ALTER TABLE ops.batches DROP COLUMN rework_source_batch_id;
+            END IF;
+        END
+        $$;
+
+        -- Drop legacy rework columns on assignments if present (do not re-add).
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'ops' AND table_name = 'worker_daily_stage_assignments'
+                  AND column_name = 'is_rework'
+            ) THEN
+                ALTER TABLE ops.worker_daily_stage_assignments
+                    DROP CONSTRAINT IF EXISTS fk_worker_daily_stage_assignments_original_daily_assignment_id;
+                ALTER TABLE ops.worker_daily_stage_assignments
+                    DROP CONSTRAINT IF EXISTS fk_worker_daily_stage_assignments_original_worker_id;
+                DROP INDEX IF EXISTS ops.idx_ops_worker_daily_stage_assignments_is_rework;
+                DROP INDEX IF EXISTS ops.idx_ops_worker_daily_stage_assignments_original_daily_assignment_id;
+                DROP INDEX IF EXISTS ops.idx_ops_worker_daily_stage_assignments_original_worker_id;
+                ALTER TABLE ops.worker_daily_stage_assignments DROP COLUMN IF EXISTS is_rework;
+                ALTER TABLE ops.worker_daily_stage_assignments DROP COLUMN IF EXISTS original_daily_assignment_id;
+                ALTER TABLE ops.worker_daily_stage_assignments DROP COLUMN IF EXISTS original_worker_id;
+            END IF;
+        END
+        $$;
+
         -- New column for Advanced Statistics (WorkersSubTab) to display
         -- working hours coming from ops.worker_daily_stage_assignments.
+        --
         ALTER TABLE IF EXISTS reporting.worker_daily_stage_production
         ADD COLUMN IF NOT EXISTS working_hours DECIMAL(6,2) NOT NULL DEFAULT 0;
 
@@ -100,6 +368,61 @@ def create_triggers_and_functions():
         -- ops.worker_overtime_history.
         ALTER TABLE IF EXISTS reporting.worker_daily_stage_production
         ADD COLUMN IF NOT EXISTS overtime_hours DECIMAL(6,2) NOT NULL DEFAULT 0;
+
+        -- Snapshot flag to indicate whether the stage is final-stage for the day.
+        ALTER TABLE IF EXISTS reporting.worker_daily_stage_production
+        ADD COLUMN IF NOT EXISTS is_final_stage BOOLEAN NOT NULL DEFAULT FALSE;
+
+        -- Assignment reference for true_output source traceability.
+        ALTER TABLE IF EXISTS reporting.worker_daily_stage_production
+        ADD COLUMN IF NOT EXISTS daily_assignment_id INTEGER;
+
+        -- Add FK only if missing.
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'fk_worker_daily_stage_production_daily_assignment_id'
+                  AND conrelid = 'reporting.worker_daily_stage_production'::regclass
+            ) THEN
+                ALTER TABLE reporting.worker_daily_stage_production
+                ADD CONSTRAINT fk_worker_daily_stage_production_daily_assignment_id
+                FOREIGN KEY (daily_assignment_id)
+                REFERENCES ops.worker_daily_stage_assignments(daily_assignment_id)
+                ON DELETE SET NULL;
+            END IF;
+        END
+        $$;
+
+        -- Drop legacy is_rework from reporting snapshot; PK is (work_date, worker_id, stage_id).
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'reporting' AND table_name = 'worker_daily_stage_production'
+                  AND column_name = 'is_rework'
+            ) THEN
+                ALTER TABLE reporting.worker_daily_stage_production
+                    DROP CONSTRAINT IF EXISTS worker_daily_stage_production_pkey;
+                DELETE FROM reporting.worker_daily_stage_production WHERE is_rework = TRUE;
+                ALTER TABLE reporting.worker_daily_stage_production DROP COLUMN is_rework;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid = 'reporting.worker_daily_stage_production'::regclass
+                      AND contype = 'p'
+                ) THEN
+                    ALTER TABLE reporting.worker_daily_stage_production
+                        ADD CONSTRAINT worker_daily_stage_production_pkey
+                        PRIMARY KEY (work_date, worker_id, stage_id);
+                END IF;
+            END IF;
+        END
+        $$;
+
+        -- Mark stage(s) considered as final output stages in a schematic.
+        ALTER TABLE IF EXISTS core.sewing_line_stages
+        ADD COLUMN IF NOT EXISTS is_in_final_stage BOOLEAN NOT NULL DEFAULT FALSE;
         """,
         # Phase transition function
         """
@@ -235,58 +558,6 @@ def create_triggers_and_functions():
             AFTER UPDATE ON ops.batches
             FOR EACH ROW
             EXECUTE FUNCTION ops.track_item_batch_completion_changes();
-        """,
-        # Rejection-resolution increment: updates batch_phase_history when a rejection-resolution increment is recorded
-        """
-        CREATE OR REPLACE FUNCTION ops.apply_rejection_resolution_increment(
-            p_batch_id INTEGER,
-            p_incremented_from_phase_id INTEGER,
-            p_quantity INTEGER,
-            p_status_at_increment VARCHAR(50)
-        )
-        RETURNS void AS $$
-        DECLARE
-            v_from_phase_type VARCHAR(50);
-            v_from_phase_rank INTEGER;
-            v_status_affects_in BOOLEAN := FALSE;
-            v_status_affects_out BOOLEAN := FALSE;
-        BEGIN
-            SELECT type,
-                   CASE type
-                       WHEN 'cutting' THEN 1
-                       WHEN 'sewing' THEN 2
-                       WHEN 'qc' THEN 3
-                       WHEN 'packaging' THEN 4
-                       ELSE 5
-                   END INTO v_from_phase_type, v_from_phase_rank
-            FROM core.production_phases
-            WHERE phase_id = p_incremented_from_phase_id;
-            IF v_from_phase_type IS NULL THEN
-                RETURN;
-            END IF;
-            -- Pending increments should behave like rejections:
-            -- they affect previous phases but not the current phase \"in\" quantity.
-            IF p_status_at_increment = 'Pending' THEN
-                v_status_affects_out := TRUE;
-            ELSIF p_status_at_increment = 'In Progress' THEN
-                v_status_affects_out := TRUE;
-            ELSIF p_status_at_increment = 'Completed' THEN
-                v_status_affects_in := TRUE;
-                v_status_affects_out := TRUE;
-            END IF;
-            UPDATE ops.batch_phase_history
-            SET
-                inspection_qty = CASE WHEN 1 <= v_from_phase_rank AND v_status_affects_in THEN COALESCE(inspection_qty, 0) + p_quantity ELSE inspection_qty END,
-                sewing_in_qty = CASE WHEN 2 <= v_from_phase_rank AND v_status_affects_in THEN COALESCE(sewing_in_qty, 0) + p_quantity ELSE sewing_in_qty END,
-                sewing_out_qty = CASE WHEN 2 <= v_from_phase_rank AND v_status_affects_out THEN COALESCE(sewing_out_qty, 0) + p_quantity ELSE sewing_out_qty END,
-                qc_in_qty = CASE WHEN 3 <= v_from_phase_rank AND v_status_affects_in THEN COALESCE(qc_in_qty, 0) + p_quantity ELSE qc_in_qty END,
-                qc_out_qty = CASE WHEN 3 <= v_from_phase_rank AND v_status_affects_out THEN COALESCE(qc_out_qty, 0) + p_quantity ELSE qc_out_qty END,
-                packaging_in_qty = CASE WHEN 4 <= v_from_phase_rank AND v_status_affects_in THEN COALESCE(packaging_in_qty, 0) + p_quantity ELSE packaging_in_qty END,
-                packaging_out_qty = CASE WHEN 4 <= v_from_phase_rank AND v_status_affects_out THEN COALESCE(packaging_out_qty, 0) + p_quantity ELSE packaging_out_qty END,
-                last_updated = NOW()
-            WHERE batch_id = p_batch_id;
-        END;
-        $$ LANGUAGE plpgsql;
         """,
     ]
     
@@ -936,7 +1207,8 @@ def create_batch_phase_history_functions():
             p_batch_id INTEGER,
             p_rejected_from_phase_id INTEGER,
             p_return_to_phase_id INTEGER,
-            p_quantity INTEGER
+            p_quantity INTEGER,
+            p_status_at_rejection VARCHAR(50) DEFAULT NULL
         )
         RETURNS void AS $$
         DECLARE
@@ -945,6 +1217,7 @@ def create_batch_phase_history_functions():
             v_from_phase_rank INTEGER;
             v_to_phase_rank INTEGER;
             v_is_compensation BOOLEAN := FALSE;
+            v_status_affects_in BOOLEAN := TRUE;
         BEGIN
             SELECT type,
                    CASE type
@@ -975,6 +1248,12 @@ def create_batch_phase_history_functions():
             IF v_from_phase_type IS NULL OR v_to_phase_type IS NULL THEN
                 RETURN;
             END IF;
+
+            -- Pending at rejection time: do not affect current phase "in" quantities.
+            -- Other rollback effects (previous phase / transition columns) should still apply.
+            IF p_status_at_rejection = 'Pending' THEN
+                v_status_affects_in := FALSE;
+            END IF;
             
             SELECT EXISTS(SELECT 1 FROM ops.batch_compensations WHERE batch_id = p_batch_id) INTO v_is_compensation;
             
@@ -986,7 +1265,7 @@ def create_batch_phase_history_functions():
                     ELSE inspection_qty
                 END,
                 sewing_in_qty = CASE 
-                    WHEN v_from_phase_type = 'sewing' THEN CASE WHEN v_is_compensation THEN COALESCE(sewing_in_qty, 0) - p_quantity ELSE GREATEST(COALESCE(sewing_in_qty, 0) - p_quantity, 0) END
+                    WHEN v_from_phase_type = 'sewing' AND v_status_affects_in THEN CASE WHEN v_is_compensation THEN COALESCE(sewing_in_qty, 0) - p_quantity ELSE GREATEST(COALESCE(sewing_in_qty, 0) - p_quantity, 0) END
                     WHEN v_from_phase_rank > 2 AND v_to_phase_rank < 2 THEN CASE WHEN v_is_compensation THEN COALESCE(sewing_in_qty, 0) - p_quantity ELSE GREATEST(COALESCE(sewing_in_qty, 0) - p_quantity, 0) END
                     ELSE sewing_in_qty
                 END,
@@ -1005,7 +1284,7 @@ def create_batch_phase_history_functions():
                     ELSE qc_out_qty
                 END,
                 packaging_in_qty = CASE 
-                    WHEN v_from_phase_type = 'packaging' THEN CASE WHEN v_is_compensation THEN COALESCE(packaging_in_qty, 0) - p_quantity ELSE GREATEST(COALESCE(packaging_in_qty, 0) - p_quantity, 0) END
+                    WHEN v_from_phase_type = 'packaging' AND v_status_affects_in THEN CASE WHEN v_is_compensation THEN COALESCE(packaging_in_qty, 0) - p_quantity ELSE GREATEST(COALESCE(packaging_in_qty, 0) - p_quantity, 0) END
                     ELSE packaging_in_qty
                 END,
                 packaging_out_qty = CASE 
@@ -1570,7 +1849,10 @@ def create_summary_refresh_functions():
             IF v_work_date IS NOT NULL THEN
                 INSERT INTO reporting.worker_daily_stage_production_refresh_queue (work_date, queued_at)
                 VALUES (v_work_date, NOW())
-                ON CONFLICT (work_date) DO UPDATE SET queued_at = NOW();
+                ON CONFLICT (work_date) DO UPDATE SET queued_at = LEAST(
+                    reporting.worker_daily_stage_production_refresh_queue.queued_at,
+                    EXCLUDED.queued_at
+                );
             END IF;
 
             IF TG_OP = 'DELETE' THEN
@@ -1600,15 +1882,24 @@ def create_summary_refresh_functions():
             v_work_date DATE;
         BEGIN
             IF TG_OP = 'DELETE' THEN
-                v_work_date := DATE(OLD.timestamp);
+                SELECT w.assignment_date
+                INTO v_work_date
+                FROM ops.worker_daily_stage_assignments w
+                WHERE w.daily_assignment_id = OLD.daily_assignment_id;
             ELSE
-                v_work_date := DATE(NEW.timestamp);
+                SELECT w.assignment_date
+                INTO v_work_date
+                FROM ops.worker_daily_stage_assignments w
+                WHERE w.daily_assignment_id = NEW.daily_assignment_id;
             END IF;
 
             IF v_work_date IS NOT NULL THEN
                 INSERT INTO reporting.worker_daily_stage_production_refresh_queue (work_date, queued_at)
                 VALUES (v_work_date, NOW())
-                ON CONFLICT (work_date) DO UPDATE SET queued_at = NOW();
+                ON CONFLICT (work_date) DO UPDATE SET queued_at = LEAST(
+                    reporting.worker_daily_stage_production_refresh_queue.queued_at,
+                    EXCLUDED.queued_at
+                );
             END IF;
 
             IF TG_OP = 'DELETE' THEN
@@ -1651,7 +1942,10 @@ def create_summary_refresh_functions():
             IF v_work_date IS NOT NULL THEN
                 INSERT INTO reporting.worker_daily_stage_production_refresh_queue (work_date, queued_at)
                 VALUES (v_work_date, NOW())
-                ON CONFLICT (work_date) DO UPDATE SET queued_at = NOW();
+                ON CONFLICT (work_date) DO UPDATE SET queued_at = LEAST(
+                    reporting.worker_daily_stage_production_refresh_queue.queued_at,
+                    EXCLUDED.queued_at
+                );
             END IF;
 
             IF TG_OP = 'DELETE' THEN
@@ -1668,6 +1962,44 @@ def create_summary_refresh_functions():
             AFTER INSERT OR UPDATE OR DELETE ON ops.worker_overtime_history
             FOR EACH ROW
             EXECUTE FUNCTION reporting.queue_worker_daily_stage_production_refresh_from_overtime();
+        """,
+
+        """
+        -- If final-stage mapping changes, only refresh today's reporting rows.
+        DROP TRIGGER IF EXISTS trigger_queue_worker_daily_stage_production_refresh_stages ON core.sewing_line_stages;
+        """,
+
+        """
+        CREATE OR REPLACE FUNCTION reporting.queue_worker_daily_stage_production_refresh_from_stage_updates()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            -- Only apply to today's reporting snapshot; historical days stay untouched.
+            IF TG_OP = 'INSERT' OR (TG_OP = 'UPDATE' AND NEW.is_in_final_stage IS DISTINCT FROM OLD.is_in_final_stage) THEN
+                UPDATE reporting.worker_daily_stage_production r
+                SET
+                    is_final_stage = COALESCE(NEW.is_in_final_stage, FALSE),
+                    last_calculated_at = NOW()
+                WHERE r.stage_id = NEW.stage_id
+                  AND r.work_date = CURRENT_DATE;
+
+                INSERT INTO reporting.worker_daily_stage_production_refresh_queue (work_date, queued_at)
+                VALUES (CURRENT_DATE, NOW())
+                ON CONFLICT (work_date) DO UPDATE SET queued_at = LEAST(
+                    reporting.worker_daily_stage_production_refresh_queue.queued_at,
+                    EXCLUDED.queued_at
+                );
+            END IF;
+
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+        """,
+
+        """
+        CREATE TRIGGER trigger_queue_worker_daily_stage_production_refresh_stages
+            AFTER INSERT OR UPDATE OF is_in_final_stage ON core.sewing_line_stages
+            FOR EACH ROW
+            EXECUTE FUNCTION reporting.queue_worker_daily_stage_production_refresh_from_stage_updates();
         """,
 
         """
@@ -1695,54 +2027,38 @@ def create_summary_refresh_functions():
                 DELETE FROM reporting.worker_daily_stage_production
                 WHERE work_date = v_work_date;
 
-                WITH active_assignments AS (
+                WITH day_assignments AS (
                     SELECT
                         w.worker_id,
                         w.assignment_date AS work_date,
                         w.stage_id,
                         w.daily_assignment_id,
-                        w.created_at,
                         COALESCE(w.working_hours, 0)::double precision AS working_hours_val,
-                        COALESCE(st.production_qty, 0)::double precision AS production_qty
+                        COALESCE(st.production_qty, 0)::double precision AS production_qty,
+                        COALESCE(st.is_in_final_stage, FALSE) AS is_in_final_stage
                     FROM ops.worker_daily_stage_assignments w
                     JOIN core.sewing_line_stages st
                       ON st.stage_id = w.stage_id
                     WHERE w.assignment_date = v_work_date
                 ),
-                base AS (
-                    SELECT
-                        worker_id,
-                        work_date,
-                        stage_id,
-                        daily_assignment_id,
-                        created_at,
-                        production_qty,
-                        FIRST_VALUE(working_hours_val) OVER (
-                            PARTITION BY worker_id, work_date
-                            ORDER BY created_at ASC NULLS FIRST, daily_assignment_id ASC
-                        ) AS first_working_hours,
-                        MIN(created_at) OVER (PARTITION BY worker_id, work_date) AS first_created_at,
-                        COUNT(*) OVER (PARTITION BY worker_id, work_date) AS assignment_count,
-                        LEAD(created_at) OVER (
-                            PARTITION BY worker_id, work_date
-                            ORDER BY created_at ASC NULLS FIRST, daily_assignment_id ASC
-                        ) AS next_created_at
-                    FROM active_assignments
-                ),
                 expected AS (
-                    -- `ops.worker_daily_stage_assignments.working_hours` is maintained
-                    -- as "total time spent in this stage for this day" (including
-                    -- remaining time for the currently active stage).
                     SELECT
                         worker_id,
                         work_date,
                         stage_id,
-                        COALESCE(ROUND(SUM(production_qty * working_hours_val)), 0)::int
-                            AS expected_output,
-                        -- Total elapsed hours for this worker/stage/day.
-                        COALESCE(ROUND(SUM(working_hours_val)::numeric, 2), 0)::double precision
-                            AS working_hours
-                    FROM active_assignments
+                        COALESCE(ROUND(SUM(production_qty * working_hours_val)), 0)::int AS expected_output,
+                        COALESCE(ROUND(SUM(working_hours_val)::numeric, 2), 0)::double precision AS working_hours,
+                        BOOL_OR(is_in_final_stage) AS is_final_stage
+                    FROM day_assignments
+                    GROUP BY worker_id, work_date, stage_id
+                ),
+                assignment_ref AS (
+                    SELECT
+                        worker_id,
+                        work_date,
+                        stage_id,
+                        MIN(daily_assignment_id) AS daily_assignment_id
+                    FROM day_assignments
                     GROUP BY worker_id, work_date, stage_id
                 ),
                 true_output AS (
@@ -1755,11 +2071,9 @@ def create_summary_refresh_functions():
                     JOIN ops.production_history ph
                       ON ph.daily_assignment_id = w.daily_assignment_id
                     WHERE w.assignment_date = v_work_date
-                      AND DATE(ph.timestamp) = v_work_date
                     GROUP BY w.worker_id, w.assignment_date, w.stage_id
                 ),
                 overtime_hours AS (
-                    -- Sum all overtime applications for this worker/stage/day.
                     SELECT
                         h.worker_id,
                         h.work_date,
@@ -1768,35 +2082,56 @@ def create_summary_refresh_functions():
                     FROM ops.worker_overtime_history h
                     WHERE h.work_date = v_work_date
                     GROUP BY h.worker_id, h.work_date, h.stage_id
+                ),
+                baseline AS (
+                    SELECT
+                        e.work_date,
+                        e.worker_id,
+                        e.stage_id,
+                        ar.daily_assignment_id,
+                        e.expected_output,
+                        COALESCE(t.true_output, 0) AS true_output,
+                        COALESCE(e.working_hours, 0) AS working_hours,
+                        COALESCE(o.overtime_hours, 0) AS overtime_hours,
+                        COALESCE(e.is_final_stage, FALSE) AS is_final_stage
+                    FROM expected e
+                    LEFT JOIN assignment_ref ar
+                      ON ar.work_date = e.work_date
+                     AND ar.worker_id = e.worker_id
+                     AND ar.stage_id = e.stage_id
+                    LEFT JOIN true_output t
+                      ON t.work_date = e.work_date
+                     AND t.worker_id = e.worker_id
+                     AND t.stage_id = e.stage_id
+                    LEFT JOIN overtime_hours o
+                      ON o.work_date = e.work_date
+                     AND o.worker_id = e.worker_id
+                     AND o.stage_id = e.stage_id
                 )
                 INSERT INTO reporting.worker_daily_stage_production (
                     work_date,
                     worker_id,
                     stage_id,
+                    daily_assignment_id,
                     expected_output,
                     true_output,
                     working_hours,
                     overtime_hours,
+                    is_final_stage,
                     last_calculated_at
                 )
                 SELECT
-                    e.work_date,
-                    e.worker_id,
-                    e.stage_id,
-                    e.expected_output,
-                    COALESCE(t.true_output, 0) AS true_output,
-                    COALESCE(e.working_hours, 0) AS working_hours,
-                    COALESCE(o.overtime_hours, 0) AS overtime_hours,
+                    b.work_date,
+                    b.worker_id,
+                    b.stage_id,
+                    b.daily_assignment_id,
+                    b.expected_output,
+                    b.true_output,
+                    b.working_hours,
+                    b.overtime_hours,
+                    b.is_final_stage,
                     NOW() AS last_calculated_at
-                FROM expected e
-                LEFT JOIN true_output t
-                  ON t.work_date = e.work_date
-                 AND t.worker_id = e.worker_id
-                 AND t.stage_id = e.stage_id
-                LEFT JOIN overtime_hours o
-                  ON o.work_date = e.work_date
-                 AND o.worker_id = e.worker_id
-                 AND o.stage_id = e.stage_id;
+                FROM baseline b;
             END LOOP;
 
             DELETE FROM reporting.worker_daily_stage_production_refresh_queue

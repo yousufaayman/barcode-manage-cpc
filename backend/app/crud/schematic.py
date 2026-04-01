@@ -16,12 +16,14 @@ def create_schematic(db: Session, schematic: schemas.SewingLineSchematicCreate):
     db.add(db_schematic)
     db.flush()  # get schematic_id without committing
     if schematic.stages:
+        max_stage_order = max((s.stage_order for s in schematic.stages), default=None)
         for s in schematic.stages:
             stage = models.SewingLineStage(
                 schematic_id=db_schematic.schematic_id,
                 stage_name=s.stage_name,
                 stage_order=s.stage_order,
                 production_qty=s.production_qty,
+                is_in_final_stage=(max_stage_order is not None and s.stage_order == max_stage_order),
                 active=s.active,
             )
             db.add(stage)
@@ -72,6 +74,7 @@ def update_schematic(db: Session, schematic_id: int, data: schemas.SewingLineSch
     # inconsistent production history and worker assignments.
     if "stages" in set_fields and set_fields["stages"] is not None:
         new_stages = set_fields["stages"]
+        max_stage_order = max((s["stage_order"] for s in new_stages), default=None)
 
         # Group existing stages by stage_name; within each name sort by (stage_order, stage_id)
         existing_stages = (
@@ -92,6 +95,7 @@ def update_schematic(db: Session, schematic_id: int, data: schemas.SewingLineSch
             stage_name = s["stage_name"]
             stage_order = s["stage_order"]
             production_qty = s.get("production_qty")
+            is_in_final_stage = (max_stage_order is not None and stage_order == max_stage_order)
             active = s.get("active", True)
 
             queue = by_name.get(stage_name)
@@ -100,6 +104,7 @@ def update_schematic(db: Session, schematic_id: int, data: schemas.SewingLineSch
                 existing = queue.pop(0)
                 existing.stage_order = stage_order
                 existing.production_qty = production_qty
+                existing.is_in_final_stage = is_in_final_stage
                 existing.active = active
             else:
                 # New stage for this schematic
@@ -108,6 +113,7 @@ def update_schematic(db: Session, schematic_id: int, data: schemas.SewingLineSch
                     stage_name=stage_name,
                     stage_order=stage_order,
                     production_qty=production_qty,
+                    is_in_final_stage=is_in_final_stage,
                     active=active,
                 )
                 db.add(stage)

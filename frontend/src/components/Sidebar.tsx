@@ -71,7 +71,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
   );
 
   return (
-    <div className={`bg-white ${isCollapsed ? 'w-20' : 'w-64'} h-full shadow-lg border-r border-gray-200 flex flex-col transition-all duration-300 relative`}>
+    <div
+      className={`bg-white ${isCollapsed ? 'w-20' : 'w-64'} h-full md:h-full max-h-[100dvh] shadow-lg border-r border-gray-200 flex flex-col transition-all duration-300 relative`}
+    >
       <button
         onClick={onClose}
         className="md:hidden absolute top-4 right-4 p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
@@ -102,7 +104,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
         </div>
       </div>
       
-      <nav className={`flex-1 p-4 space-y-2 ${isCollapsed ? 'px-2' : ''}`}>
+      <nav
+        className={`flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-2 ${isCollapsed ? 'px-2' : ''}`}
+      >
         <div className="mb-4">
           <h3 className={`text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2 ${isCollapsed ? 'hidden' : ''}`}>
             {t('navigation.mainNavigation')}

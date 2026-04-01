@@ -711,12 +711,13 @@ def get_batch_production_daily_assignments(
     return [
         schemas.BatchProductionDailyAssignmentOption(
             daily_assignment_id=daid,
+            worker_id=worker_id,
             worker_name=worker_name,
             stage_name=stage_name,
             quantity_produced=qty,
             assignment_date=asgn_date,
         )
-        for daid, worker_name, stage_name, qty, asgn_date in rows
+        for daid, worker_id, worker_name, stage_name, qty, asgn_date in rows
     ]
 
 
@@ -1368,6 +1369,12 @@ def create_second_degree_batches(
     job_order = get_job_order(db, job_order_id=request.job_order_id)
     if not job_order:
         raise HTTPException(status_code=404, detail=f"Job order {request.job_order_id} not found")
+
+    qc_phase = db.query(models.ProductionPhase).filter(
+        models.ProductionPhase.phase_name.ilike('qc%')
+    ).order_by(models.ProductionPhase.phase_id).first()
+    if not qc_phase:
+        raise HTTPException(status_code=400, detail="QC phase not found")
     
     created_batches = []
     duplicate_barcodes = []
@@ -1423,8 +1430,8 @@ def create_second_degree_batches(
                     color_id=job_order_item.color_id,
                     quantity=0,
                     layers=1,
-                    current_phase=1,
-                    status="In Progress",
+                    current_phase=qc_phase.phase_id,
+                    status="Pending",
                     is_second_degree=True
                 )
                 

@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .api.v1.api import api_router
 from .db.init_db import init_db, create_initial_admin
-from .database import create_triggers_and_functions
+from .database import create_triggers_and_functions, create_summary_refresh_functions
 from .crud import get_users_with_role_in_system
 from .core.config import settings
 from .utils.pool_manager import ConnectionPoolManager
@@ -80,11 +80,20 @@ async def startup_event():
     
     # Initialize database
     init_db()
-    # Ensure triggers/functions are up to date
+    # Ensure triggers/functions are up to date (ops batch triggers, etc.)
     try:
         create_triggers_and_functions()
     except Exception as e:
         logger.warning(f"Could not create DB triggers/functions: {e}")
+
+    # Reporting refresh: queue table, triggers on assignments/production_history, and
+    # reporting.refresh_worker_daily_stage_production / refresh_stale_summaries live here.
+    # This must run on startup — it is not part of create_triggers_and_functions().
+    try:
+        create_summary_refresh_functions()
+        logger.info("Summary/reporting refresh functions and triggers applied")
+    except Exception as e:
+        logger.warning(f"Could not create summary/reporting refresh functions: {e}")
     
     # Verify admin user exists in OPS system
     verify_admin_user_exists()

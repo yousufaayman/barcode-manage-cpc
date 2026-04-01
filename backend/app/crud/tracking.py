@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from .batch import get_batch_by_barcode
+from .tracking_math import _calc_active_from_elapsed, _calc_elapsed_from_active
 
 
 def _compute_time_weighted_expected_per_stage(
@@ -163,7 +164,11 @@ def get_max_allowed_quantity(
     return (max_allowed, total_already)
 
 
-def get_assignments_for_date(db: Session, assignment_date: date, active_only: bool = True):
+def get_assignments_for_date(
+    db: Session,
+    assignment_date: date,
+    active_only: bool = True,
+):
     """List daily assignments for a date with worker name, stage name, schematic name.
     If active_only is True (default), only assignments with active=True are returned,
     so at most one assignment per stage per date (enforcing one active worker per stage)."""
@@ -207,6 +212,7 @@ def get_or_create_assignment(
     """
     existing_stage = (
         db.query(models.WorkerDailyStageAssignment)
+        .with_for_update()
         .filter(
             and_(
                 models.WorkerDailyStageAssignment.assignment_date == assignment_date,
@@ -228,8 +234,57 @@ def get_or_create_assignment(
 
     now = datetime.now()
 
+    def _get_worker_total_hours(target_worker_id: int, fallback_stage_id: int) -> float:
+        worker_group_hours = (
+            db.query(models.WorkersGroup.working_hours)
+            .join(
+                models.Worker,
+                models.Worker.worker_group_id == models.WorkersGroup.group_id,
+            )
+            .filter(models.Worker.worker_id == target_worker_id)
+            .scalar()
+        )
+        if worker_group_hours is not None:
+            return float(worker_group_hours)
+        stage_schematic_hours = (
+            db.query(models.SewingLineSchematic.working_hours)
+            .join(
+                models.SewingLineStage,
+                models.SewingLineStage.schematic_id
+                == models.SewingLineSchematic.schematic_id,
+            )
+            .filter(models.SewingLineStage.stage_id == fallback_stage_id)
+            .scalar()
+        )
+        return float(stage_schematic_hours or 0.0)
+
+    def _elapsed_from(ts: Optional[datetime]) -> float:
+        if ts is None:
+            return 0.0
+        return max(0.0, (now - ts).total_seconds() / 3600.0)
+
+    def _remaining(total_hours: float, elapsed_hours: float) -> float:
+        return max(0.0, float(total_hours) - float(elapsed_hours))
+
+    # Active assignment currently occupying this stage/date (different worker).
+    active_stage_other = (
+        db.query(models.WorkerDailyStageAssignment)
+        .with_for_update()
+        .filter(
+            and_(
+                models.WorkerDailyStageAssignment.assignment_date == assignment_date,
+                models.WorkerDailyStageAssignment.stage_id == stage_id,
+                models.WorkerDailyStageAssignment.active.is_(True),
+                models.WorkerDailyStageAssignment.worker_id != worker_id,
+            )
+        )
+        .order_by(models.WorkerDailyStageAssignment.created_at.desc())
+        .first()
+    )
+
     worker_day_assignments = (
         db.query(models.WorkerDailyStageAssignment)
+        .with_for_update()
         .filter(
             models.WorkerDailyStageAssignment.assignment_date == assignment_date,
             models.WorkerDailyStageAssignment.worker_id == worker_id,
@@ -238,32 +293,35 @@ def get_or_create_assignment(
         .all()
     )
 
-    # First assignment of the day: inherit the total available working hours.
+    # Standardized elapsed anchor for the whole day (all workers/stages/schematics):
+    # first daily assignment created_at for this date.
+    day_anchor_created_at = (
+        db.query(func.min(models.WorkerDailyStageAssignment.created_at))
+        .filter(models.WorkerDailyStageAssignment.assignment_date == assignment_date)
+        .scalar()
+    )
+    elapsed_standard_day = _elapsed_from(day_anchor_created_at)
+
+    # First assignment of the day: inherit total available working hours.
+    # If this stage is being handed over from another worker on the same date,
+    # use remaining hours for the new worker and elapsed hours for the replaced one.
     if not worker_day_assignments:
-        worker_group_working_hours = (
-            db.query(models.WorkersGroup.working_hours)
-            .join(
-                models.Worker,
-                models.Worker.worker_group_id == models.WorkersGroup.group_id,
-            )
-            .filter(models.Worker.worker_id == worker_id)
-            .scalar()
-        )
-        schematic_working_hours = (
-            db.query(models.SewingLineSchematic.working_hours)
-            .join(
-                models.SewingLineStage,
-                models.SewingLineStage.schematic_id
-                == models.SewingLineSchematic.schematic_id,
-            )
-            .filter(models.SewingLineStage.stage_id == stage_id)
-            .scalar()
-        )
-        inherited_total_hours = (
-            float(worker_group_working_hours)
-            if worker_group_working_hours is not None
-            else float(schematic_working_hours or 0.0)
-        )
+        inherited_total_hours = _get_worker_total_hours(worker_id, stage_id)
+
+        if active_stage_other and active_stage_other.created_at is not None:
+            elapsed_hours = elapsed_standard_day
+            inherited_total_hours = _remaining(inherited_total_hours, elapsed_hours)
+
+            # Old assignment should only be recalculated when still active.
+            if getattr(active_stage_other, "active", False):
+                outgoing_total_hours = _get_worker_total_hours(
+                    active_stage_other.worker_id, stage_id
+                )
+                outgoing_current_hours = float(active_stage_other.working_hours or 0.0)
+                active_stage_other.working_hours = _calc_elapsed_from_active(
+                    outgoing_current_hours, outgoing_total_hours, elapsed_hours
+                )
+                active_stage_other.active = False
 
         assignment = models.WorkerDailyStageAssignment(
             assignment_date=assignment_date,
@@ -278,60 +336,71 @@ def get_or_create_assignment(
         db.refresh(assignment)
         return assignment, True
 
-    # Compute day end time as: first_created_at + total_available_hours
+    # Compute remaining using standardized elapsed anchor for this day.
     first_row = worker_day_assignments[0]
-    worker_group_working_hours = (
-        db.query(models.WorkersGroup.working_hours)
-        .join(
-            models.Worker,
-            models.Worker.worker_group_id == models.WorkersGroup.group_id,
-        )
-        .filter(models.Worker.worker_id == worker_id)
-        .scalar()
-    )
-    if worker_group_working_hours is not None:
-        total_available_hours = float(worker_group_working_hours)
-    else:
-        first_schematic_working_hours = (
-            db.query(models.SewingLineSchematic.working_hours)
-            .join(
-                models.SewingLineStage,
-                models.SewingLineStage.schematic_id
-                == models.SewingLineSchematic.schematic_id,
-            )
-            .filter(models.SewingLineStage.stage_id == first_row.stage_id)
-            .scalar()
-        )
-        total_available_hours = float(first_schematic_working_hours or 0.0)
-
-    end_time = first_row.created_at + timedelta(hours=total_available_hours)
-    remaining_at_event = max(
-        0.0, (end_time - now).total_seconds() / 3600.0
-    )
+    total_available_hours = _get_worker_total_hours(worker_id, first_row.stage_id)
+    elapsed_worker_day = elapsed_standard_day
+    remaining_at_event = _remaining(total_available_hours, elapsed_worker_day)
 
     # Determine previous/current stage using the most recently activated row.
     prev_row = worker_day_assignments[-1]
     is_stage_switch = prev_row.stage_id != stage_id
 
     if not is_stage_switch and existing_stage:
-        # Idempotent call: worker already at this stage.
-        existing_stage.active = True
+        if active_stage_other:
+            # Worker switching on same stage/date.
+            elapsed_at_event = elapsed_standard_day
+            incoming_total_hours = _get_worker_total_hours(worker_id, stage_id)
+            incoming_remaining = _remaining(incoming_total_hours, elapsed_at_event)
+
+            # Switch-back to existing worker assignment: add remaining to existing elapsed.
+            if not getattr(existing_stage, "active", False):
+                existing_stage.working_hours = float(existing_stage.working_hours or 0.0) + incoming_remaining
+            existing_stage.active = True
+
+            # Old assignment should only be recalculated when still active.
+            if getattr(active_stage_other, "active", False):
+                outgoing_total_hours = _get_worker_total_hours(
+                    active_stage_other.worker_id, stage_id
+                )
+                outgoing_current_hours = float(active_stage_other.working_hours or 0.0)
+                active_stage_other.working_hours = _calc_elapsed_from_active(
+                    outgoing_current_hours, outgoing_total_hours, elapsed_at_event
+                )
+                active_stage_other.active = False
+        else:
+            # Idempotent call: worker already at this stage.
+            existing_stage.active = True
         db.commit()
         db.refresh(existing_stage)
         return existing_stage, False
 
     # Stage switch: convert previous stage remaining into elapsed time by
     # subtracting the new remaining-at-event.
-    prev_working_hours = float(prev_row.working_hours or 0.0)
-    prev_row.working_hours = max(0.0, prev_working_hours - remaining_at_event)
-    prev_row.active = True
+    if getattr(prev_row, "active", False):
+        prev_working_hours = float(prev_row.working_hours or 0.0)
+        prev_row.working_hours = _calc_elapsed_from_active(
+            prev_working_hours, total_available_hours, elapsed_worker_day
+        )
+        prev_row.active = False
+
+    if active_stage_other:
+        target_stage_elapsed = elapsed_standard_day
+        if getattr(active_stage_other, "active", False):
+            outgoing_total_hours = _get_worker_total_hours(
+                active_stage_other.worker_id, stage_id
+            )
+            outgoing_current_hours = float(active_stage_other.working_hours or 0.0)
+            active_stage_other.working_hours = _calc_elapsed_from_active(
+                outgoing_current_hours, outgoing_total_hours, target_stage_elapsed
+            )
+            active_stage_other.active = False
 
     if existing_stage:
         # Reactivation of a stage: add the remaining time until end_time to
         # the stage's accumulated elapsed time.
         existing_working_hours = float(existing_stage.working_hours or 0.0)
         existing_stage.working_hours = existing_working_hours + remaining_at_event
-        existing_stage.created_at = now
         existing_stage.active = True
         db.commit()
         db.refresh(existing_stage)
@@ -472,19 +541,21 @@ def get_daily_assignments_from_batch_production_history(
     db: Session,
     batch_id: int,
     phase_id: Optional[int] = None,
-) -> List[Tuple[int, str, str, int, Optional[date]]]:
+) -> List[Tuple[int, int, str, str, int, Optional[date]]]:
     """
     Get daily assignments with production for a batch from production_history.
-    Returns list of (daily_assignment_id, worker_name, stage_name, quantity_produced, assignment_date).
+    Returns list of (daily_assignment_id, worker_id, worker_name, stage_name, quantity_produced, assignment_date).
     If phase_id is provided, filters to assignments whose stage belongs to that production phase.
     Used for the responsible-phase dropdown when phase type is sewing.
     """
     q = (
         db.query(
             models.WorkerDailyStageAssignment.daily_assignment_id,
+            models.Worker.worker_id,
             models.Worker.worker_name,
             models.SewingLineStage.stage_name,
-            models.ProductionHistory.quantity_produced,
+            models.SewingLineStage.stage_order,
+            func.sum(models.ProductionHistory.quantity_produced).label("quantity_produced"),
             models.WorkerDailyStageAssignment.assignment_date,
         )
         .join(
@@ -504,7 +575,15 @@ def get_daily_assignments_from_batch_production_history(
         q = q.filter(models.SewingLineSchematic.production_phase_id == phase_id)
 
     rows = (
-        q.order_by(
+        q.group_by(
+            models.WorkerDailyStageAssignment.daily_assignment_id,
+            models.Worker.worker_id,
+            models.Worker.worker_name,
+            models.SewingLineStage.stage_name,
+            models.SewingLineStage.stage_order,
+            models.WorkerDailyStageAssignment.assignment_date,
+        )
+        .order_by(
             models.SewingLineStage.stage_order.asc(),
             models.Worker.worker_name.asc(),
         )
@@ -513,6 +592,7 @@ def get_daily_assignments_from_batch_production_history(
     return [
         (
             r.daily_assignment_id,
+            r.worker_id,
             r.worker_name or "",
             r.stage_name or "",
             r.quantity_produced,
@@ -734,16 +814,13 @@ def get_schematic_work_for_phase_range(
     Compute expected and true work per schematic in a phase over a date range.
 
     - Only active schematics in the phase are included.
-    - Expected hourly work per schematic = its hourly_production (or 0).
-    - Expected quantity per schematic = working_hours * hourly_production * working_days_count,
-      where working_days_count is the number of distinct assignment dates in the range that
-      have at least one active assignment for this phase (same definition as
-      get_phase_expected_work_for_range).
-    - True quantity per schematic = sum of quantity_produced over the date range for production
-      on the *last stage* of that schematic.
-    - True hourly work per schematic is based on the same total_possible_working_hours that
-      get_phase_expected_work_for_range uses for the whole phase; each schematic's share is
-      proportional to its configured daily working_hours.
+    - Expected quantity per schematic uses schematic config only:
+      hourly_production * adjusted_working_hours.
+    - adjusted_working_hours = base schematic hours in the range + overtime hours.
+      Overtime hours are added only when an overtime entry's (stage_id, work_date)
+      matches a final-stage row from reporting.worker_daily_stage_production.
+    - True quantity/hourly come from reporting.worker_daily_stage_production
+      final-stage rows in range.
     """
     if start_date > end_date:
         return []
@@ -759,11 +836,6 @@ def get_schematic_work_for_phase_range(
     )
     if not schematics:
         return []
-
-    schematic_ids = [s.schematic_id for s in schematics]
-    schematic_by_id: Dict[int, models.SewingLineSchematic] = {
-        s.schematic_id: s for s in schematics
-    }
 
     # Per-schematic working dates: distinct dates in range with at least one active
     # assignment for that schematic (same definition as phase-level, but scoped).
@@ -797,67 +869,6 @@ def get_schematic_work_for_phase_range(
             schematic_working_dates[sid] = set()
         schematic_working_dates[sid].add(d)
 
-    # Phase-level: hours elapsed today, reused for all schematics that work today.
-    today = date.today()
-    midnight_today = datetime.combine(today, dt_time.min)
-    now = datetime.now()
-    hours_elapsed_today = max(
-        0.0, (now - midnight_today).total_seconds() / 3600.0
-    )
-
-    # Subquery: last stage per schematic (max stage_order)
-    last_stage_subq = (
-        db.query(
-            models.SewingLineStage.schematic_id.label("schematic_id"),
-            func.max(models.SewingLineStage.stage_order).label("max_order"),
-        )
-        .filter(models.SewingLineStage.schematic_id.in_(schematic_ids))
-        .group_by(models.SewingLineStage.schematic_id)
-        .subquery()
-    )
-
-    # Aggregate true production on last stages per schematic for assignments in date range
-    true_rows = (
-        db.query(
-            models.SewingLineSchematic.schematic_id.label("schematic_id"),
-            func.coalesce(
-                func.sum(models.ProductionHistory.quantity_produced), 0
-            ).label("total"),
-        )
-        .join(
-            models.SewingLineStage,
-            models.SewingLineStage.schematic_id == models.SewingLineSchematic.schematic_id,
-        )
-        .join(
-            last_stage_subq,
-            and_(
-                models.SewingLineStage.schematic_id == last_stage_subq.c.schematic_id,
-                models.SewingLineStage.stage_order == last_stage_subq.c.max_order,
-            ),
-        )
-        .join(
-            models.WorkerDailyStageAssignment,
-            models.WorkerDailyStageAssignment.stage_id == models.SewingLineStage.stage_id,
-        )
-        .join(
-            models.ProductionHistory,
-            models.ProductionHistory.daily_assignment_id
-            == models.WorkerDailyStageAssignment.daily_assignment_id,
-        )
-        .filter(
-            models.SewingLineSchematic.production_phase_id == phase_id,
-            models.WorkerDailyStageAssignment.assignment_date >= start_date,
-            models.WorkerDailyStageAssignment.assignment_date <= end_date,
-        )
-        .group_by(models.SewingLineSchematic.schematic_id)
-        .all()
-    )
-
-    true_totals: Dict[int, int] = {}
-    for row in true_rows:
-        sid = int(row.schematic_id)
-        true_totals[sid] = int(row.total or 0)
-
     results: List[Dict[str, object]] = []
     for schematic in schematics:
         sid = int(schematic.schematic_id)
@@ -865,20 +876,39 @@ def get_schematic_work_for_phase_range(
         hourly = schematic.hourly_production or 0
         wh = float(schematic.working_hours) if schematic.working_hours is not None else 0.0
 
-        expected_hourly = float(hourly) if hourly else 0.0
         # Working days and possible hours are computed per schematic, based on
         # assignments that actually used this schematic in the range.
         working_dates = schematic_working_dates.get(sid, set())
         working_days_count = len(working_dates)
 
-        expected_quantity = 0
-        if wh > 0 and hourly > 0 and working_days_count > 0:
-            expected_quantity = int(wh * hourly * working_days_count)
+        # Reporting-side true/working-hours over final-stage rows in date range.
+        reporting_row = (
+            db.query(
+                func.coalesce(func.sum(models.WorkerDailyStageProduction.true_output), 0).label("true_sum"),
+                func.coalesce(func.sum(models.WorkerDailyStageProduction.working_hours), 0).label("working_hours_sum"),
+            )
+            .join(
+                models.SewingLineStage,
+                models.WorkerDailyStageProduction.stage_id == models.SewingLineStage.stage_id,
+            )
+            .filter(
+                models.SewingLineStage.schematic_id == sid,
+                models.WorkerDailyStageProduction.work_date >= start_date,
+                models.WorkerDailyStageProduction.work_date <= end_date,
+                models.WorkerDailyStageProduction.is_final_stage.is_(True),
+            )
+            .first()
+        )
+        reporting_true_quantity = int(reporting_row.true_sum or 0) if reporting_row else 0
+        final_stage_working_hours = float(reporting_row.working_hours_sum or 0.0) if reporting_row else 0.0
 
-        true_quantity = true_totals.get(sid, 0)
-
-        # Total possible working hours for this schematic, using the same
-        # \"today partial\" logic as the phase-level function but scoped.
+        # Base hours in range using schematic working hours with "today partial" logic.
+        today = date.today()
+        midnight_today = datetime.combine(today, dt_time.min)
+        now = datetime.now()
+        hours_elapsed_today = max(
+            0.0, (now - midnight_today).total_seconds() / 3600.0
+        )
         if (
             end_date >= today
             and today in working_dates
@@ -887,12 +917,51 @@ def get_schematic_work_for_phase_range(
         ):
             capped_today_hours = min(hours_elapsed_today, wh)
             full_days = working_days_count - 1
-            possible_hours = full_days * wh + capped_today_hours
+            base_hours = full_days * wh + capped_today_hours
         else:
-            possible_hours = working_days_count * wh
+            base_hours = working_days_count * wh
 
+        # Add overtime hours only for entries matching final-stage rows by (stage_id, work_date).
+        overtime_row = (
+            db.query(
+                func.coalesce(func.sum(models.WorkerOvertimeHistory.overtime_hours), 0).label("overtime_sum")
+            )
+            .join(
+                models.WorkerDailyStageProduction,
+                and_(
+                    models.WorkerDailyStageProduction.stage_id == models.WorkerOvertimeHistory.stage_id,
+                    models.WorkerDailyStageProduction.work_date == models.WorkerOvertimeHistory.work_date,
+                ),
+            )
+            .join(
+                models.SewingLineStage,
+                models.WorkerDailyStageProduction.stage_id == models.SewingLineStage.stage_id,
+            )
+            .filter(
+                models.SewingLineStage.schematic_id == sid,
+                models.WorkerDailyStageProduction.work_date >= start_date,
+                models.WorkerDailyStageProduction.work_date <= end_date,
+                models.WorkerDailyStageProduction.is_final_stage.is_(True),
+            )
+            .first()
+        )
+        overtime_hours_total = float(overtime_row.overtime_sum or 0.0) if overtime_row else 0.0
+        expected_hours_total = max(0.0, base_hours + overtime_hours_total)
+
+        expected_hourly = float(hourly) if hourly else 0.0
+        expected_quantity = (
+            int(round(expected_hourly * expected_hours_total))
+            if expected_hourly > 0 and expected_hours_total > 0
+            else 0
+        )
+
+        true_quantity = reporting_true_quantity
+
+        # True hourly uses final-stage working hours from reporting rows in range.
         true_hourly = (
-            float(true_quantity) / possible_hours if possible_hours > 0 else 0.0
+            float(true_quantity) / final_stage_working_hours
+            if final_stage_working_hours > 0 and true_quantity > 0
+            else 0.0
         )
 
         efficiency_pct: Optional[float]

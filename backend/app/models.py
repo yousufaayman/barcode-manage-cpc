@@ -161,7 +161,11 @@ class Worker(Base):
     active = Column(Boolean, nullable=False, default=True, server_default='true')
 
     # Relationships
-    daily_assignments = relationship("WorkerDailyStageAssignment", back_populates="worker")
+    daily_assignments = relationship(
+        "WorkerDailyStageAssignment",
+        back_populates="worker",
+        foreign_keys="WorkerDailyStageAssignment.worker_id",
+    )
     worker_group = relationship("WorkersGroup", back_populates="workers")
 
 
@@ -203,6 +207,7 @@ class SewingLineStage(Base):
     stage_name = Column(String(255), nullable=False)
     stage_order = Column(Integer, nullable=False)
     production_qty = Column(Integer, nullable=True)
+    is_in_final_stage = Column(Boolean, nullable=False, default=False, server_default='false')
     active = Column(Boolean, nullable=False, default=True, server_default='true')
 
     # Relationships
@@ -314,6 +319,12 @@ class Batch(Base):
     phase_quantity_ledger = relationship("PhaseQuantityLedger", back_populates="batch")
     phase_history = relationship("BatchPhaseHistory", back_populates="batch", cascade="all, delete-orphan")
     production_history = relationship("ProductionHistory", back_populates="batch")
+    rework_batch_record = relationship(
+        "ReworkBatch",
+        foreign_keys="ReworkBatch.batch_id",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 class BarcodeScanEvent(Base):
     """Ops.barcode_scan_events"""
@@ -389,37 +400,48 @@ class BatchCompensation(Base):
     def __repr__(self):
         return f"<BatchCompensation {self.compensation_id}: Batch {self.batch_id}, Item {self.item_id}, Phase {self.phase_id}, Qty {self.quantity}>"
 
-class SingleIncrement(Base):
-    """Ops.single_increments - Tracks individual piece increments that increase batch quantities"""
-    __tablename__ = "single_increments"
-    __table_args__ = {'schema': 'ops'}
 
-    increment_id = Column(Integer, primary_key=True, index=True)
-    batch_id = Column(Integer, ForeignKey("ops.batches.batch_id", ondelete="CASCADE"), nullable=False, index=True)
-    incremented_from_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=True, index=True)
-    incremented_to_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=True, index=True)
-    incremented_from_phase_type = Column(String(50), nullable=True, index=True)
-    incremented_to_phase_type = Column(String(50), nullable=True, index=True)
-    responsible_daily_assignment_id = Column(
+class ReworkBatch(Base):
+    """Ops.rework_batches - Metadata row for a rework operational batch (ops.batches.batch_id)."""
+    __tablename__ = "rework_batches"
+    __table_args__ = {"schema": "ops"}
+
+    rework_batch_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    batch_id = Column(
         Integer,
-        ForeignKey("ops.worker_daily_stage_assignments.daily_assignment_id", ondelete="SET NULL"),
+        ForeignKey("ops.batches.batch_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    problem_stage_name = Column(String(255), nullable=False, index=True)
+    responsible_phase_id = Column(
+        Integer,
+        ForeignKey("core.production_phases.phase_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-    quantity = Column(Integer, nullable=False, default=1)
-    increment_type = Column(String(50), nullable=False, default='rejection_resolution')
-    incremented_by_user_id = Column(Integer, ForeignKey("core.users.id", ondelete="SET NULL"), nullable=True)
-    incremented_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
-    status_at_increment = Column(String(50), nullable=True, index=True)
+    printed = Column(Boolean, nullable=False, default=False, server_default="false")
 
-    batch = relationship("Batch")
-    incremented_from_phase = relationship("ProductionPhase", foreign_keys=[incremented_from_phase_id])
-    incremented_to_phase = relationship("ProductionPhase", foreign_keys=[incremented_to_phase_id])
-    responsible_daily_assignment = relationship("WorkerDailyStageAssignment", foreign_keys=[responsible_daily_assignment_id])
-    user = relationship("User")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    created_by_user_id = Column(Integer, ForeignKey("core.users.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    batch = relationship("Batch", foreign_keys=[batch_id], back_populates="rework_batch_record")
+    responsible_phase = relationship("ProductionPhase", foreign_keys=[responsible_phase_id])
+    created_by = relationship("User", foreign_keys=[created_by_user_id])
+    rejections = relationship(
+        "SingleRejection",
+        back_populates="rework_batch",
+        primaryjoin="ReworkBatch.batch_id == SingleRejection.new_batch_id",
+        foreign_keys="SingleRejection.new_batch_id",
+    )
 
     def __repr__(self):
-        return f"<SingleIncrement {self.increment_id}: Batch {self.batch_id}, Qty {self.quantity}, Type {self.increment_type}>"
+        return f"<ReworkBatch {self.rework_batch_id}: batch_id={self.batch_id} problem_stage={self.problem_stage_name}>"
+
+    @property
+    def barcode(self):
+        return self.batch.barcode if self.batch else None
 
 class SingleRejection(Base):
     """Ops.single_rejections - Tracks individual piece rejections that move items back between phases"""
@@ -431,9 +453,15 @@ class SingleRejection(Base):
     rejected_from_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=False, index=True)
     rejected_from_phase_type = Column(String(50), nullable=False, index=True)
     return_to_phase_id = Column(Integer, ForeignKey("core.production_phases.phase_id", ondelete="RESTRICT"), nullable=True, index=True)
-    responsible_daily_assignment_id = Column(
+    new_batch_id = Column(
         Integer,
-        ForeignKey("ops.worker_daily_stage_assignments.daily_assignment_id", ondelete="SET NULL"),
+        ForeignKey("ops.batches.batch_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    worker_id = Column(
+        Integer,
+        ForeignKey("core.workers.worker_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -443,13 +471,18 @@ class SingleRejection(Base):
     rejected_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
     status_at_rejection = Column(String(50), nullable=True, index=True)
     is_resolved = Column(Boolean, nullable=False, default=False)
-    resolved_quantity = Column(Integer, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
 
-    batch = relationship("Batch")
+    batch = relationship("Batch", foreign_keys=[batch_id])
     rejected_from_phase = relationship("ProductionPhase", foreign_keys=[rejected_from_phase_id])
     return_to_phase = relationship("ProductionPhase", foreign_keys=[return_to_phase_id])
-    responsible_daily_assignment = relationship("WorkerDailyStageAssignment", foreign_keys=[responsible_daily_assignment_id])
+    rework_batch = relationship(
+        "ReworkBatch",
+        primaryjoin="SingleRejection.new_batch_id == ReworkBatch.batch_id",
+        foreign_keys=[new_batch_id],
+        back_populates="rejections",
+    )
+    worker = relationship("Worker", foreign_keys=[worker_id])
     user = relationship("User")
 
     def __repr__(self):
@@ -500,7 +533,11 @@ class WorkerDailyStageAssignment(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
 
     # Relationships
-    worker = relationship("Worker", back_populates="daily_assignments")
+    worker = relationship(
+        "Worker",
+        back_populates="daily_assignments",
+        foreign_keys=[worker_id],
+    )
     stage = relationship("SewingLineStage", back_populates="daily_assignments")
     production_history_entries = relationship("ProductionHistory", back_populates="daily_assignment", cascade="all, delete-orphan")
 
@@ -819,6 +856,13 @@ class WorkerDailyStageProduction(Base):
         primary_key=True,
         index=True,
     )
+    # Assignment source used for true_output traceability/joining to production_history.
+    daily_assignment_id = Column(
+        Integer,
+        ForeignKey("ops.worker_daily_stage_assignments.daily_assignment_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     expected_output = Column(Integer, default=0, nullable=False)
     true_output = Column(Integer, default=0, nullable=False)
@@ -828,6 +872,8 @@ class WorkerDailyStageProduction(Base):
     # Overtime hours applied for this worker/stage/day.
     # Derived from ops.worker_overtime_history (can contain multiple request entries).
     overtime_hours = Column(DECIMAL(6, 2), default=0, nullable=False)
+    # Snapshot of whether this stage is marked as final stage at refresh time.
+    is_final_stage = Column(Boolean, default=False, nullable=False, server_default='false')
     last_calculated_at = Column(TIMESTAMP, nullable=True)
 
     def __repr__(self):

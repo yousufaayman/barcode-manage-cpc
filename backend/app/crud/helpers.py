@@ -18,6 +18,9 @@ def generate_barcode_string(job_order_id: int, size_id: int, color_id: int, laye
     
     Format: {job_order}-{size}-{color}-{layers}-{serial}
     
+    For cut-generated batches, ``layers`` packs cut sequence within the job order and roll (decimal):
+    ``cut_sequence * 100 + roll_number`` (roll 0..99). Bulk-upload batches use the spreadsheet layers count.
+    
     Note: client_id and model_id are removed from barcode but still displayed in printed labels.
     Quantity is also removed from barcode string.
     """
@@ -323,4 +326,3 @@ def get_next_serial_number(db: Session, job_order_id: int, size_id: int, color_i
     # Return the next serial number (starting from 1)
     return existing_count + 1
 
-# All barcode/row helpers and get_or_create functions from crud.py should be moved here with their full implementation. 

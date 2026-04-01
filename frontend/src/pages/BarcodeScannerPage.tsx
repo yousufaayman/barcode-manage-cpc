@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Layout from '../components/Layout';
-import { barcodeApi, jobOrderApi, incrementApi, BarcodeData } from '../services/api';
+import { barcodeApi, jobOrderApi, BarcodeData } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
 import { Label } from '../components/ui/label';
@@ -19,6 +19,67 @@ interface Phase {
   sequence_order?: number;
   type?: string;
 }
+
+const isBaseSewingPhase = (phase: Phase) =>
+  (phase.type || '').toLowerCase() === 'sewing' && phase.name.trim().toLowerCase() === 'sewing';
+
+const OTHER_REJECTION_REASON_VALUE = '__other__';
+
+const CUTTING_DEFECTS = [
+  'قصة ناقصة',
+  'قصة غير مكتملة / طبقات غير مفصولة',
+  'عدم انتظام الخطوط / الكارو عند القص',
+  'انقلاب وجه القماش',
+  'فورت ناقصة أو في موضع خاطئ',
+  'حافة متشعثة أو خشنة',
+  'تلوث أو علامات على القماش',
+  'قطعة خارج حدود التولرانس',
+  'خلط المقاسات داخل البنطة',
+  'اختلاف التيلة / الشيد',
+  'انحراف القصة عن خط الخيط',
+  'حافة غير منتظمة / قصة غير دقيقة',
+  'علامة الدريل ناقصة أو في موضع خاطئ',
+];
+
+const SEWING_DEFECTS = [
+  'غرزة واقعة / جمب ستيتش',
+  'خيط مقطوع في الغرزة',
+  'تكشكش / بقرة في الغرزة',
+  'غرزة ملتوية / منحرفة',
+  'بدل غير منتظم',
+  'غرزة مفتوحة',
+  'خياطة غير مستقيمة',
+  'عدم انتظام الخطوط / الكارو عند الغرزة',
+  'خلط القطع أو المقاسات',
+  'عملية ناقصة',
+  'هيم غير منتظم',
+  'لوكيت في موضع خاطئ أو منحرف',
+  'بارتاك ناقص أو في موضع خاطئ',
+  'خيوط غير مقصوصة',
+  'ثقوب الإبرة في القماش',
+  'عدد الغرز غير مطابق للمواصفات',
+];
+
+const isCuttingOrSewingPhase = (phase: Phase | null): boolean => {
+  if (!phase) return false;
+  const phaseType = (phase.type || '').toLowerCase();
+  const phaseName = (phase.name || '').toLowerCase();
+  const isCutting = phaseType === 'cutting' || phaseName.includes('cutting');
+  const isSewing = phaseType === 'sewing' || phaseName.includes('sewing');
+  return isCutting || isSewing;
+};
+
+/** Defect list only for cutting / sewing responsible phases; QC, packaging, and other types use phase name */
+const getRejectionDefectsForPhase = (phase: Phase | null) => {
+  if (!phase || !isCuttingOrSewingPhase(phase)) return [];
+  const phaseType = (phase.type || '').toLowerCase();
+  const phaseName = (phase.name || '').toLowerCase();
+  const isCutting = phaseType === 'cutting' || phaseName.includes('cutting');
+  const isSewing = phaseType === 'sewing' || phaseName.includes('sewing');
+  if (isCutting) return CUTTING_DEFECTS;
+  if (isSewing) return SEWING_DEFECTS;
+  return [];
+};
 
 interface SessionData {
   phase: number;
@@ -59,15 +120,14 @@ const BarcodeScannerPage: React.FC = () => {
   const [secondDegreeToggle, setSecondDegreeToggle] = useState(true);
   const [quantityDecrementType, setQuantityDecrementType] = useState<'rejection' | 'second_degree' | 'lost' | null>('second_degree');
   const [quantityDecrementReason, setQuantityDecrementReason] = useState<string>('');
+  const [quantityDecrementCustomReason, setQuantityDecrementCustomReason] = useState<string>('');
   const [quantityDecrementPhaseId, setQuantityDecrementPhaseId] = useState<number | null>(null);
+  /** Sewing-line stage + worker selection; worker_id is sent with quantity update for single_rejections.worker_id */
   const [quantityDecrementDailyAssignmentId, setQuantityDecrementDailyAssignmentId] = useState<number | null>(null);
-  const [batchProductionDailyAssignments, setBatchProductionDailyAssignments] = useState<Array<{daily_assignment_id: number; worker_name: string; stage_name: string; quantity_produced: number}>>([]);
-  const [isLoadingProductionStages, setIsLoadingProductionStages] = useState(false);
-  const [incrementDailyAssignmentId, setIncrementDailyAssignmentId] = useState<number | null>(null);
-  const [incrementDailyAssignments, setIncrementDailyAssignments] = useState<Array<{daily_assignment_id: number; worker_name: string; stage_name: string; quantity_produced: number}>>([]);
-  const [quantityIncrementReason, setQuantityIncrementReason] = useState<string>('');
-  const [incrementType, setIncrementType] = useState<'rejection_resolution'>('rejection_resolution');
-  const [incrementedFromPhaseId, setIncrementedFromPhaseId] = useState<number | null>(null);
+  const [decrementSewingDailyAssignments, setDecrementSewingDailyAssignments] = useState<
+    Array<{ daily_assignment_id: number; worker_id: number; worker_name: string; stage_name: string; quantity_produced: number }>
+  >([]);
+  const [isLoadingDecrementStages, setIsLoadingDecrementStages] = useState(false);
   const [visitedPhases, setVisitedPhases] = useState<Phase[]>([]);
   
   // Production Issues mode state
@@ -291,67 +351,39 @@ const BarcodeScannerPage: React.FC = () => {
     });
   }, []);
 
-  // Fetch production daily assignments for batch when responsible phase is sewing (for rejection dropdown)
+  // Load sewing-line daily assignments (stage + worker) when responsible phase is sewing — Update Quantity
   useEffect(() => {
-    if (!barcodeData?.batch_id || quantityDecrementPhaseId == null) {
-      setBatchProductionDailyAssignments([]);
+    if (mode !== 'updateQuantity' || !barcodeData?.batch_id || quantityDecrementPhaseId == null) {
+      setDecrementSewingDailyAssignments([]);
       setQuantityDecrementDailyAssignmentId(null);
       return;
     }
-    const selectedPhase = phases.find(p => p.id === quantityDecrementPhaseId);
-    if (!selectedPhase || (selectedPhase.type || '').toLowerCase() !== 'sewing') {
-      setBatchProductionDailyAssignments([]);
+    const fromPhase = phases.find((p) => p.id === quantityDecrementPhaseId);
+    if (!fromPhase || (fromPhase.type || '').toLowerCase() !== 'sewing') {
+      setDecrementSewingDailyAssignments([]);
       setQuantityDecrementDailyAssignmentId(null);
       return;
     }
     let cancelled = false;
-    setIsLoadingProductionStages(true);
-    barcodeApi.getBatchProductionDailyAssignments(barcodeData.batch_id, quantityDecrementPhaseId)
+    setIsLoadingDecrementStages(true);
+    barcodeApi
+      .getBatchProductionDailyAssignments(barcodeData.batch_id, quantityDecrementPhaseId)
       .then((assignments) => {
         if (!cancelled) {
-          setBatchProductionDailyAssignments(assignments);
+          setDecrementSewingDailyAssignments(assignments);
           setQuantityDecrementDailyAssignmentId(null);
         }
       })
       .catch(() => {
-        if (!cancelled) setBatchProductionDailyAssignments([]);
+        if (!cancelled) setDecrementSewingDailyAssignments([]);
       })
       .finally(() => {
-        if (!cancelled) setIsLoadingProductionStages(false);
+        if (!cancelled) setIsLoadingDecrementStages(false);
       });
-    return () => { cancelled = true; };
-  }, [barcodeData?.batch_id, quantityDecrementPhaseId, phases]);
-
-  // Fetch production daily assignments for batch when increment comes from sewing phase (for rejection resolution)
-  useEffect(() => {
-    if (!barcodeData?.batch_id || incrementedFromPhaseId == null) {
-      setIncrementDailyAssignments([]);
-      setIncrementDailyAssignmentId(null);
-      return;
-    }
-    const fromPhase = phases.find(p => p.id === incrementedFromPhaseId);
-    if (!fromPhase || (fromPhase.type || '').toLowerCase() !== 'sewing') {
-      setIncrementDailyAssignments([]);
-      setIncrementDailyAssignmentId(null);
-      return;
-    }
-    let cancelled = false;
-    setIsLoadingProductionStages(true);
-    barcodeApi.getBatchProductionDailyAssignments(barcodeData.batch_id, incrementedFromPhaseId)
-      .then((assignments) => {
-        if (!cancelled) {
-          setIncrementDailyAssignments(assignments);
-          setIncrementDailyAssignmentId(null);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setIncrementDailyAssignments([]);
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoadingProductionStages(false);
-      });
-    return () => { cancelled = true; };
-  }, [barcodeData?.batch_id, incrementedFromPhaseId, phases]);
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, barcodeData?.batch_id, quantityDecrementPhaseId, phases]);
 
   // Function to handle input mode switching
   const handleInputModeChange = (newMode: InputMode) => {
@@ -401,6 +433,7 @@ const BarcodeScannerPage: React.FC = () => {
         setQuantity(data.quantity);
         setQuantityDecrementType('second_degree');
         setQuantityDecrementReason('');
+        setQuantityDecrementPhaseId(null);
       }
 
       // Handle update mode (formerly sessions mode)
@@ -663,8 +696,6 @@ const BarcodeScannerPage: React.FC = () => {
         setQuantityDecrementType('second_degree');
         setQuantityDecrementReason('');
         setQuantityDecrementPhaseId(null);
-        setQuantityDecrementDailyAssignmentId(null);
-        setBatchProductionDailyAssignments([]);
         try {
           const visitedPhasesData = await barcodeApi.getBatchVisitedPhases(data.batch_id);
           const mappedPhases = visitedPhasesData.map(p => ({
@@ -807,6 +838,8 @@ const BarcodeScannerPage: React.FC = () => {
     setCurrentJobOrderItem(null);
     setShowIssueNoteDialog(false);
     setQuantityDecrementPhaseId(null);
+    setQuantityDecrementDailyAssignmentId(null);
+    setDecrementSewingDailyAssignments([]);
     setVisitedPhases([]);
     if (barcodeInputRef.current) {
       barcodeInputRef.current.focus();
@@ -905,6 +938,12 @@ const BarcodeScannerPage: React.FC = () => {
       return;
     }
 
+    const batchQty = barcodeData.quantity || 0;
+    if (quantity > batchQty) {
+      setError(t('barcode.updateQuantityExceedsBatch'));
+      return;
+    }
+
     setIsUpdatingQuantity(true);
     setError('');
 
@@ -913,101 +952,58 @@ const BarcodeScannerPage: React.FC = () => {
         quantity: quantity
       };
 
-      const oldQuantity = barcodeData.quantity || 0;
-      const isIncrement = quantity > oldQuantity;
-      const isDecrement = quantity < oldQuantity;
+      const isDecrement = quantity < batchQty;
 
-      if (isIncrement) {
-        const incrementAmount = quantity - oldQuantity;
-        
-        // Validate that rejection_resolution requires a phase selection
-        if (incrementType === 'rejection_resolution' && !incrementedFromPhaseId) {
-          setError(t('barcode.phaseRequiredForRejectionResolution'));
-          setIsUpdatingQuantity(false);
-          return;
-        }
-        
-        try {
-          const fromPhaseObj = incrementedFromPhaseId != null ? phases.find(p => p.id === incrementedFromPhaseId) : null;
-          const fromPhaseIsSewing = fromPhaseObj && (fromPhaseObj.type || '').toLowerCase() === 'sewing';
-          if (incrementType === 'rejection_resolution' && fromPhaseIsSewing && incrementDailyAssignmentId == null) {
+      if (isDecrement && quantityDecrementType) {
+        updatePayload.quantity_decrement_type = quantityDecrementType;
+        if (quantityDecrementType === 'rejection') {
+          const decPhase =
+            quantityDecrementPhaseId != null
+              ? phases.find((p) => p.id === quantityDecrementPhaseId)
+              : null;
+          const isSewingResponsiblePhase = (decPhase?.type || '').toLowerCase() === 'sewing';
+          if (isSewingResponsiblePhase && quantityDecrementDailyAssignmentId == null) {
             setError(t('barcode.responsibleStageRequired'));
             setIsUpdatingQuantity(false);
             return;
           }
-          let fromPhaseId: number | undefined;
-          if (incrementType === 'rejection_resolution' && incrementedFromPhaseId) {
-            const currentPhaseObj = phases.find(p => p.id === barcodeData.current_phase);
-            const selectedPhase = phases.find(p => p.id === incrementedFromPhaseId);
-
-            // Must be a real phase, not the current phase, and earlier in sequence order
-            if (!currentPhaseObj || !selectedPhase) {
-              setError(t('barcode.invalidPhaseSelection'));
-              setIsUpdatingQuantity(false);
-              return;
-            }
-
-            const currentSeq = currentPhaseObj.sequence_order ?? 999;
-            const selectedSeq = selectedPhase.sequence_order ?? 999;
-
-            if (selectedPhase.id === barcodeData.current_phase || selectedSeq >= currentSeq) {
-              setError(t('barcode.invalidPhaseSelection'));
-              setIsUpdatingQuantity(false);
-              return;
-            }
-
-            fromPhaseId = selectedPhase.id;
-          }
-          
-          await incrementApi.create({
-            batch_id: barcodeData.batch_id,
-            incremented_from_phase_id: fromPhaseId,
-            incremented_to_phase_id: barcodeData.current_phase,
-            responsible_daily_assignment_id: incrementDailyAssignmentId ?? undefined,
-            quantity: incrementAmount,
-            increment_type: incrementType,
-          });
-        } catch (incrementErr: any) {
-          console.error('Failed to create increment record:', incrementErr);
-          if (incrementErr.response?.data?.detail) {
-            // Check if it's a validation error about phase requirement
-            const errorDetail = incrementErr.response.data.detail;
-            if (typeof errorDetail === 'string' && errorDetail.includes('incremented_from_phase_id is required')) {
-              setError(t('barcode.phaseRequiredForRejectionResolution'));
-            } else {
-              setError(errorDetail);
-            }
+          let rejectionReasonToSave = '';
+          if (decPhase && isCuttingOrSewingPhase(decPhase)) {
+            rejectionReasonToSave =
+              quantityDecrementReason === OTHER_REJECTION_REASON_VALUE
+                ? quantityDecrementCustomReason.trim()
+                : quantityDecrementReason.trim();
+          } else if (decPhase) {
+            rejectionReasonToSave = (decPhase.name || '').trim();
           } else {
-            setError(t('barcode.failedToCreateIncrement'));
+            rejectionReasonToSave =
+              quantityDecrementReason === OTHER_REJECTION_REASON_VALUE
+                ? quantityDecrementCustomReason.trim()
+                : quantityDecrementReason.trim();
           }
-          setIsUpdatingQuantity(false);
-          return;
-        }
-        
-        if (quantityIncrementReason.trim()) {
-          updatePayload.quantity_increment_reason = quantityIncrementReason.trim();
-        }
-      }
-
-      if (isDecrement && quantityDecrementType) {
-        const decrementPhase = quantityDecrementPhaseId != null ? phases.find(p => p.id === quantityDecrementPhaseId) : null;
-        const isSewingResponsible = decrementPhase && (decrementPhase.type || '').toLowerCase() === 'sewing';
-        if (isSewingResponsible && quantityDecrementDailyAssignmentId == null) {
-          setError(t('barcode.responsibleStageRequired'));
-          setIsUpdatingQuantity(false);
-          return;
-        }
-        updatePayload.quantity_decrement_type = quantityDecrementType;
-        if (quantityDecrementType === 'rejection' && quantityDecrementReason.trim()) {
-          updatePayload.quantity_decrement_reason = quantityDecrementReason.trim();
+          if (rejectionReasonToSave) {
+            updatePayload.quantity_decrement_reason = rejectionReasonToSave;
+          }
         } else if (quantityDecrementType === 'lost') {
           updatePayload.quantity_decrement_reason = 'lost/untracked';
         }
         if (quantityDecrementType === 'rejection' && quantityDecrementPhaseId) {
           updatePayload.quantity_decrement_phase_id = quantityDecrementPhaseId;
         }
-        if (quantityDecrementDailyAssignmentId != null) {
-          updatePayload.quantity_decrement_daily_assignment_id = quantityDecrementDailyAssignmentId;
+        if (
+          (quantityDecrementType === 'rejection' || quantityDecrementType === 'lost') &&
+          quantityDecrementDailyAssignmentId != null &&
+          decrementSewingDailyAssignments.length > 0
+        ) {
+          const sel = decrementSewingDailyAssignments.find(
+            (a) => a.daily_assignment_id === quantityDecrementDailyAssignmentId
+          );
+          if (sel?.worker_id != null) {
+            updatePayload.quantity_decrement_worker_id = sel.worker_id;
+          }
+          if (sel?.stage_name?.trim()) {
+            updatePayload.quantity_decrement_stage_name = sel.stage_name.trim();
+          }
         }
       }
 
@@ -1017,15 +1013,13 @@ const BarcodeScannerPage: React.FC = () => {
       setBarcodeData(updatedData);
       setQuantity(updatedData.quantity);
       
-      // Reset decrement and increment state
+      // Reset decrement state
       setQuantityDecrementType(null);
       setQuantityDecrementReason('');
+      setQuantityDecrementCustomReason('');
       setQuantityDecrementPhaseId(null);
       setQuantityDecrementDailyAssignmentId(null);
-      setBatchProductionDailyAssignments([]);
-      setQuantityIncrementReason('');
-      setIncrementType('rejection_resolution');
-      setIncrementedFromPhaseId(null);
+      setDecrementSewingDailyAssignments([]);
       
       // Show success message
       setError('');
@@ -1048,17 +1042,14 @@ const BarcodeScannerPage: React.FC = () => {
     }
   };
 
-  // Quantity counter functions
+  const updateQuantityCap = barcodeData?.quantity ?? 0;
+
   const incrementQuantity = () => {
-    setQuantity(prev => prev + 1);
+    setQuantity((prev) => Math.min(updateQuantityCap, prev + 1));
   };
 
   const decrementQuantity = () => {
-    setQuantity(prev => Math.max(0, prev - 1));
-  };
-
-  const setQuantityDirectly = (value: number) => {
-    setQuantity(Math.max(0, value));
+    setQuantity((prev) => Math.max(0, prev - 1));
   };
 
   // Production Issues functions
@@ -1192,7 +1183,6 @@ const BarcodeScannerPage: React.FC = () => {
   useEffect(() => {
     if (mode !== 'updateQuantity') {
       setQuantity(0);
-      setQuantityIncrementReason('');
     }
     if (mode !== 'productionIssues') {
       setIssueNote('');
@@ -1201,7 +1191,14 @@ const BarcodeScannerPage: React.FC = () => {
     }
   }, [mode]);
 
-
+  // New quantity counter: when a batch is loaded (batch_id changes), start at that batch's current quantity
+  // (Edits are not reset — batch_id is unchanged. After save, handleQuantityUpdate sets quantity from the API.)
+  useEffect(() => {
+    if (mode !== 'updateQuantity' || !barcodeData) return;
+    const raw = barcodeData.quantity;
+    const q = typeof raw === 'number' && Number.isFinite(raw) ? raw : Number(raw) || 0;
+    setQuantity(q);
+  }, [mode, barcodeData?.batch_id]);
 
   return (
     <Layout>
@@ -1598,166 +1595,59 @@ const BarcodeScannerPage: React.FC = () => {
                   {t('barcode.newQuantity')}
                 </Label>
                 
-                {/* Large Counter Interface */}
+                {/* Counter: can adjust down or back up, but never above batch quantity from scan */}
                 <div className="flex items-center justify-center gap-6 mb-6">
                   <button
+                    type="button"
                     onClick={incrementQuantity}
-                    className="w-20 h-20 bg-blue-600 text-white rounded-full text-3xl font-bold hover:bg-blue-700 transition-colors flex items-center justify-center shadow-lg border-2 border-blue-700"
+                    className="w-20 h-20 bg-blue-600 text-white rounded-full text-3xl font-bold hover:bg-blue-700 transition-colors flex items-center justify-center shadow-lg border-2 border-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                    disabled={quantity >= updateQuantityCap}
+                    aria-label={t('barcode.increaseQuantity')}
                   >
                     <span className="text-white">+</span>
                   </button>
-                  
-                  <div className="text-center">
+                  <div className="text-center min-w-[4rem]">
                     <div className="text-7xl font-bold text-gray-900 mb-3">{quantity}</div>
                   </div>
-                  
                   <button
+                    type="button"
                     onClick={decrementQuantity}
                     className="w-20 h-20 bg-red-600 text-white rounded-full text-3xl font-bold hover:bg-red-700 transition-colors flex items-center justify-center shadow-lg border-2 border-red-700"
                     disabled={quantity <= 0}
+                    aria-label={t('barcode.decreaseQuantity')}
                   >
-                    <span className="text-white">-</span>
+                    <span className="text-white">−</span>
                   </button>
                 </div>
 
-                {/* Quick Quantity Buttons */}
                 <div className="grid grid-cols-4 gap-3 mb-8">
                   {[
                     { value: 2, type: 'add', color: 'blue' },
                     { value: 5, type: 'add', color: 'blue' },
                     { value: 2, type: 'subtract', color: 'red' },
-                    { value: 5, type: 'subtract', color: 'red' }
+                    { value: 5, type: 'subtract', color: 'red' },
                   ].map(({ value, type, color }) => (
                     <button
                       key={`${type}-${value}`}
-                      onClick={() => setQuantity(prev => type === 'add' ? prev + value : Math.max(0, prev - value))}
+                      type="button"
+                      onClick={() =>
+                        setQuantity((prev) =>
+                          type === 'add'
+                            ? Math.min(updateQuantityCap, prev + value)
+                            : Math.max(0, prev - value)
+                        )
+                      }
                       className={`px-4 py-3 rounded-lg transition-colors font-semibold border-2 shadow-sm ${
-                        color === 'blue' 
-                          ? 'bg-blue-100 text-blue-800 border-blue-300 hover:bg-blue-200' 
+                        color === 'blue'
+                          ? 'bg-blue-100 text-blue-800 border-blue-300 hover:bg-blue-200'
                           : 'bg-red-100 text-red-800 border-red-300 hover:bg-red-200'
                       }`}
                     >
-                      {type === 'add' ? '+' : '-'}{value}
+                      {type === 'add' ? '+' : '−'}
+                      {value}
                     </button>
                   ))}
                 </div>
-
-                {/* Increment Options */}
-                {quantity > barcodeData.quantity && (
-                  <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-                    <Label className="text-sm font-medium text-gray-700 mb-3 block">
-                      Increment Type
-                    </Label>
-                    <div className="mb-4">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIncrementType('rejection_resolution');
-                          if (barcodeData && phases.length > 0) {
-                            const currentPhase = phases.find(p => p.id === barcodeData.current_phase);
-                            if (currentPhase) {
-                              const currentSeq = currentPhase.sequence_order ?? 999;
-                              const previousPhases = phases
-                                .filter(p => p.id !== barcodeData.current_phase && (p.sequence_order ?? 999) < currentSeq)
-                                .sort((a, b) => (b.sequence_order || 0) - (a.sequence_order || 0)); // latest to earliest
-
-                              if (previousPhases.length > 0) {
-                                setIncrementedFromPhaseId(previousPhases[0].id);
-                              }
-                            }
-                          }
-                        }}
-                        className="p-3 rounded-lg border-2 border-blue-500 bg-blue-100 shadow-md w-full"
-                      >
-                        <div className="font-semibold text-sm">Rejection Resolution</div>
-                        <div className="text-xs text-gray-600 mt-1">Updates previous phases</div>
-                      </button>
-                    </div>
-                    
-                    {incrementType === 'rejection_resolution' && (() => {
-                      const fromPhase = incrementedFromPhaseId != null
-                        ? phases.find(p => p.id === incrementedFromPhaseId)
-                        : null;
-                      const isSewingFrom = fromPhase && (fromPhase.type || '').toLowerCase() === 'sewing';
-
-                      return (
-                        <>
-                          <div className="mb-4">
-                            <Label className="text-sm font-medium text-gray-700 mb-2 block">
-                              {t('barcode.responsiblePhase')}
-                            </Label>
-                            <Select
-                              value={incrementedFromPhaseId !== null ? incrementedFromPhaseId.toString() : ''}
-                              onValueChange={(value) => {
-                                setIncrementedFromPhaseId(parseInt(value));
-                                setIncrementDailyAssignmentId(null);
-                              }}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Select phase" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {(() => {
-                                  const currentPhase = phases.find(p => p.id === barcodeData.current_phase);
-                                  if (!currentPhase) {
-                                    return null;
-                                  }
-
-                                  const currentSeq = currentPhase.sequence_order ?? 999;
-
-                                  // All previous phases in the workflow (excluding current), sorted by latest to earliest (descending sequence_order)
-                                  const previousPhases = phases
-                                    .filter(p => p.id !== barcodeData.current_phase && (p.sequence_order ?? 999) < currentSeq)
-                                    .sort((a, b) => (b.sequence_order || 0) - (a.sequence_order || 0));
-
-                                  return previousPhases.map((phase) => (
-                                    <SelectItem key={phase.id} value={phase.id.toString()}>
-                                      {phase.name}
-                                    </SelectItem>
-                                  ));
-                                })()}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          {isSewingFrom && (
-                            <div>
-                              <Label className="text-sm font-medium text-gray-700 mb-2 block">
-                                {t('barcode.responsibleStage')}
-                              </Label>
-                              <Select
-                                value={incrementDailyAssignmentId?.toString() || ''}
-                                onValueChange={(value) => setIncrementDailyAssignmentId(parseInt(value))}
-                                disabled={isLoadingProductionStages}
-                              >
-                                <SelectTrigger className="w-full">
-                                  <SelectValue placeholder={isLoadingProductionStages ? t('barcode.loadingStages') : t('barcode.selectStage')} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {incrementDailyAssignments.map((a) => (
-                                    <SelectItem key={a.daily_assignment_id} value={a.daily_assignment_id.toString()}>
-                                      {a.worker_name} – {a.stage_name} ({a.quantity_produced} pcs)
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()}
-                    
-                    <Label className="text-sm font-medium text-gray-700 mb-2 block">
-                      Increment Reason (Optional)
-                    </Label>
-                    <input
-                      type="text"
-                      value={quantityIncrementReason}
-                      onChange={(e) => setQuantityIncrementReason(e.target.value)}
-                      placeholder="e.g., Additional pieces found, Correction"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    />
-                  </div>
-                )}
 
                 {/* Deduction Options */}
                 {quantity < barcodeData.quantity && (
@@ -1771,6 +1661,7 @@ const BarcodeScannerPage: React.FC = () => {
                         onClick={() => {
                           setQuantityDecrementType('rejection');
                           setQuantityDecrementReason('');
+                          setQuantityDecrementCustomReason('');
                           if (barcodeData && phases.length > 0) {
                             const currentPhase = phases.find(p => p.id === barcodeData.current_phase);
                             if (currentPhase) {
@@ -1779,7 +1670,7 @@ const BarcodeScannerPage: React.FC = () => {
                               const lowerSequencePhases = phases.filter(p => {
                                 const phaseSequenceOrder = p.sequence_order ?? 999;
                                 return p.id !== barcodeData.current_phase && phaseSequenceOrder < currentSequenceOrder;
-                              });
+                              }).filter(p => !isBaseSewingPhase(p));
                               if (lowerSequencePhases.length > 0) {
                                 const sortedPhases = [...lowerSequencePhases].sort((a, b) => 
                                   (a.sequence_order || 0) - (b.sequence_order || 0)
@@ -1819,6 +1710,7 @@ const BarcodeScannerPage: React.FC = () => {
                         onClick={() => {
                           setQuantityDecrementType('second_degree');
                           setQuantityDecrementReason('');
+                          setQuantityDecrementCustomReason('');
                         }}
                         className={`p-4 rounded-lg border-2 transition-all duration-200 touch-manipulation ${
                           quantityDecrementType === 'second_degree'
@@ -1850,6 +1742,7 @@ const BarcodeScannerPage: React.FC = () => {
                         onClick={() => {
                           setQuantityDecrementType('lost');
                           setQuantityDecrementReason('');
+                          setQuantityDecrementCustomReason('');
                           if (barcodeData) {
                             setQuantityDecrementPhaseId(barcodeData.current_phase);
                           }
@@ -1892,7 +1785,7 @@ const BarcodeScannerPage: React.FC = () => {
                           availablePhases = phases.filter(p => {
                             const phaseSequenceOrder = p.sequence_order ?? 999;
                             return p.id !== currentPhaseId && phaseSequenceOrder < currentSequenceOrder;
-                          }).sort((a, b) => (a.sequence_order || 0) - (b.sequence_order || 0));
+                          }).filter(p => !isBaseSewingPhase(p)).sort((a, b) => (a.sequence_order || 0) - (b.sequence_order || 0));
                         }
                       } else {
                         const currentPhase = phases.find(p => p.id === currentPhaseId);
@@ -1911,12 +1804,23 @@ const BarcodeScannerPage: React.FC = () => {
                             availablePhases = [currentPhase, nearestDifferentTypePhase];
                           }
                         }
+                        availablePhases = availablePhases.filter((p: Phase) => !isBaseSewingPhase(p));
                       }
                       
                       const selectedPhase = quantityDecrementPhaseId != null
                         ? availablePhases.find((p: Phase) => p.id === quantityDecrementPhaseId) ?? phases.find(p => p.id === quantityDecrementPhaseId)
                         : null;
-                      const isSewingPhase = selectedPhase && (selectedPhase.type || '').toLowerCase() === 'sewing';
+                      const showDefectRejectionReason =
+                        quantityDecrementType === 'rejection' &&
+                        selectedPhase != null &&
+                        isCuttingOrSewingPhase(selectedPhase);
+                      const showPhaseNameRejectionReason =
+                        quantityDecrementType === 'rejection' &&
+                        selectedPhase != null &&
+                        !isCuttingOrSewingPhase(selectedPhase);
+                      const rejectionDefects = showDefectRejectionReason
+                        ? getRejectionDefectsForPhase(selectedPhase)
+                        : [];
 
                       return (
                         <div className="mt-4 space-y-4">
@@ -1928,55 +1832,112 @@ const BarcodeScannerPage: React.FC = () => {
                               value={quantityDecrementPhaseId?.toString() || ''}
                               onValueChange={(value) => {
                                 setQuantityDecrementPhaseId(parseInt(value));
+                                setQuantityDecrementReason('');
+                                setQuantityDecrementCustomReason('');
                                 setQuantityDecrementDailyAssignmentId(null);
                               }}
                             >
-                              <SelectTrigger className="w-full">
+                              <SelectTrigger className="w-full min-h-12 text-base">
                                 <SelectValue placeholder="Select phase" />
                               </SelectTrigger>
-                              <SelectContent>
+                              <SelectContent position="popper" side="bottom" align="start" sideOffset={6} className="max-h-[55vh] text-base">
                                 {availablePhases.map((phase) => (
-                                  <SelectItem key={phase.id} value={phase.id.toString()}>
+                                  <SelectItem key={phase.id} value={phase.id.toString()} className="min-h-12 text-base">
                                     {phase.name}
                                   </SelectItem>
                                 ))}
                               </SelectContent>
                             </Select>
                           </div>
-                          {isSewingPhase && (
+                          {selectedPhase &&
+                            (selectedPhase.type || '').toLowerCase() === 'sewing' &&
+                            (quantityDecrementType === 'rejection' || quantityDecrementType === 'lost') && (
+                              <div>
+                                <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                                  {t('barcode.responsibleStage')}
+                                </Label>
+                                <Select
+                                  value={quantityDecrementDailyAssignmentId?.toString() || ''}
+                                  onValueChange={(value) => setQuantityDecrementDailyAssignmentId(parseInt(value, 10))}
+                                  disabled={isLoadingDecrementStages}
+                                >
+                                  <SelectTrigger className="w-full min-h-12 text-base">
+                                    <SelectValue
+                                      placeholder={
+                                        isLoadingDecrementStages
+                                          ? t('barcode.loadingStages')
+                                          : t('barcode.selectStage')
+                                      }
+                                    />
+                                  </SelectTrigger>
+                                  <SelectContent
+                                    position="popper"
+                                    side="bottom"
+                                    align="start"
+                                    sideOffset={6}
+                                    className="max-h-[55vh] text-base"
+                                  >
+                                    {decrementSewingDailyAssignments.map((a) => (
+                                      <SelectItem
+                                        key={a.daily_assignment_id}
+                                        value={a.daily_assignment_id.toString()}
+                                        className="min-h-12 text-base"
+                                      >
+                                        {a.stage_name} — {a.worker_name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                {!isLoadingDecrementStages && decrementSewingDailyAssignments.length === 0 && (
+                                  <p className="text-xs text-amber-800 mt-2">{t('barcode.noSewingAssignmentsForPhase')}</p>
+                                )}
+                              </div>
+                            )}
+                          {showDefectRejectionReason && (
                             <div>
                               <Label className="text-sm font-medium text-gray-700 mb-2 block">
-                                {t('barcode.responsibleStage')}
+                                {t('barcode.rejectionReason')}
                               </Label>
                               <Select
-                                value={quantityDecrementDailyAssignmentId?.toString() || ''}
-                                onValueChange={(value) => setQuantityDecrementDailyAssignmentId(parseInt(value))}
-                                disabled={isLoadingProductionStages}
+                                value={quantityDecrementReason}
+                                onValueChange={(value) => setQuantityDecrementReason(value)}
                               >
-                                <SelectTrigger className="w-full">
-                                  <SelectValue placeholder={isLoadingProductionStages ? t('barcode.loadingStages') : t('barcode.selectStage')} />
+                                <SelectTrigger className="w-full min-h-12 text-base">
+                                  <SelectValue placeholder={t('barcode.selectRejectionReason')} />
                                 </SelectTrigger>
-                                <SelectContent>
-                                  {batchProductionDailyAssignments.map((a) => (
-                                    <SelectItem key={a.daily_assignment_id} value={a.daily_assignment_id.toString()}>
-                                      {a.worker_name} – {a.stage_name} ({a.quantity_produced} pcs)
+                                <SelectContent position="popper" side="bottom" align="start" sideOffset={6} className="max-h-[60vh] text-base">
+                                  {rejectionDefects.map((defect, idx) => (
+                                    <SelectItem key={`${idx}-${defect}`} value={defect} className="min-h-12 text-base leading-relaxed">
+                                      {defect}
                                     </SelectItem>
                                   ))}
+                                  <SelectItem value={OTHER_REJECTION_REASON_VALUE} className="min-h-12 text-base">
+                                    {t('barcode.otherRejectionReason')}
+                                  </SelectItem>
                                 </SelectContent>
                               </Select>
+                              {quantityDecrementReason === OTHER_REJECTION_REASON_VALUE && (
+                                <input
+                                  type="text"
+                                  value={quantityDecrementCustomReason}
+                                  onChange={(e) => setQuantityDecrementCustomReason(e.target.value)}
+                                  placeholder={t('barcode.customRejectionReasonPlaceholder')}
+                                  className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                                />
+                              )}
                             </div>
                           )}
-                          {quantityDecrementType === 'rejection' && (
+                          {showPhaseNameRejectionReason && selectedPhase && (
                             <div>
                               <Label className="text-sm font-medium text-gray-700 mb-2 block">
-                                Rejection Reason (Optional)
+                                {t('barcode.rejectionReason')}
                               </Label>
+                              <p className="text-xs text-gray-500 mb-2">{t('barcode.rejectionReasonPhaseNameHint')}</p>
                               <input
                                 type="text"
-                                value={quantityDecrementReason}
-                                onChange={(e) => setQuantityDecrementReason(e.target.value)}
-                                placeholder="e.g., Stitching defect, Quality issue"
-                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                                readOnly
+                                value={selectedPhase.name}
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-900 min-h-12 text-base"
                               />
                             </div>
                           )}
@@ -1988,22 +1949,15 @@ const BarcodeScannerPage: React.FC = () => {
 
                 {/* Update Button */}
                 <div className="text-center">
-                  {(() => {
-                    const decrementPhase = quantityDecrementPhaseId != null ? phases.find(p => p.id === quantityDecrementPhaseId) : null;
-                    const isSewingResponsible = (quantityDecrementType === 'rejection' || quantityDecrementType === 'lost') && decrementPhase && (decrementPhase.type || '').toLowerCase() === 'sewing';
-                    const responsibleStageRequiredMissing = isSewingResponsible && (isLoadingProductionStages || quantityDecrementDailyAssignmentId == null);
-                    return (
                   <button
                     onClick={handleQuantityUpdate}
-                    disabled={quantity <= 0 || isUpdatingQuantity || responsibleStageRequiredMissing}
+                    disabled={quantity <= 0 || isUpdatingQuantity}
                     className="px-12 py-6 bg-blue-600 text-white rounded-xl text-xl font-bold hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:text-gray-600 disabled:cursor-not-allowed shadow-lg border-2 border-blue-700 min-w-[200px]"
                   >
                     <span className="text-white">
                       {isUpdatingQuantity ? t('common.updating') : t('barcode.updateQuantity')}
                     </span>
                   </button>
-                    );
-                  })()}
                 </div>
               </div>
             </CardContent>

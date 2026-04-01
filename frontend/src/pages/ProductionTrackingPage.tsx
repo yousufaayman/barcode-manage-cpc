@@ -22,7 +22,18 @@ import {
   SelectValue,
 } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Activity, Scan, CheckCircle, AlertCircle, Loader2, UserPlus, X, LayoutGrid, ChevronDown, Clock } from 'lucide-react';
+import {
+  Activity,
+  Scan,
+  CheckCircle,
+  AlertCircle,
+  Loader2,
+  UserPlus,
+  X,
+  LayoutGrid,
+  ChevronDown,
+  Clock,
+} from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { useToast } from '../hooks/use-toast';
 import ProductionOvertimeTab from './ProductionOvertimeTab';
@@ -599,6 +610,7 @@ const ProductionTrackingPage: React.FC = () => {
 
   // Sequential mode: auto-assign when a worker is scanned (resolved)
   useEffect(() => {
+    if (activeTab !== 'worker-assignment') return;
     if (!sequentialModeActive || resolvedWorker == null || assignStageId == null) return;
     let cancelled = false;
     setLoadingAssign(true);
@@ -697,31 +709,31 @@ const ProductionTrackingPage: React.FC = () => {
         />
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full max-w-2xl grid-cols-4 h-12 p-1.5 rounded-xl bg-gray-100 border border-gray-200 shadow-inner gap-1">
+          <TabsList className="flex w-full max-w-3xl flex-wrap items-center gap-1 rounded-xl bg-gray-100 border border-gray-200 shadow-inner p-1.5 h-auto">
             <TabsTrigger
               value="tracking"
-              className="rounded-lg px-3 py-2.5 text-sm font-semibold transition-all data-[state=active]:bg-white data-[state=active]:text-emerald-700 data-[state=active]:shadow-md data-[state=inactive]:text-gray-500 data-[state=inactive]:hover:text-gray-700 data-[state=inactive]:hover:bg-gray-50"
+              className="flex-none whitespace-nowrap rounded-lg px-3 py-2.5 text-sm font-semibold transition-all data-[state=active]:bg-white data-[state=active]:text-emerald-700 data-[state=active]:shadow-md data-[state=inactive]:text-gray-500 data-[state=inactive]:hover:text-gray-700 data-[state=inactive]:hover:bg-gray-50"
             >
               <Scan className="h-4 w-4 mr-1.5 shrink-0" />
               {t('productionTracking.tabTracking')}
             </TabsTrigger>
             <TabsTrigger
               value="worker-assignment"
-              className="rounded-lg px-3 py-2.5 text-sm font-semibold transition-all data-[state=active]:bg-white data-[state=active]:text-emerald-700 data-[state=active]:shadow-md data-[state=inactive]:text-gray-500 data-[state=inactive]:hover:text-gray-700 data-[state=inactive]:hover:bg-gray-50"
+              className="flex-none whitespace-nowrap rounded-lg px-3 py-2.5 text-sm font-semibold transition-all data-[state=active]:bg-white data-[state=active]:text-emerald-700 data-[state=active]:shadow-md data-[state=inactive]:text-gray-500 data-[state=inactive]:hover:text-gray-700 data-[state=inactive]:hover:bg-gray-50"
             >
               <UserPlus className="h-4 w-4 mr-1.5 shrink-0" />
               {t('productionTracking.tabWorkerAssignment')}
             </TabsTrigger>
             <TabsTrigger
               value="schematic-view"
-              className="rounded-lg px-3 py-2.5 text-sm font-semibold transition-all data-[state=active]:bg-white data-[state=active]:text-emerald-700 data-[state=active]:shadow-md data-[state=inactive]:text-gray-500 data-[state=inactive]:hover:text-gray-700 data-[state=inactive]:hover:bg-gray-50"
+              className="flex-none whitespace-nowrap rounded-lg px-3 py-2.5 text-sm font-semibold transition-all data-[state=active]:bg-white data-[state=active]:text-emerald-700 data-[state=active]:shadow-md data-[state=inactive]:text-gray-500 data-[state=inactive]:hover:text-gray-700 data-[state=inactive]:hover:bg-gray-50"
             >
               <LayoutGrid className="h-4 w-4 mr-1.5 shrink-0" />
               {t('productionTracking.tabSchematicView')}
             </TabsTrigger>
             <TabsTrigger
               value="overtime"
-              className="rounded-lg px-3 py-2.5 text-sm font-semibold transition-all data-[state=active]:bg-white data-[state=active]:text-emerald-700 data-[state=active]:shadow-md data-[state=inactive]:text-gray-500 data-[state=inactive]:hover:text-gray-700 data-[state=inactive]:hover:bg-gray-50"
+              className="flex-none whitespace-nowrap rounded-lg px-3 py-2.5 text-sm font-semibold transition-all data-[state=active]:bg-white data-[state=active]:text-emerald-700 data-[state=active]:shadow-md data-[state=inactive]:text-gray-500 data-[state=inactive]:hover:text-gray-700 data-[state=inactive]:hover:bg-gray-50"
             >
               <Clock className="h-4 w-4 mr-1.5 shrink-0" />
               {t('productionTracking.tabOvertime')}
@@ -792,7 +804,7 @@ const ProductionTrackingPage: React.FC = () => {
                         type="button"
                         variant="destructive"
                         size="lg"
-                        className="bg-red-600 hover:bg-red-700 text-white font-medium shrink-0"
+                        className="bg-red-600 hover:bg-red-700 text-white font-medium w-full sm:w-auto shrink-0"
                         onClick={() => {
                           setTrackingWorker(null);
                           setTrackingAssignment(null);
@@ -819,7 +831,7 @@ const ProductionTrackingPage: React.FC = () => {
                         type="button"
                         variant="destructive"
                         size="lg"
-                        className="bg-red-600 hover:bg-red-700 text-white font-medium shrink-0"
+                        className="bg-red-600 hover:bg-red-700 text-white font-medium w-full sm:w-auto shrink-0"
                         onClick={() => {
                           setTrackingWorker(null);
                           setTrackingAssignment(null);
@@ -1170,14 +1182,14 @@ const ProductionTrackingPage: React.FC = () => {
                   })()}
                 </div>
 
-                <div className="flex flex-col sm:flex-row flex-wrap justify-center items-stretch sm:items-end gap-4 sm:gap-6 pt-5 sm:pt-6">
-                  <div className="space-y-1.5 flex-1 sm:flex-initial sm:min-w-[180px]">
+                <div className="grid grid-cols-1 gap-4 pt-5 sm:pt-6 sm:flex sm:flex-row sm:flex-wrap sm:justify-center sm:items-end sm:gap-6">
+                  <div className="space-y-1.5 w-full min-w-0 overflow-hidden sm:w-auto sm:flex-initial sm:min-w-[180px]">
                     <Label className="text-sm text-gray-600">{t('productionTracking.workerAssignment.assignmentDate')}</Label>
                     <input
                       type="date"
                       value={assignmentDateWorker}
                       onChange={(e) => setAssignmentDateWorker(e.target.value)}
-                      className="flex h-11 sm:h-12 w-full rounded-md border border-input bg-transparent px-4 py-2 text-base shadow-sm transition-colors"
+                      className="flex h-11 sm:h-12 w-full min-w-0 max-w-full overflow-hidden whitespace-nowrap text-ellipsis appearance-none rounded-md border border-input bg-transparent px-3 sm:px-4 py-2 text-sm sm:text-base shadow-sm transition-colors"
                     />
                   </div>
                   {sequentialModeActive ? (

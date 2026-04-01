@@ -203,91 +203,49 @@ const SewingSubTab: React.FC = () => {
         const capacities: typeof phaseCapacities = {};
         const schematicStats: typeof schematicStatsByPhase = {};
 
-        const [dailyRows, activeSchematics] = await Promise.all([
-          productionApi.getSewingSchematicDailyProduction(fromDate, toDate),
-          productionApi.getSchematics({ active_only: true }),
-        ]);
-
-        const dailyBySchematicId = new Map<number, typeof dailyRows>();
-        for (const row of dailyRows ?? []) {
-          const sid = row.schematic_id;
-          if (!dailyBySchematicId.has(sid)) dailyBySchematicId.set(sid, []);
-          dailyBySchematicId.get(sid)!.push(row);
-        }
-
-        const midnightToday = new Date(
-          today.getFullYear(),
-          today.getMonth(),
-          today.getDate(),
-          0,
-          0,
-          0,
-          0
-        );
-        const hoursElapsedToday = Math.max(
-          0,
-          (Date.now() - midnightToday.getTime()) / 3600000
-        );
-        const endIncludesToday = toDate >= todayIso;
-
         for (const phase of sewingPhases) {
-          const phaseSchematics = activeSchematics.filter(
-            (s) => s.production_phase_id === phase.phase_id
+          const rangeData = await productionApi.getPhaseSchematicWorkRange(
+            phase.phase_id,
+            fromDate,
+            toDate
           );
+          const phaseSchematics = rangeData?.schematics ?? [];
 
           let expectedDailySum = 0;
           let trueDailySum = 0;
-          let totalPossibleHoursPhase = 0;
           let workingHoursTotal = 0;
           let expectedHourlySum = 0;
 
           const phaseSchematicStats: SchematicRangeStats[] = [];
 
           for (const s of phaseSchematics) {
-            const rowsForSchematic = dailyBySchematicId.get(s.schematic_id) ?? [];
-
-            const expectedDaily = rowsForSchematic.reduce(
-              (sum, r) => sum + (r.expected_output ?? 0),
-              0
-            );
-            const trueDaily = rowsForSchematic.reduce(
-              (sum, r) => sum + (r.true_output ?? 0),
-              0
-            );
-            const workDateSet = new Set(rowsForSchematic.map((r) => r.work_date));
-            const workingDaysCount = workDateSet.size;
-
-            const whVal = s.working_hours != null ? Number(s.working_hours) : 0;
-            workingHoursTotal += whVal;
-
+            const expectedDaily = Number(s.expected_quantity ?? 0);
+            const trueDaily = Number(s.true_quantity ?? 0);
             const expectedHourly =
-              s.hourly_production != null && s.hourly_production > 0
-                ? s.hourly_production
+              s.expected_hourly_work != null && Number(s.expected_hourly_work) > 0
+                ? Number(s.expected_hourly_work)
                 : null;
             if (expectedHourly != null) expectedHourlySum += expectedHourly;
 
-            let possibleHours = 0;
-            if (whVal > 0 && workingDaysCount > 0) {
-              if (endIncludesToday && workDateSet.has(todayIso)) {
-                const cappedTodayHours = Math.min(hoursElapsedToday, whVal);
-                const fullDays = workingDaysCount - 1;
-                possibleHours = fullDays * whVal + cappedTodayHours;
-              } else {
-                possibleHours = workingDaysCount * whVal;
-              }
-            }
-
-            totalPossibleHoursPhase += possibleHours;
-
             const trueHourly =
-              possibleHours > 0 && trueDaily > 0 ? trueDaily / possibleHours : null;
+              s.true_hourly_work != null && Number(s.true_hourly_work) > 0
+                ? Number(s.true_hourly_work)
+                : null;
+
+            // workingHoursTotal is derived from expected-work basis:
+            // expected_work / expected_hourly_work.
+            const whVal =
+              expectedHourly != null && expectedHourly > 0
+                ? expectedDaily / expectedHourly
+                : 0;
+            workingHoursTotal += whVal;
 
             const efficiencyPct =
               expectedDaily > 0 ? (trueDaily / expectedDaily) * 100 : null;
 
             phaseSchematicStats.push({
               schematicId: s.schematic_id,
-              name: s.name,
+              name: s.schematic_name,
               expectedHourly,
               expectedDaily,
               trueDaily,
@@ -305,8 +263,8 @@ const SewingSubTab: React.FC = () => {
             workingHoursTotal: workingHoursTotal > 0 ? workingHoursTotal : null,
             trueDaily: trueDailySum,
             trueHourly:
-              totalPossibleHoursPhase > 0 && trueDailySum > 0
-                ? trueDailySum / totalPossibleHoursPhase
+              workingHoursTotal > 0 && trueDailySum > 0
+                ? trueDailySum / workingHoursTotal
                 : null,
           };
 
@@ -343,8 +301,8 @@ const SewingSubTab: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+        <div className="space-y-1 w-full sm:w-auto">
           <label
             htmlFor="sewing-from-date"
             className="text-xs font-medium text-gray-600"
@@ -356,10 +314,10 @@ const SewingSubTab: React.FC = () => {
             type="date"
             value={sewingFromDate}
             onChange={(e) => setSewingFromDate(e.target.value)}
-            className="h-9 w-full"
+            className="h-9 w-full min-w-0 max-w-full overflow-hidden whitespace-nowrap text-ellipsis appearance-none"
           />
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1 w-full sm:w-auto">
           <label
             htmlFor="sewing-to-date"
             className="text-xs font-medium text-gray-600"
@@ -371,13 +329,13 @@ const SewingSubTab: React.FC = () => {
             type="date"
             value={sewingToDate}
             onChange={(e) => setSewingToDate(e.target.value)}
-            className="h-9 w-full"
+            className="h-9 w-full min-w-0 max-w-full overflow-hidden whitespace-nowrap text-ellipsis appearance-none"
           />
         </div>
-        <div className="pb-1">
+        <div className="pb-1 w-full sm:w-auto">
           <Button
             type="button"
-            className="mt-4"
+            className="w-full sm:w-auto sm:mt-4"
             onClick={handleSewingSearch}
             disabled={!sewingFromDate || !sewingToDate}
           >
@@ -444,7 +402,7 @@ const SewingSubTab: React.FC = () => {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4 text-sm text-gray-600">
-                  <div className="flex gap-4 items-stretch min-w-0">
+                  <div className="grid grid-cols-1 gap-3 md:gap-4 lg:grid-cols-3">
                     <div className="flex flex-1 min-w-0 items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
                       <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[11px] font-semibold text-gray-700 uppercase">
                         Expected
@@ -518,13 +476,6 @@ const SewingSubTab: React.FC = () => {
                       trueDaily={trueDaily}
                     />
                   </div>
-
-                  <p className="text-xs text-gray-500">
-                    Expected values are based on configured stage production
-                    quantities and working hours across all schematics in this
-                    phase. True values use actual production history over the
-                    selected date range. Efficiency is true ÷ expected for the same range (0–70% red, 70–90% orange, 90%+ green).
-                  </p>
 
                   {isExpanded && schematicStats.length > 0 && (
                     <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-xs text-gray-700 shadow-sm">

@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Layout from '../components/Layout';
-import { jobOrderApi, batchApi, cutsApi, barcodeApi } from '../services/api';
+import apiInstance, { jobOrderApi, batchApi, cutsApi, barcodeApi, productionApi, ReworkBatchResponse, BarcodeData } from '../services/api';
 import { useTranslation } from 'react-i18next';
 import SearchableDropdown from '../components/SearchableDropdown';
 import { Button } from "@/components/ui/button";
 import { zebraPrinterService, BarcodePrintData } from '../services/zebraPrinterService';
-import apiInstance from '../services/api';
-import { sortSizes } from '../utils/sizeSort';
+import { sortSizes, getSizeSortKey } from '../utils/sizeSort';
 import {
   Table,
   TableBody,
@@ -25,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { AlertTriangle } from "lucide-react";
 
 interface Cut {
@@ -75,6 +75,12 @@ const BulkBarcodeCreatePage: React.FC = () => {
   const [compensationData, setCompensationData] = useState<Record<string, {phase_id: number; quantity: number}>>({});
   const [isCreatingCompensation, setIsCreatingCompensation] = useState(false);
   const [availablePhases, setAvailablePhases] = useState<{phase_id: number; phase_name: string}[]>([]);
+  const [reworkBatches, setReworkBatches] = useState<ReworkBatchResponse[]>([]);
+  const [reworkBatchDetails, setReworkBatchDetails] = useState<Record<number, BarcodeData>>({});
+  const [isLoadingReworkBatches, setIsLoadingReworkBatches] = useState(false);
+  const [isPrintingRework, setIsPrintingRework] = useState(false);
+  const [printingReworkId, setPrintingReworkId] = useState<number | null>(null);
+  const [reworkPrintedFilter, setReworkPrintedFilter] = useState<'all' | 'printed' | 'not-printed'>('all');
 
   const uniqueColorSizeCombinations = useMemo(() => {
     const comboMap = new Map<string, {color_id: number; color_name: string; size_id: number; size_value: string; item_id: number}>();
@@ -97,6 +103,93 @@ const BulkBarcodeCreatePage: React.FC = () => {
       return 0;
     });
   }, [jobOrderItems]);
+
+  const sortedSecondDegreeItems = useMemo(() => {
+    return [...jobOrderItems].sort((a, b) => {
+      const colorCompare = a.color_name.localeCompare(b.color_name);
+      if (colorCompare !== 0) return colorCompare;
+
+      const aSizeKey = getSizeSortKey(a.size_value);
+      const bSizeKey = getSizeSortKey(b.size_value);
+
+      if (aSizeKey[0] !== bSizeKey[0]) return aSizeKey[0] - bSizeKey[0];
+      if (aSizeKey[1] !== bSizeKey[1]) return aSizeKey[1] - bSizeKey[1];
+      return aSizeKey[2].localeCompare(bSizeKey[2]);
+    });
+  }, [jobOrderItems]);
+
+  const compensationPhases = useMemo(
+    () => availablePhases.filter((phase) => phase.phase_name.trim().toLowerCase() !== 'sewing'),
+    [availablePhases]
+  );
+
+  const sortedJobOrderItems = useMemo(() => {
+    return [...jobOrderItems].sort((a, b) => {
+      const colorCompare = a.color_name.localeCompare(b.color_name);
+      if (colorCompare !== 0) return colorCompare;
+      const aSizeKey = getSizeSortKey(a.size_value);
+      const bSizeKey = getSizeSortKey(b.size_value);
+      if (aSizeKey[0] !== bSizeKey[0]) return aSizeKey[0] - bSizeKey[0];
+      if (aSizeKey[1] !== bSizeKey[1]) return aSizeKey[1] - bSizeKey[1];
+      return aSizeKey[2].localeCompare(bSizeKey[2]);
+    });
+  }, [jobOrderItems]);
+
+  const groupedReworkBatches = useMemo(() => {
+    const phaseMap = new Map<string, Map<string, Map<string, Map<string, ReworkBatchResponse[]>>>>();
+
+    reworkBatches.forEach((rb) => {
+      const details = reworkBatchDetails[rb.batch_id];
+      const colorName =
+        details?.color_name ||
+        (details?.color_id != null ? `Color #${details.color_id}` : t('common.unknown', 'Unknown'));
+      const stageName = (rb.problem_stage_name || '').trim() || t('batchGeneration.unknownStage', 'Unknown stage');
+      const sizeValue = details?.size_value || (details?.size_id != null ? `Size #${details.size_id}` : t('common.unknown', 'Unknown'));
+
+      const phaseId = rb.responsible_phase_id ?? null;
+      const phaseLabel =
+        phaseId != null
+          ? availablePhases.find((p) => p.phase_id === phaseId)?.phase_name || `Phase #${phaseId}`
+          : t('common.unknown', 'Unknown');
+
+      if (!phaseMap.has(phaseLabel)) phaseMap.set(phaseLabel, new Map());
+      const colorMap = phaseMap.get(phaseLabel)!;
+      if (!colorMap.has(colorName)) colorMap.set(colorName, new Map());
+      const stageMap = colorMap.get(colorName)!;
+      if (!stageMap.has(stageName)) stageMap.set(stageName, new Map());
+      const sizeMap = stageMap.get(stageName)!;
+      if (!sizeMap.has(sizeValue)) sizeMap.set(sizeValue, []);
+      sizeMap.get(sizeValue)!.push(rb);
+    });
+
+    return Array.from(phaseMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([phaseName, colorMap]) => ({
+        phaseName,
+        colors: Array.from(colorMap.entries())
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([colorName, stageMap]) => ({
+            colorName,
+            stages: Array.from(stageMap.entries())
+              .sort((a, b) => a[0].localeCompare(b[0]))
+              .map(([stageName, sizeMap]) => ({
+                stageName,
+                sizes: Array.from(sizeMap.entries())
+                  .sort((a, b) => {
+                    const aKey = getSizeSortKey(a[0]);
+                    const bKey = getSizeSortKey(b[0]);
+                    if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
+                    if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
+                    return aKey[2].localeCompare(bKey[2]);
+                  })
+                  .map(([sizeValue, batches]) => ({
+                    sizeValue,
+                    batches: [...batches].sort((a, b) => b.rework_batch_id - a.rework_batch_id),
+                  })),
+              })),
+          })),
+      }));
+  }, [reworkBatches, reworkBatchDetails, t, availablePhases]);
 
   useEffect(() => {
     jobOrderApi.getAllSimple().then(setJobOrders);
@@ -167,6 +260,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
       setSubmittedBatches([]);
       setSubmitResult(null);
       setCompensationData({});
+      setReworkBatches([]);
       
       if (found) {
         jobOrderApi.getCuts(selectedJobOrderId)
@@ -211,8 +305,131 @@ const BulkBarcodeCreatePage: React.FC = () => {
       setJobOrderItems([]);
       setSecondDegreeCounts({});
       setCompensationData({});
+      setReworkBatches([]);
     }
   }, [selectedJobOrderId, jobOrders]);
+
+  useEffect(() => {
+    if (!selectedJobOrderId) {
+      setReworkBatches([]);
+      setReworkBatchDetails({});
+      return;
+    }
+
+    const fetchReworkBatches = async () => {
+      try {
+        setIsLoadingReworkBatches(true);
+        const printedParam =
+          reworkPrintedFilter === 'all' ? undefined : reworkPrintedFilter === 'printed';
+        const rows = await productionApi.getReworkBatches(
+          printedParam == null ? undefined : { printed: printedParam }
+        );
+        const filtered = rows.filter((row) => row.job_order_id === selectedJobOrderId);
+        setReworkBatches(filtered);
+
+        const uniqueBatchIds = Array.from(new Set(filtered.map((r) => r.batch_id)));
+        const results = await Promise.allSettled(uniqueBatchIds.map((id) => barcodeApi.getBatchById(id)));
+        const detailsMap: Record<number, BarcodeData> = {};
+        results.forEach((res, idx) => {
+          if (res.status === 'fulfilled') {
+            detailsMap[uniqueBatchIds[idx]] = res.value;
+          }
+        });
+        setReworkBatchDetails(detailsMap);
+      } catch (err: any) {
+        setError(err.response?.data?.detail || 'Failed to load rework batches');
+      } finally {
+        setIsLoadingReworkBatches(false);
+      }
+    };
+
+    fetchReworkBatches();
+  }, [selectedJobOrderId, reworkPrintedFilter]);
+
+  const buildReworkPrintPayload = async (reworkBatch: ReworkBatchResponse) => {
+    const batchDetails = await barcodeApi.getBatchById(reworkBatch.batch_id);
+    const phaseName =
+      (reworkBatch.responsible_phase_id != null
+        ? availablePhases.find((p) => p.phase_id === reworkBatch.responsible_phase_id)?.phase_name
+        : null) ||
+      (batchDetails.phase_name || '');
+    return {
+      rework_batch_id: reworkBatch.rework_batch_id,
+      barcode: batchDetails.barcode,
+      client_name: batchDetails.client_name || '',
+      model: batchDetails.model_name || '',
+      size: batchDetails.size_value || '',
+      color: batchDetails.color_name || '',
+      quantity: batchDetails.quantity || 0,
+      layers: batchDetails.layers || 1,
+      serial: batchDetails.serial || '',
+      job_order_number: selectedJobOrder?.job_order_number || '',
+      is_second_degree: Boolean(batchDetails.is_second_degree),
+      phase_name: phaseName,
+      stage_name: (reworkBatch.problem_stage_name || '').trim(),
+      is_rework: true,
+    };
+  };
+
+  const printReworkBatches = async (rows: ReworkBatchResponse[]) => {
+    if (!selectedPrinter) {
+      setError(t('batchGeneration.selectPrinterMessage', 'Please select a printer'));
+      return;
+    }
+    if (rows.length === 0) {
+      return;
+    }
+
+    try {
+      setIsPrintingRework(true);
+      setError('');
+      const selectedPrinterInfo = allPrinters.find(p => p.name === selectedPrinter);
+      const isZebraPrinter = selectedPrinterInfo?.type === 'zebra';
+
+      for (const row of rows) {
+        const payload = await buildReworkPrintPayload(row);
+        if (isZebraPrinter) {
+          await zebraPrinterService.printMultipleBarcodes(
+            [{
+              barcode: payload.barcode,
+              brand: payload.client_name,
+              model: payload.model,
+              size: payload.size,
+              color: payload.color,
+              quantity: payload.quantity,
+              layers: payload.layers,
+              serial: payload.serial,
+              job_order_number: payload.job_order_number,
+              is_second_degree: payload.is_second_degree,
+            }],
+            selectedPrinter,
+            1
+          );
+        } else {
+          await barcodeApi.printBarcodes([payload], 1, selectedPrinter);
+        }
+        await productionApi.updateReworkBatch(row.rework_batch_id, { printed: true });
+      }
+
+      setReworkBatches((prev) =>
+        prev.map((batch) =>
+          rows.some((row) => row.rework_batch_id === batch.rework_batch_id)
+            ? { ...batch, printed: true }
+            : batch
+        )
+      );
+      alert(
+        t('batchGeneration.printSuccess', { count: rows.length, printer: selectedPrinter })
+          .replace('{count}', String(rows.length))
+          .replace('{printer}', selectedPrinter)
+      );
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to print rework batches');
+    } finally {
+      setIsPrintingRework(false);
+      setPrintingReworkId(null);
+    }
+  };
 
   useEffect(() => {
     if (selectedCutId) {
@@ -346,7 +563,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
             placeholder={t('batchGeneration.selectJobOrderPlaceholder', 'Select a job order')}
             label={t('batchGeneration.selectJobOrder', 'Select Job Order')}
             disabled={jobOrders.length === 0}
-            className="w-[300px]"
+            className="w-full max-w-md"
           />
         </div>
         {selectedJobOrder && (
@@ -359,12 +576,21 @@ const BulkBarcodeCreatePage: React.FC = () => {
       </div>
 
       {selectedJobOrder && (
-        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+        <div className="bg-white rounded-lg shadow-sm p-[1.8rem] mb-6 min-h-[68vh]">
           <Tabs defaultValue="from-cut" className="w-full">
-            <TabsList className="grid w-full grid-cols-3 mb-6">
-              <TabsTrigger value="from-cut">{t('batchGeneration.tabFromCut', 'Batch Creation from Cut')}</TabsTrigger>
-              <TabsTrigger value="second-degree">{t('batchGeneration.tabSecondDegree', 'Second Degree Batches')}</TabsTrigger>
-              <TabsTrigger value="compensation">{t('batchGeneration.tabCompensation', 'Batch Compensation')}</TabsTrigger>
+            <TabsList className="flex w-full flex-wrap gap-2 mb-6 h-auto">
+              <TabsTrigger className="flex-1 min-w-[11rem] md:flex-none md:min-w-0" value="from-cut">
+                {t('batchGeneration.tabFromCut', 'Batch Creation from Cut')}
+              </TabsTrigger>
+              <TabsTrigger className="flex-1 min-w-[11rem] md:flex-none md:min-w-0" value="second-degree">
+                {t('batchGeneration.tabSecondDegree', 'Second Degree Batches')}
+              </TabsTrigger>
+              <TabsTrigger className="flex-1 min-w-[11rem] md:flex-none md:min-w-0" value="compensation">
+                {t('batchGeneration.tabCompensation', 'Batch Compensation')}
+              </TabsTrigger>
+              <TabsTrigger className="flex-1 min-w-[11rem] md:flex-none md:min-w-0" value="rework-batches">
+                {t('batchGeneration.tabReworkBatches', 'Rework Batches')}
+              </TabsTrigger>
             </TabsList>
             
             <TabsContent value="from-cut" className="space-y-6">
@@ -378,7 +604,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                     placeholder={cuts.length > 0 ? t('batchGeneration.selectCutPlaceholder', 'Select a cut') : t('batchGeneration.noCutsAvailable', 'No cuts available')}
                     label={t('batchGeneration.selectCut', 'Select Cut')}
                     disabled={cuts.length === 0 || isLoading}
-                    className="w-full max-w-md mt-2 mb-4"
+                    className="w-full mt-2 mb-4"
                   />
                   {cuts.length === 0 && !isLoading && selectedJobOrderId && (
                     <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
@@ -410,9 +636,9 @@ const BulkBarcodeCreatePage: React.FC = () => {
 
                 {selectedCutNumber && cutSizes.length > 0 && (
                   <div className="pt-4">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between mb-3">
                       <h3 className="text-md font-semibold">{t('batchGeneration.selectSizes', 'Select Sizes to Generate')}</h3>
-                      <div className="flex gap-2">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:gap-2">
                         <Button
                           type="button"
                           variant="outline"
@@ -463,7 +689,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                     <div className="pt-4">
                       <h3 className="text-md font-semibold mb-3">{t('batchGeneration.mode', 'Generation Mode')}</h3>
                       <Select value={mode} onValueChange={(val) => setMode(val as GenerationMode)}>
-                        <SelectTrigger className="w-full max-w-xs">
+                        <SelectTrigger className="w-full sm:max-w-xs">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -488,9 +714,13 @@ const BulkBarcodeCreatePage: React.FC = () => {
                               value={maxBatchSize || ''}
                               onChange={(e) => {
                                 const val = e.target.value;
-                                setMaxBatchSize(val ? parseInt(val) || undefined : undefined);
+                                const nextMax = val ? parseInt(val) || undefined : undefined;
+                                setMaxBatchSize(nextMax);
+                                if (nextMax && extraPiecesThreshold > nextMax) {
+                                  setExtraPiecesThreshold(nextMax);
+                                }
                               }}
-                              className="w-full max-w-xs"
+                              className="w-full sm:max-w-xs"
                               placeholder={t('batchGeneration.noLimit', 'No limit')}
                             />
                             <p className="text-xs text-gray-500 mt-1">
@@ -505,13 +735,26 @@ const BulkBarcodeCreatePage: React.FC = () => {
                               id="extraThresholdAuto"
                               type="number"
                               min={0}
+                              max={maxBatchSize || undefined}
                               value={extraPiecesThreshold}
-                              onChange={(e) => setExtraPiecesThreshold(Math.max(0, parseInt(e.target.value) || 5))}
-                              className="w-full max-w-xs"
+                              onChange={(e) => {
+                                const raw = Math.max(0, parseInt(e.target.value) || 5);
+                                const clamped = maxBatchSize ? Math.min(raw, maxBatchSize) : raw;
+                                setExtraPiecesThreshold(clamped);
+                              }}
+                              className="w-full sm:max-w-xs"
                             />
                             <p className="text-xs text-gray-500 mt-1">
                               {t('batchGeneration.extraPiecesThresholdHelp', 'Leftover pieces below this threshold will be merged into the previous batch')}
                             </p>
+                            {maxBatchSize && extraPiecesThreshold > maxBatchSize && (
+                              <p className="text-xs text-amber-600 mt-1">
+                                {t(
+                                  'batchGeneration.extraPiecesThresholdMustBeLEMaxBatchSize',
+                                  'Sanity check: Extra Pieces Threshold must be ≤ Max Batch Size'
+                                )}
+                              </p>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -759,7 +1002,9 @@ const BulkBarcodeCreatePage: React.FC = () => {
                                   color: batch.color_name || '',
                                   quantity: batch.quantity || 0,
                                   layers: batch.layers || 1,
-                                  serial: batch.serial || ''
+                                  serial: batch.serial || '',
+                                  job_order_number: selectedJobOrder?.job_order_number || '',
+                                  is_second_degree: Boolean(batch.is_second_degree),
                                 }));
                                 
                                 const selectedPrinterInfo = allPrinters.find(p => p.name === selectedPrinter);
@@ -774,7 +1019,9 @@ const BulkBarcodeCreatePage: React.FC = () => {
                                     color: item.color,
                                     quantity: item.quantity,
                                     layers: item.layers,
-                                    serial: item.serial ? parseInt(item.serial) : undefined
+                                    serial: item.serial || undefined,
+                                    job_order_number: item.job_order_number,
+                                    is_second_degree: item.is_second_degree,
                                   }));
                                   
                                   await zebraPrinterService.printMultipleBarcodes(
@@ -824,50 +1071,13 @@ const BulkBarcodeCreatePage: React.FC = () => {
             </TabsContent>
             
             <TabsContent value="second-degree" className="space-y-6">
-              <div>
-                <h3 className="text-md font-semibold mb-2">{t('batchGeneration.createSecondDegree', 'Create Second Degree Batches')}</h3>
-                <p className="text-sm text-gray-600 mb-6">{t('batchGeneration.secondDegreeDescription', 'Create second degree batches for job order items. These batches are initialized with quantity 0.')}</p>
+              <div className="text-[120%]">
+                <h3 className="text-lg font-semibold mb-2">{t('batchGeneration.createSecondDegree', 'Create Second Degree Batches')}</h3>
+                <p className="text-base text-gray-600 mb-6">{t('batchGeneration.secondDegreeDescription', 'Create second degree batches for job order items. These batches are initialized with quantity 0.')}</p>
                 
                 {jobOrderItems.length > 0 ? (
                   <>
-                    <div className="border rounded-md overflow-hidden mb-6">
-                      <div className="max-h-[400px] overflow-y-auto">
-                        <Table>
-                          <TableHeader className="sticky top-0 bg-gray-50 z-10">
-                            <TableRow>
-                              <TableHead>{t('bulkBarcode.color', 'Color')}</TableHead>
-                              <TableHead>{t('bulkBarcode.size', 'Size')}</TableHead>
-                              <TableHead>{t('barcode.quantity', 'Quantity')}</TableHead>
-                              <TableHead>{t('batchGeneration.secondDegreeBatchCount', 'Second Degree Batches')}</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {jobOrderItems.map((item) => (
-                              <TableRow key={item.item_id}>
-                                <TableCell className="font-medium">{item.color_name}</TableCell>
-                                <TableCell>{item.size_value}</TableCell>
-                                <TableCell>{item.quantity}</TableCell>
-                                <TableCell>
-                                  <Input
-                                    type="number"
-                                    min={0}
-                                    value={secondDegreeCounts[item.item_id] || 0}
-                                    onChange={(e) => setSecondDegreeCounts(prev => ({
-                                      ...prev,
-                                      [item.item_id]: Math.max(0, parseInt(e.target.value) || 0)
-                                    }))}
-                                    className="w-full max-w-xs"
-                                    placeholder="0"
-                                  />
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    </div>
-                    
-                    <div className="border-t pt-4">
+                    <div className="border-b pb-4 mb-6">
                       <Button
                         onClick={async () => {
                           if (!selectedJobOrderId) {
@@ -875,7 +1085,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                             return;
                           }
                           
-                          const itemsToCreate = jobOrderItems
+                          const itemsToCreate = sortedSecondDegreeItems
                             .filter(item => (secondDegreeCounts[item.item_id] || 0) > 0)
                             .map(item => ({
                               item_id: item.item_id,
@@ -918,7 +1128,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                       >
                         {isCreatingSecondDegree ? (
                           <span className="flex items-center">
-                            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
@@ -929,12 +1139,47 @@ const BulkBarcodeCreatePage: React.FC = () => {
                         )}
                       </Button>
                       {submitResult && (
-                        <div className={`mt-4 px-4 py-2 rounded-lg ${submitResult.duplicates > 0 ? 'bg-yellow-50 border border-yellow-200 text-yellow-800' : 'bg-green-50 border border-green-200 text-green-800'}`}>
-                          <p className="text-sm font-medium">
+                        <div className={`mt-4 px-4 py-3 rounded-lg ${submitResult.duplicates > 0 ? 'bg-yellow-50 border border-yellow-200 text-yellow-800' : 'bg-green-50 border border-green-200 text-green-800'}`}>
+                          <p className="text-base font-medium">
                             {submitResult.message || `${submitResult.created} batches created. ${submitResult.duplicates} duplicates found.`}
                           </p>
                         </div>
                       )}
+                    </div>
+
+                    <div className="border rounded-md overflow-hidden mb-6">
+                      <div className="max-h-[400px] overflow-y-auto">
+                        <Table>
+                          <TableHeader className="sticky top-0 bg-gray-50 z-10">
+                            <TableRow>
+                              <TableHead className="text-base">{t('bulkBarcode.color', 'Color')}</TableHead>
+                              <TableHead className="text-base">{t('bulkBarcode.size', 'Size')}</TableHead>
+                              <TableHead className="text-base">{t('batchGeneration.secondDegreeBatchCount', 'Second Degree Batches')}</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {sortedSecondDegreeItems.map((item) => (
+                              <TableRow key={item.item_id}>
+                                <TableCell className="font-medium text-base">{item.color_name}</TableCell>
+                                <TableCell className="text-base">{item.size_value}</TableCell>
+                                <TableCell>
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    value={secondDegreeCounts[item.item_id] || 0}
+                                    onChange={(e) => setSecondDegreeCounts(prev => ({
+                                      ...prev,
+                                      [item.item_id]: Math.max(0, parseInt(e.target.value) || 0)
+                                    }))}
+                                    className="w-full max-w-xs text-base h-11"
+                                    placeholder="0"
+                                  />
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
                     </div>
                   </>
                 ) : (
@@ -946,21 +1191,99 @@ const BulkBarcodeCreatePage: React.FC = () => {
             </TabsContent>
             
             <TabsContent value="compensation" className="space-y-6">
-              <div>
-                <h3 className="text-md font-semibold mb-2">{t('batchGeneration.createCompensation', 'Create Compensation Batches')}</h3>
-                <p className="text-sm text-gray-600 mb-6">{t('batchGeneration.compensationDescription', 'Create compensation batches for lost physical barcodes. These batches are not included in cut qty or phase_in_qty calculations.')}</p>
+              <div className="text-[120%]">
+                <h3 className="text-lg font-semibold mb-2">{t('batchGeneration.createCompensation', 'Create Compensation Batches')}</h3>
+                <p className="text-base text-gray-600 mb-6">{t('batchGeneration.compensationDescription', 'Create compensation batches for lost physical barcodes. These batches are not included in cut qty or phase_in_qty calculations.')}</p>
                 
                 {uniqueColorSizeCombinations.length > 0 ? (
                     <>
+                      <div className="border-b pb-4 mb-6">
+                        <Button
+                          onClick={async () => {
+                            if (!selectedJobOrderId) {
+                              setError('Please select a job order');
+                              return;
+                            }
+                            
+                            const compensationsToCreate = uniqueColorSizeCombinations
+                              .filter((combo) => {
+                                const key = `${combo.color_id}-${combo.size_id}`;
+                                const comp = compensationData[key];
+                                return comp && comp.quantity > 0 && comp.phase_id > 0;
+                              })
+                              .map((combo) => {
+                                const key = `${combo.color_id}-${combo.size_id}`;
+                                return {
+                                  item_id: combo.item_id,
+                                  phase_id: compensationData[key].phase_id,
+                                  quantity: compensationData[key].quantity
+                                };
+                              });
+                            
+                            if (compensationsToCreate.length === 0) {
+                              setError('Please specify at least one compensation batch to create');
+                              return;
+                            }
+                            
+                            setIsCreatingCompensation(true);
+                            setError('');
+                            setSubmitResult(null);
+                            
+                            try {
+                              const result = await batchApi.createCompensation({
+                                job_order_id: selectedJobOrderId,
+                                compensations: compensationsToCreate
+                              });
+                              
+                              setSubmitResult({
+                                created: result.created_batches?.length || 0,
+                                duplicates: result.duplicate_barcodes?.length || 0,
+                                message: result.message
+                              });
+                              
+                              if (result.created_batches && result.created_batches.length > 0) {
+                                setCompensationData({});
+                              }
+                            } catch (err: any) {
+                              setError(err.response?.data?.detail || 'Failed to create compensation batches');
+                            } finally {
+                              setIsCreatingCompensation(false);
+                            }
+                          }}
+                          disabled={isCreatingCompensation || jobOrderItems.length === 0}
+                          className="btn-primary"
+                          size="lg"
+                        >
+                          {isCreatingCompensation ? (
+                            <span className="flex items-center">
+                              <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              {t('batchGeneration.creating', 'Creating...')}
+                            </span>
+                          ) : (
+                            t('batchGeneration.createCompensationBatches', 'Create Compensation Batches')
+                          )}
+                        </Button>
+                        {submitResult && (
+                          <div className={`mt-4 px-4 py-3 rounded-lg ${submitResult.duplicates > 0 ? 'bg-yellow-50 border border-yellow-200 text-yellow-800' : 'bg-green-50 border border-green-200 text-green-800'}`}>
+                            <p className="text-base font-medium">
+                              {submitResult.message || `${submitResult.created} batches created. ${submitResult.duplicates} duplicates found.`}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
                       <div className="border rounded-md overflow-hidden mb-6">
                         <div className="max-h-[400px] overflow-y-auto">
                           <Table>
                             <TableHeader className="sticky top-0 bg-gray-50 z-10">
                               <TableRow>
-                                <TableHead>{t('bulkBarcode.color', 'Color')}</TableHead>
-                                <TableHead>{t('bulkBarcode.size', 'Size')}</TableHead>
-                                <TableHead>{t('batchGeneration.compensationPhase', 'Compensation Phase')}</TableHead>
-                                <TableHead>{t('batchGeneration.compensationQty', 'Compensation Quantity')}</TableHead>
+                                <TableHead className="text-base">{t('bulkBarcode.color', 'Color')}</TableHead>
+                                <TableHead className="text-base">{t('bulkBarcode.size', 'Size')}</TableHead>
+                                <TableHead className="text-base">{t('batchGeneration.compensationPhase', 'Compensation Phase')}</TableHead>
+                                <TableHead className="text-base">{t('batchGeneration.compensationQty', 'Compensation Quantity')}</TableHead>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -968,8 +1291,8 @@ const BulkBarcodeCreatePage: React.FC = () => {
                                 const key = `${combo.color_id}-${combo.size_id}`;
                                 return (
                                   <TableRow key={key}>
-                                    <TableCell className="font-medium">{combo.color_name}</TableCell>
-                                    <TableCell>{combo.size_value}</TableCell>
+                                    <TableCell className="font-medium text-base">{combo.color_name}</TableCell>
+                                    <TableCell className="text-base">{combo.size_value}</TableCell>
                                     <TableCell>
                                       <Select
                                         value={compensationData[key]?.phase_id?.toString() || ''}
@@ -982,11 +1305,11 @@ const BulkBarcodeCreatePage: React.FC = () => {
                                           }
                                         }))}
                                       >
-                                        <SelectTrigger className="w-full max-w-xs">
+                                        <SelectTrigger className="w-full max-w-xs text-base h-11">
                                           <SelectValue placeholder={t('batchGeneration.selectPhase', 'Select Phase')} />
                                         </SelectTrigger>
                                         <SelectContent>
-                                          {availablePhases.map((phase) => (
+                                          {compensationPhases.map((phase) => (
                                             <SelectItem key={phase.phase_id} value={phase.phase_id.toString()}>
                                               {phase.phase_name}
                                             </SelectItem>
@@ -1003,11 +1326,11 @@ const BulkBarcodeCreatePage: React.FC = () => {
                                           ...prev,
                                           [key]: {
                                             ...prev[key],
-                                            phase_id: prev[key]?.phase_id || availablePhases[0]?.phase_id || 0,
+                                            phase_id: prev[key]?.phase_id || compensationPhases[0]?.phase_id || 0,
                                             quantity: Math.max(0, parseInt(e.target.value) || 0)
                                           }
                                         }))}
-                                        className="w-full max-w-xs"
+                                        className="w-full max-w-xs text-base h-11"
                                         placeholder="0"
                                       />
                                     </TableCell>
@@ -1018,89 +1341,307 @@ const BulkBarcodeCreatePage: React.FC = () => {
                           </Table>
                         </div>
                       </div>
-                    
-                    <div className="border-t pt-4">
-                      <Button
-                        onClick={async () => {
-                          if (!selectedJobOrderId) {
-                            setError('Please select a job order');
-                            return;
-                          }
-                          
-                          const compensationsToCreate = uniqueColorSizeCombinations
-                            .filter((combo) => {
-                              const key = `${combo.color_id}-${combo.size_id}`;
-                              const comp = compensationData[key];
-                              return comp && comp.quantity > 0 && comp.phase_id > 0;
-                            })
-                            .map((combo) => {
-                              const key = `${combo.color_id}-${combo.size_id}`;
-                              return {
-                                item_id: combo.item_id,
-                                phase_id: compensationData[key].phase_id,
-                                quantity: compensationData[key].quantity
-                              };
-                            });
-                          
-                          if (compensationsToCreate.length === 0) {
-                            setError('Please specify at least one compensation batch to create');
-                            return;
-                          }
-                          
-                          setIsCreatingCompensation(true);
-                          setError('');
-                          setSubmitResult(null);
-                          
-                          try {
-                            const result = await batchApi.createCompensation({
-                              job_order_id: selectedJobOrderId,
-                              compensations: compensationsToCreate
-                            });
-                            
-                            setSubmitResult({
-                              created: result.created_batches?.length || 0,
-                              duplicates: result.duplicate_barcodes?.length || 0,
-                              message: result.message
-                            });
-                            
-                            if (result.created_batches && result.created_batches.length > 0) {
-                              setCompensationData({});
-                            }
-                          } catch (err: any) {
-                            setError(err.response?.data?.detail || 'Failed to create compensation batches');
-                          } finally {
-                            setIsCreatingCompensation(false);
-                          }
-                        }}
-                        disabled={isCreatingCompensation || jobOrderItems.length === 0}
-                        className="btn-primary"
-                        size="lg"
-                      >
-                        {isCreatingCompensation ? (
-                          <span className="flex items-center">
-                            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            {t('batchGeneration.creating', 'Creating...')}
-                          </span>
-                        ) : (
-                          t('batchGeneration.createCompensationBatches', 'Create Compensation Batches')
-                        )}
-                      </Button>
-                      {submitResult && (
-                        <div className={`mt-4 px-4 py-2 rounded-lg ${submitResult.duplicates > 0 ? 'bg-yellow-50 border border-yellow-200 text-yellow-800' : 'bg-green-50 border border-green-200 text-green-800'}`}>
-                          <p className="text-sm font-medium">
-                            {submitResult.message || `${submitResult.created} batches created. ${submitResult.duplicates} duplicates found.`}
-                          </p>
-                        </div>
-                      )}
-                    </div>
                   </>
                 ) : (
                   <div className="text-center py-8">
                     <p className="text-sm text-gray-500">{t('batchGeneration.loadingItems', 'Loading job order items...')}</p>
                   </div>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="rework-batches" className="space-y-6">
+              <div>
+                <h3 className="text-lg sm:text-xl font-semibold mb-2">
+                  {t('batchGeneration.reworkBatchesTitle', 'Rework Batches')}
+                </h3>
+                <p className="text-sm sm:text-base text-gray-600 mb-6">
+                  {t('batchGeneration.reworkBatchesDescription', 'View and print rework batches grouped by problem stage, color, and size.')}
+                </p>
+
+                <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between mb-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                    <div>
+                      <Label className="mb-2 block">{t('batchGeneration.printedFilter', 'Printed Filter')}</Label>
+                      <Select
+                        value={reworkPrintedFilter}
+                        onValueChange={(value: 'all' | 'printed' | 'not-printed') => setReworkPrintedFilter(value)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">{t('batchGeneration.filterAll', 'All')}</SelectItem>
+                          <SelectItem value="printed">{t('batchGeneration.filterPrinted', 'Printed')}</SelectItem>
+                          <SelectItem value="not-printed">{t('batchGeneration.filterNotPrinted', 'Not Printed')}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="mb-2 block">{t('batchGeneration.printer', 'Printer')}</Label>
+                      <Select value={selectedPrinter} onValueChange={setSelectedPrinter}>
+                        <SelectTrigger>
+                          <SelectValue placeholder={t('batchGeneration.selectPrinter', 'Select printer')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {allPrinters.map((p) => (
+                            <SelectItem key={p.name} value={p.name}>
+                              {p.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+
+                {isLoadingReworkBatches ? (
+                  <div className="text-sm text-gray-500">{t('batchGeneration.loading', 'Loading...')}</div>
+                ) : groupedReworkBatches.length === 0 ? (
+                  <div className="text-sm text-gray-500">{t('batchGeneration.noReworkBatches', 'No rework batches found for the selected filters.')}</div>
+                ) : (
+                  <Accordion type="multiple" className="w-full border rounded-md px-3 sm:px-4">
+                    {groupedReworkBatches.map((phaseGroup) => (
+                      <AccordionItem key={phaseGroup.phaseName} value={`phase-${phaseGroup.phaseName}`}>
+                        <AccordionTrigger className="text-sm sm:text-base font-semibold">
+                          <div className="flex flex-col sm:flex-row sm:items-center w-full gap-3">
+                            <div className="flex flex-wrap items-center gap-2 min-w-0">
+                              <span className="truncate">{phaseGroup.phaseName}</span>
+                              {(() => {
+                                const allRows = phaseGroup.colors.flatMap((c) =>
+                                  c.stages.flatMap((st) => st.sizes.flatMap((sz) => sz.batches))
+                                );
+                                const hasUnprinted = allRows.some((r) => !r.printed);
+                                return hasUnprinted ? (
+                                  <span className="text-[11px] px-2 py-1 rounded bg-amber-100 text-amber-800">
+                                    {t('batchGeneration.notFullyPrinted', 'Not fully printed')}
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] px-2 py-1 rounded bg-green-100 text-green-800">
+                                    {t('batchGeneration.allPrinted', 'All printed')}
+                                  </span>
+                                );
+                              })()}
+                              <span className="text-[11px] px-2 py-1 rounded bg-slate-100 text-slate-700">
+                                {phaseGroup.colors.reduce(
+                                  (sum, color) =>
+                                    sum +
+                                    color.stages.reduce(
+                                      (s2, stage) => s2 + stage.sizes.reduce((s3, sz) => s3 + sz.batches.length, 0),
+                                      0
+                                    ),
+                                  0
+                                )}{' '}
+                                {t('batchGeneration.batch', 'batches')}
+                              </span>
+                            </div>
+                            <div className="sm:ml-auto flex items-center w-full sm:w-auto">
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="bg-blue-600 hover:bg-blue-700 text-white w-full sm:w-auto"
+                                disabled={isPrintingRework || !selectedPrinter || phaseGroup.colors.length === 0}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const rows = phaseGroup.colors.flatMap((c) =>
+                                    c.stages.flatMap((st) => st.sizes.flatMap((sz) => sz.batches))
+                                  );
+                                  printReworkBatches(rows);
+                                }}
+                              >
+                                {t('batchGeneration.print', 'Print')}
+                              </Button>
+                            </div>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent>
+                          <Accordion type="multiple" className="w-full border rounded-md px-3 sm:px-4 bg-gray-50">
+                            {phaseGroup.colors.map((colorGroup) => (
+                              <AccordionItem
+                                key={`${phaseGroup.phaseName}-${colorGroup.colorName}`}
+                                value={`color-${phaseGroup.phaseName}-${colorGroup.colorName}`}
+                              >
+                                <AccordionTrigger className="text-sm font-medium">
+                                  <div className="flex flex-col sm:flex-row sm:items-center w-full gap-3">
+                                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                                      <span className="truncate">{colorGroup.colorName}</span>
+                                      {(() => {
+                                        const allRows = colorGroup.stages.flatMap((st) =>
+                                          st.sizes.flatMap((sz) => sz.batches)
+                                        );
+                                        const hasUnprinted = allRows.some((r) => !r.printed);
+                                        return hasUnprinted ? (
+                                          <span className="text-[11px] px-2 py-1 rounded bg-amber-100 text-amber-800">
+                                            {t('batchGeneration.notFullyPrinted', 'Not fully printed')}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[11px] px-2 py-1 rounded bg-green-100 text-green-800">
+                                            {t('batchGeneration.allPrinted', 'All printed')}
+                                          </span>
+                                        );
+                                      })()}
+                                      <span className="text-[11px] px-2 py-1 rounded bg-white text-slate-700 border">
+                                        {colorGroup.stages.reduce((sum, st) => sum + st.sizes.reduce((s2, sz) => s2 + sz.batches.length, 0), 0)}{' '}
+                                        {t('batchGeneration.batch', 'batches')}
+                                      </span>
+                                    </div>
+                                    <div className="sm:ml-auto flex items-center w-full sm:w-auto">
+                                      <Button
+                                        type="button"
+                                        size="sm"
+                                        className="bg-blue-600 hover:bg-blue-700 text-white w-full sm:w-auto"
+                                        disabled={isPrintingRework || !selectedPrinter || colorGroup.stages.length === 0}
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          const rows = colorGroup.stages.flatMap((st) =>
+                                            st.sizes.flatMap((sz) => sz.batches)
+                                          );
+                                          printReworkBatches(rows);
+                                        }}
+                                      >
+                                        {t('batchGeneration.print', 'Print')}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </AccordionTrigger>
+                                <AccordionContent>
+                                  <Accordion type="multiple" className="w-full border rounded-md px-3 sm:px-4 bg-white">
+                                    {colorGroup.stages.map((stageGroup) => (
+                                      <AccordionItem
+                                        key={`${phaseGroup.phaseName}-${colorGroup.colorName}-${stageGroup.stageName}`}
+                                        value={`stage-${phaseGroup.phaseName}-${colorGroup.colorName}-${stageGroup.stageName}`}
+                                      >
+                                        <AccordionTrigger className="text-sm font-medium">
+                                          <div className="flex flex-col sm:flex-row sm:items-center w-full gap-3">
+                                            <div className="flex flex-wrap items-center gap-2 min-w-0">
+                                              <span className="truncate">{stageGroup.stageName}</span>
+                                              {(() => {
+                                                const allRows = stageGroup.sizes.flatMap((sz) => sz.batches);
+                                                const hasUnprinted = allRows.some((r) => !r.printed);
+                                                return hasUnprinted ? (
+                                                  <span className="text-[11px] px-2 py-1 rounded bg-amber-100 text-amber-800">
+                                                    {t('batchGeneration.notFullyPrinted', 'Not fully printed')}
+                                                  </span>
+                                                ) : (
+                                                  <span className="text-[11px] px-2 py-1 rounded bg-green-100 text-green-800">
+                                                    {t('batchGeneration.allPrinted', 'All printed')}
+                                                  </span>
+                                                );
+                                              })()}
+                                              <span className="text-[11px] px-2 py-1 rounded bg-slate-50 text-slate-700 border">
+                                                {stageGroup.sizes.reduce((sum, size) => sum + size.batches.length, 0)}{' '}
+                                                {t('batchGeneration.batch', 'batches')}
+                                              </span>
+                                            </div>
+                                            <div className="sm:ml-auto flex items-center w-full sm:w-auto">
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                className="bg-blue-600 hover:bg-blue-700 text-white w-full sm:w-auto"
+                                                disabled={isPrintingRework || !selectedPrinter || stageGroup.sizes.length === 0}
+                                                onClick={(e) => {
+                                                  e.preventDefault();
+                                                  e.stopPropagation();
+                                                  const rows = stageGroup.sizes.flatMap((sz) => sz.batches);
+                                                  printReworkBatches(rows);
+                                                }}
+                                              >
+                                                {t('batchGeneration.print', 'Print')}
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        </AccordionTrigger>
+                                        <AccordionContent>
+                                          <Accordion type="multiple" className="w-full border rounded-md px-3 sm:px-4 bg-white">
+                                            {stageGroup.sizes.map((sizeGroup) => (
+                                              <AccordionItem
+                                                key={`${phaseGroup.phaseName}-${colorGroup.colorName}-${stageGroup.stageName}-${sizeGroup.sizeValue}`}
+                                                value={`size-${phaseGroup.phaseName}-${colorGroup.colorName}-${stageGroup.stageName}-${sizeGroup.sizeValue}`}
+                                              >
+                                                <AccordionTrigger className="text-sm font-medium">
+                                                  <div className="flex flex-col sm:flex-row sm:items-center w-full gap-3">
+                                                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                                                      <span className="truncate">{sizeGroup.sizeValue}</span>
+                                                      {sizeGroup.batches.some((r) => !r.printed) ? (
+                                                        <span className="text-[11px] px-2 py-1 rounded bg-amber-100 text-amber-800">
+                                                          {t('batchGeneration.notFullyPrinted', 'Not fully printed')}
+                                                        </span>
+                                                      ) : (
+                                                        <span className="text-[11px] px-2 py-1 rounded bg-green-100 text-green-800">
+                                                          {t('batchGeneration.allPrinted', 'All printed')}
+                                                        </span>
+                                                      )}
+                                                      <span className="text-[11px] px-2 py-1 rounded bg-slate-50 text-slate-700 border">
+                                                        {sizeGroup.batches.length} {t('batchGeneration.batch', 'batches')}
+                                                      </span>
+                                                    </div>
+                                                    <div className="sm:ml-auto flex items-center w-full sm:w-auto">
+                                                      <Button
+                                                        type="button"
+                                                        size="sm"
+                                                        className="bg-blue-600 hover:bg-blue-700 text-white w-full sm:w-auto"
+                                                        disabled={isPrintingRework || !selectedPrinter || sizeGroup.batches.length === 0}
+                                                        onClick={(e) => {
+                                                          e.preventDefault();
+                                                          e.stopPropagation();
+                                                          printReworkBatches(sizeGroup.batches);
+                                                        }}
+                                                      >
+                                                        {t('batchGeneration.print', 'Print')}
+                                                      </Button>
+                                                    </div>
+                                                  </div>
+                                                </AccordionTrigger>
+                                                <AccordionContent>
+                                                  <div className="space-y-2">
+                                                    {sizeGroup.batches.map((row) => {
+                                                      const details = reworkBatchDetails[row.batch_id];
+                                                      const barcode = details?.barcode || row.barcode || `Batch #${row.batch_id}`;
+                                                      return (
+                                                        <div
+                                                          key={row.rework_batch_id}
+                                                          className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3 rounded border bg-white"
+                                                        >
+                                                          <div className="flex flex-wrap items-center gap-2 text-sm min-w-0">
+                                                            <span className="font-medium">#{row.rework_batch_id}</span>
+                                                            <span className="text-gray-500 truncate max-w-full min-w-0">{barcode}</span>
+                                                            <span className={`text-xs px-2 py-1 rounded ${row.printed ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
+                                                              {row.printed ? t('batchGeneration.printedYes', 'Printed') : t('batchGeneration.printedNo', 'Not Printed')}
+                                                            </span>
+                                                          </div>
+                                                          <Button
+                                                            size="sm"
+                                                            className="bg-blue-600 hover:bg-blue-700 text-white w-full sm:w-auto"
+                                                            disabled={isPrintingRework || printingReworkId === row.rework_batch_id || !selectedPrinter}
+                                                            onClick={async () => {
+                                                              setPrintingReworkId(row.rework_batch_id);
+                                                              await printReworkBatches([row]);
+                                                            }}
+                                                          >
+                                                            {printingReworkId === row.rework_batch_id ? t('batchGeneration.printing', 'Printing...') : t('batchGeneration.print', 'Print')}
+                                                          </Button>
+                                                        </div>
+                                                      );
+                                                    })}
+                                                  </div>
+                                                </AccordionContent>
+                                              </AccordionItem>
+                                            ))}
+                                          </Accordion>
+                                        </AccordionContent>
+                                      </AccordionItem>
+                                    ))}
+                                  </Accordion>
+                                </AccordionContent>
+                              </AccordionItem>
+                            ))}
+                          </Accordion>
+                        </AccordionContent>
+                      </AccordionItem>
+                    ))}
+                  </Accordion>
                 )}
               </div>
             </TabsContent>

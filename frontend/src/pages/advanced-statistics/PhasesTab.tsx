@@ -16,41 +16,36 @@ const tabFallback = (
 const PhasesTab: React.FC = () => {
   return (
     <div className="space-y-4">
-      <p className="text-gray-600">
-        Use the subtabs below to focus production tracking analytics on Cutting,
-        Sewing, QC, Packaging, or Workers.
-      </p>
-
       <Tabs defaultValue="cutting" className="w-full mt-4">
-        <div className="rounded-xl border border-gray-200 bg-white/60 p-2 shadow-sm">
-          <TabsList className="grid w-full grid-cols-2 gap-1 text-xs sm:grid-cols-5 sm:text-sm bg-transparent p-0">
+        <div className="rounded-2xl border border-gray-200 bg-white/60 p-1.5 shadow-sm">
+          <TabsList className="flex w-full flex-wrap gap-1.5 bg-transparent p-0 h-auto">
             <TabsTrigger
               value="cutting"
-              className="flex items-center justify-center gap-2 rounded-lg px-3 py-2 data-[state=active]:bg-green-50 data-[state=active]:text-green-700 data-[state=active]:shadow-sm"
+              className="flex-1 min-w-[9rem] sm:min-w-0 flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium data-[state=active]:bg-green-50 data-[state=active]:text-green-700 data-[state=active]:shadow-sm"
             >
               <span>Cutting</span>
             </TabsTrigger>
             <TabsTrigger
               value="sewing"
-              className="flex items-center justify-center gap-2 rounded-lg px-3 py-2 data-[state=active]:bg-indigo-50 data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm"
+              className="flex-1 min-w-[9rem] sm:min-w-0 flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium data-[state=active]:bg-indigo-50 data-[state=active]:text-indigo-700 data-[state=active]:shadow-sm"
             >
               <span>Sewing</span>
             </TabsTrigger>
             <TabsTrigger
               value="qc"
-              className="flex items-center justify-center gap-2 rounded-lg px-3 py-2 data-[state=active]:bg-yellow-50 data-[state=active]:text-yellow-700 data-[state=active]:shadow-sm"
+              className="flex-1 min-w-[9rem] sm:min-w-0 flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium data-[state=active]:bg-yellow-50 data-[state=active]:text-yellow-700 data-[state=active]:shadow-sm"
             >
               <span>QC</span>
             </TabsTrigger>
             <TabsTrigger
               value="packaging"
-              className="flex items-center justify-center gap-2 rounded-lg px-3 py-2 data-[state=active]:bg-orange-50 data-[state=active]:text-orange-700 data-[state=active]:shadow-sm"
+              className="flex-1 min-w-[9rem] sm:min-w-0 flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium data-[state=active]:bg-orange-50 data-[state=active]:text-orange-700 data-[state=active]:shadow-sm"
             >
               <span>Packaging</span>
             </TabsTrigger>
             <TabsTrigger
               value="workers"
-              className="flex items-center justify-center gap-2 rounded-lg px-3 py-2 data-[state=active]:bg-slate-50 data-[state=active]:text-slate-700 data-[state=active]:shadow-sm"
+              className="flex-1 min-w-[9rem] sm:min-w-0 flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium data-[state=active]:bg-slate-50 data-[state=active]:text-slate-700 data-[state=active]:shadow-sm"
             >
               <span>Workers</span>
             </TabsTrigger>

@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app import crud, schemas, models
+from app.crud import rework_batch as rework_batch_crud
 from app.core.deps import get_current_active_superuser, get_current_general_ops_or_above
 from typing import List, Optional
 
@@ -44,6 +45,7 @@ def get_schematic(schematic_id: int, db: Session = Depends(get_db)):
                 stage_name=s.stage_name,
                 stage_order=s.stage_order,
                 production_qty=s.production_qty,
+                is_in_final_stage=s.is_in_final_stage,
                 active=s.active,
             )
             for s in stages
@@ -547,6 +549,43 @@ def create_or_get_assignment(
     )
 
 
+@router.post("/rework/batches", response_model=schemas.ReworkBatchResponse)
+def create_rework_batch(
+    body: schemas.ReworkBatchCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_general_ops_or_above),
+):
+    try:
+        return rework_batch_crud.create_rework_batch(db, body, created_by_user_id=current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/rework/batches", response_model=List[schemas.ReworkBatchResponse])
+def list_rework_batches(
+    source_batch_id: Optional[int] = None,
+    printed: Optional[bool] = None,
+    db: Session = Depends(get_db),
+):
+    return rework_batch_crud.list_rework_batches(
+        db=db,
+        source_batch_id=source_batch_id,
+        printed=printed,
+    )
+
+
+@router.patch("/rework/batches/{rework_batch_id}", response_model=schemas.ReworkBatchResponse)
+def update_rework_batch(
+    rework_batch_id: int,
+    body: schemas.ReworkBatchUpdate,
+    db: Session = Depends(get_db),
+):
+    updated = rework_batch_crud.update_rework_batch(db, rework_batch_id, body)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Rework batch not found")
+    return updated
+
+
 @router.get("/tracking/max-quantity", response_model=schemas.MaxProductionQuantityResponse)
 def get_max_production_quantity(
     daily_assignment_id: int,
@@ -614,6 +653,8 @@ def record_production(
         barcode=body.barcode,
         quantity_produced=row.quantity_produced,
     )
+
+
 
 
 @router.get(

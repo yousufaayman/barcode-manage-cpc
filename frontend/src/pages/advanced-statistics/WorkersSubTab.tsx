@@ -208,14 +208,10 @@ const WorkersSubTab: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <p className="text-gray-600 text-sm">
-        View production for all workers across phases and schematics in a date range. Choose dates and click Apply.
-      </p>
-
       <div className="rounded-lg border border-gray-200 bg-white p-4 text-sm text-gray-700">
         <h3 className="mb-3 text-base font-semibold text-gray-800">Date range</h3>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="space-y-1">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <div className="space-y-1 w-full sm:w-auto">
             <label htmlFor="workers-from-date" className="text-xs font-medium text-gray-600">
               From date
             </label>
@@ -224,10 +220,10 @@ const WorkersSubTab: React.FC = () => {
               type="date"
               value={fromDate}
               onChange={(e) => setFromDate(e.target.value)}
-              className="h-9 w-full rounded-md border border-gray-300 px-2 text-sm"
+              className="h-9 w-full min-w-0 max-w-full overflow-hidden whitespace-nowrap text-ellipsis appearance-none rounded-md border border-gray-300 px-2 text-sm"
             />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-1 w-full sm:w-auto">
             <label htmlFor="workers-to-date" className="text-xs font-medium text-gray-600">
               To date
             </label>
@@ -236,15 +232,15 @@ const WorkersSubTab: React.FC = () => {
               type="date"
               value={toDate}
               onChange={(e) => setToDate(e.target.value)}
-              className="h-9 w-full rounded-md border border-gray-300 px-2 text-sm"
+              className="h-9 w-full min-w-0 max-w-full overflow-hidden whitespace-nowrap text-ellipsis appearance-none rounded-md border border-gray-300 px-2 text-sm"
             />
           </div>
-          <div className="pb-1">
+          <div className="pb-1 w-full sm:w-auto">
             <button
               type="button"
               onClick={fetchBreakdown}
               disabled={!fromDate || !toDate || loading}
-              className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+              className="inline-flex w-full justify-center items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300 sm:w-auto"
             >
               {loading ? (
                 <>
@@ -280,7 +276,7 @@ const WorkersSubTab: React.FC = () => {
             type="button"
             onClick={downloadExcel}
             disabled={!showContent || groupedByWorker.length === 0}
-            className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Download className="h-4 w-4" />
             Download as Excel
@@ -302,7 +298,77 @@ const WorkersSubTab: React.FC = () => {
             No production records found for this date range.
           </p>
         ) : showContent && groupedByWorker.length > 0 ? (
-          <div className="overflow-x-auto">
+          <>
+            {/* Mobile: card layout */}
+            <div className="space-y-3 sm:hidden">
+              {groupedByWorker.map((w) => (
+                <div key={w.workerId} className="rounded-lg border border-gray-200 bg-white p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-gray-900 truncate">{w.workerName}</div>
+                      <div className="text-xs text-gray-500">ID: {w.workerId}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs uppercase tracking-wide text-gray-500">Efficiency</div>
+                      <div className="font-semibold tabular-nums text-gray-900">
+                        {w.aggregate.efficiencyPct != null ? `${w.aggregate.efficiencyPct.toFixed(1)}%` : '—'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    <div className="rounded-md bg-gray-50 p-2">
+                      <div className="text-[11px] uppercase tracking-wide text-gray-500">Expected</div>
+                      <div className="font-semibold tabular-nums text-gray-900">{w.aggregate.totalExpected.toLocaleString()}</div>
+                    </div>
+                    <div className="rounded-md bg-gray-50 p-2">
+                      <div className="text-[11px] uppercase tracking-wide text-gray-500">True</div>
+                      <div className="font-semibold tabular-nums text-gray-900">{w.aggregate.totalTrue.toLocaleString()}</div>
+                    </div>
+                    <div className="rounded-md bg-gray-50 p-2">
+                      <div className="text-[11px] uppercase tracking-wide text-gray-500">Hours</div>
+                      <div className="font-semibold tabular-nums text-gray-900">{w.aggregate.totalWorkingHours.toFixed(2)}</div>
+                    </div>
+                    <div className="rounded-md bg-gray-50 p-2">
+                      <div className="text-[11px] uppercase tracking-wide text-gray-500">Overtime</div>
+                      <div className="font-semibold tabular-nums text-gray-900">{w.aggregate.totalOvertimeHours.toFixed(2)}</div>
+                    </div>
+                  </div>
+
+                  {!compactView && (
+                    <details className="mt-3 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                      <summary className="cursor-pointer text-sm font-medium text-gray-700">
+                        Records ({w.rows.length})
+                      </summary>
+                      {w.rows.length === 0 ? (
+                        <p className="mt-2 text-xs text-gray-500">No records for this worker in the selected range.</p>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          {w.rows.map((row, idx) => (
+                            <div key={`${row.phaseName}-${row.schematicName}-${row.date}-${idx}`} className="rounded-md bg-white p-2 border border-gray-200">
+                              <div className="text-xs font-semibold text-gray-800 truncate">
+                                {row.phaseName} · {row.schematicName}
+                              </div>
+                              <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-gray-600">
+                                <div><span className="text-gray-500">Date:</span> {row.date}</div>
+                                <div className="text-right"><span className="text-gray-500">Eff:</span> {row.efficiencyPct != null ? `${row.efficiencyPct.toFixed(1)}%` : '—'}</div>
+                                <div><span className="text-gray-500">Exp:</span> {row.expectedOutput.toLocaleString()}</div>
+                                <div className="text-right"><span className="text-gray-500">True:</span> {row.trueOutput.toLocaleString()}</div>
+                                <div><span className="text-gray-500">Hrs:</span> {row.workingHours.toFixed(2)}</div>
+                                <div className="text-right"><span className="text-gray-500">OT:</span> {row.overtimeHours.toFixed(2)}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </details>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Desktop/tablet: table layout */}
+            <div className="hidden sm:block overflow-x-auto">
             <table className="min-w-full text-xs md:text-sm border border-gray-200 rounded-md">
               <thead className="bg-gray-50">
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-gray-600">
@@ -405,7 +471,8 @@ const WorkersSubTab: React.FC = () => {
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         ) : null}
       </div>
     </div>

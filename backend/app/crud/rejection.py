@@ -28,23 +28,13 @@ def create_rejection(db: Session, rejection: schemas.SingleRejectionCreate, user
     
     phase_type = phase.type or 'unknown'
 
-    # When return-to phase is sewing, responsible daily assignment is required
-    if rejection.return_to_phase_id:
-        return_to_phase = db.query(models.ProductionPhase).filter(
-            models.ProductionPhase.phase_id == rejection.return_to_phase_id
-        ).first()
-        if return_to_phase and (return_to_phase.type or '').lower() == 'sewing':
-            if not rejection.responsible_daily_assignment_id:
-                raise ValueError(
-                    "Responsible stage (daily assignment) is required when the responsible phase is sewing."
-                )
-    
     db_rejection = models.SingleRejection(
         batch_id=rejection.batch_id,
         rejected_from_phase_id=rejection.rejected_from_phase_id,
         rejected_from_phase_type=phase_type,
         return_to_phase_id=rejection.return_to_phase_id,
-        responsible_daily_assignment_id=rejection.responsible_daily_assignment_id,
+        new_batch_id=rejection.new_batch_id,
+        worker_id=rejection.worker_id,
         quantity=rejection.quantity,
         rejection_reason=rejection.rejection_reason,
         rejected_by_user_id=user_id,
@@ -64,26 +54,19 @@ def create_rejection(db: Session, rejection: schemas.SingleRejectionCreate, user
                     :batch_id,
                     :rejected_from_phase_id,
                     :return_to_phase_id,
-                    :quantity
+                    :quantity,
+                    :status_at_rejection
                 )
             """),
             {
                 "batch_id": rejection.batch_id,
                 "rejected_from_phase_id": rejection.rejected_from_phase_id,
                 "return_to_phase_id": rejection.return_to_phase_id,
-                "quantity": rejection.quantity
+                "quantity": rejection.quantity,
+                "status_at_rejection": db_batch.status,
             }
         )
 
-    # Reduce production_history for the responsible daily assignment by the rejection quantity
-    if rejection.responsible_daily_assignment_id and rejection.quantity > 0:
-        ph_row = db.query(models.ProductionHistory).filter(
-            models.ProductionHistory.daily_assignment_id == rejection.responsible_daily_assignment_id,
-            models.ProductionHistory.batch_id == rejection.batch_id,
-        ).with_for_update().first()
-        if ph_row:
-            ph_row.quantity_produced = max(0, ph_row.quantity_produced - rejection.quantity)
-    
     if commit:
         db.commit()
         db.refresh(db_rejection)
@@ -150,29 +133,20 @@ def update_rejection(
     
     if rejection_update.rejection_reason is not None:
         db_rejection.rejection_reason = rejection_update.rejection_reason
+
+    patch = rejection_update.model_dump(exclude_unset=True)
+    if "new_batch_id" in patch:
+        db_rejection.new_batch_id = patch["new_batch_id"]
+    if "worker_id" in patch:
+        db_rejection.worker_id = patch["worker_id"]
     
     if rejection_update.is_resolved is not None:
         db_rejection.is_resolved = rejection_update.is_resolved
         if rejection_update.is_resolved:
             if not db_rejection.resolved_at:
                 db_rejection.resolved_at = datetime.now()
-            
-            if rejection_update.resolved_quantity is not None:
-                if rejection_update.resolved_quantity > db_rejection.quantity:
-                    raise ValueError(f"Resolved quantity ({rejection_update.resolved_quantity}) cannot exceed rejection quantity ({db_rejection.quantity})")
-                db_rejection.resolved_quantity = rejection_update.resolved_quantity
-            elif db_rejection.resolved_quantity is None:
-                db_rejection.resolved_quantity = db_rejection.quantity
         else:
             db_rejection.resolved_at = None
-            db_rejection.resolved_quantity = None
-    
-    if rejection_update.resolved_quantity is not None:
-        if rejection_update.resolved_quantity > db_rejection.quantity:
-            raise ValueError(f"Resolved quantity ({rejection_update.resolved_quantity}) cannot exceed rejection quantity ({db_rejection.quantity})")
-        if not db_rejection.is_resolved:
-            raise ValueError("Cannot set resolved_quantity on unresolved rejection")
-        db_rejection.resolved_quantity = rejection_update.resolved_quantity
     
     db_batch = db.query(models.Batch).filter(models.Batch.batch_id == db_rejection.batch_id).first()
     if db_batch:

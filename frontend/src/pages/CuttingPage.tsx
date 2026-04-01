@@ -237,8 +237,8 @@ const CuttingPage: React.FC = () => {
 
   return (
     <Layout>
-      <div className="p-6 min-h-screen">
-        <div className="flex items-center justify-between mb-6">
+      <div className="p-4 md:p-6 min-h-screen">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-6">
           <div>
             <h1 className="text-3xl font-bold text-gray-800 flex items-center gap-3">
               <Scissors className="w-8 h-8 text-green" />
@@ -248,15 +248,20 @@ const CuttingPage: React.FC = () => {
               {t('cuttingPage.subtitle')} {total > 0 && `(${total} ${t('common.total')})`}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-2 w-full md:w-auto">
             <Button 
               onClick={() => navigate('/cutting/createcut')} 
-              className="flex items-center gap-2"
+              className="flex items-center gap-2 w-full sm:w-auto"
             >
               <Plus className="w-4 h-4" />
               {t('cuttingPage.addNewCut')}
             </Button>
-            <Button onClick={() => fetchCuts(currentPage)} variant="outline" className="flex items-center gap-2" disabled={loading}>
+            <Button
+              onClick={() => fetchCuts(currentPage)}
+              variant="outline"
+              className="flex items-center gap-2 w-full sm:w-auto"
+              disabled={loading}
+            >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
               {t('cuttingPage.refresh')}
             </Button>

@@ -95,6 +95,7 @@ export interface BarcodeData {
   phase_name: string;
   current_phase: number;
   status: string;
+  is_second_degree?: boolean;
   archived_at?: string | null;
   notes?: string;
 }
@@ -810,9 +811,9 @@ export const barcodeApi = {
     return response.data;
   },
 
-  getBatchProductionDailyAssignments: async (batch_id: number, phase_id?: number): Promise<Array<{daily_assignment_id: number; worker_name: string; stage_name: string; quantity_produced: number; assignment_date?: string}>> => {
+  getBatchProductionDailyAssignments: async (batch_id: number, phase_id?: number): Promise<Array<{daily_assignment_id: number; worker_id: number; worker_name: string; stage_name: string; quantity_produced: number; assignment_date?: string}>> => {
     const params = phase_id != null ? { phase_id } : {};
-    const response = await api.get<Array<{daily_assignment_id: number; worker_name: string; stage_name: string; quantity_produced: number; assignment_date?: string}>>(`/batches/${batch_id}/production-daily-assignments`, { params });
+    const response = await api.get<Array<{daily_assignment_id: number; worker_id: number; worker_name: string; stage_name: string; quantity_produced: number; assignment_date?: string}>>(`/batches/${batch_id}/production-daily-assignments`, { params });
     return response.data;
   },
 
@@ -1298,65 +1299,6 @@ export const cutsApi = {
   },
 };
 
-export interface SingleIncrement {
-  increment_id: number;
-  batch_id: number;
-  incremented_from_phase_id?: number;
-  incremented_to_phase_id?: number;
-  incremented_from_phase_type?: string;
-  incremented_to_phase_type?: string;
-  responsible_daily_assignment_id?: number;
-  quantity: number;
-  increment_type: 'rejection_resolution';
-  incremented_by_user_id?: number;
-  incremented_at: string;
-  status_at_increment?: string;
-  job_order_id: number;
-  color_id: number;
-  size_id: number;
-}
-
-export interface SingleIncrementCreate {
-  batch_id: number;
-  incremented_from_phase_id?: number;
-  incremented_to_phase_id?: number;
-  responsible_daily_assignment_id?: number;
-  quantity: number;
-  increment_type: 'rejection_resolution';
-}
-
-export const incrementApi = {
-  create: async (increment: SingleIncrementCreate): Promise<SingleIncrement> => {
-    const response = await api.post<SingleIncrement>('/increments/', increment);
-    return response.data;
-  },
-
-  getAll: async (params?: {
-    batch_id?: number;
-    phase_id?: number;
-    job_order_id?: number;
-    skip?: number;
-    limit?: number;
-  }): Promise<SingleIncrement[]> => {
-    const response = await api.get<SingleIncrement[]>('/increments/', { params });
-    return response.data;
-  },
-
-  getById: async (incrementId: number): Promise<SingleIncrement> => {
-    const response = await api.get<SingleIncrement>(`/increments/${incrementId}`);
-    return response.data;
-  },
-
-  update: async (incrementId: number, update: Partial<SingleIncrementCreate>): Promise<SingleIncrement> => {
-    const response = await api.patch<SingleIncrement>(`/increments/${incrementId}`, update);
-    return response.data;
-  },
-
-  delete: async (incrementId: number): Promise<void> => {
-    await api.delete(`/increments/${incrementId}`);
-  },
-};
-
 // Production management - sewing line schematics
 export interface SewingLineSchematic {
   schematic_id: number;
@@ -1374,6 +1316,7 @@ export interface SewingLineStageResponse {
   stage_name: string;
   stage_order: number;
   production_qty?: number | null;
+  is_in_final_stage: boolean;
   active: boolean;
 }
 
@@ -1385,6 +1328,7 @@ export interface SewingLineStageCreate {
   stage_name: string;
   stage_order: number;
   production_qty?: number | null;
+  is_in_final_stage?: boolean;
   active?: boolean;
 }
 
@@ -1432,6 +1376,29 @@ export interface DailyAssignmentCreate {
   stage_id: number;
   active?: boolean;
 }
+
+export interface ReworkBatchCreate {
+  source_batch_id: number;
+  problem_stage_name: string;
+}
+
+export interface ReworkBatchUpdate {
+  printed?: boolean;
+}
+
+export interface ReworkBatchResponse {
+  rework_batch_id: number;
+  batch_id: number;
+  barcode?: string | null;
+  source_batch_id?: number | null;
+  job_order_id?: number | null;
+  problem_stage_name: string;
+  responsible_phase_id?: number | null;
+  printed: boolean;
+  created_at: string;
+  created_by_user_id?: number | null;
+}
+
 
 export interface RecordProductionRequest {
   daily_assignment_id: number;
@@ -1704,6 +1671,22 @@ export const productionApi = {
     return response.data;
   },
 
+  createReworkBatch: async (data: ReworkBatchCreate): Promise<ReworkBatchResponse> => {
+    const response = await api.post<ReworkBatchResponse>('/production/rework/batches', data);
+    return response.data;
+  },
+
+  getReworkBatches: async (params?: { source_batch_id?: number; printed?: boolean }): Promise<ReworkBatchResponse[]> => {
+    const response = await api.get<ReworkBatchResponse[]>('/production/rework/batches', { params });
+    return response.data;
+  },
+
+  updateReworkBatch: async (reworkBatchId: number, data: ReworkBatchUpdate): Promise<ReworkBatchResponse> => {
+    const response = await api.patch<ReworkBatchResponse>(`/production/rework/batches/${reworkBatchId}`, data);
+    return response.data;
+  },
+
+
   getMaxProductionQuantity: async (
     dailyAssignmentId: number,
     barcode: string,
@@ -1723,6 +1706,7 @@ export const productionApi = {
     const response = await api.post<RecordProductionResponse>('/production/tracking/record', data);
     return response.data;
   },
+
 
   getPhaseDailyProduction: async (
     phaseId: number,

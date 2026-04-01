@@ -9,33 +9,30 @@ const PhasesTab = lazy(() => import('./advanced-statistics/PhasesTab'));
 const AdvancedStatisticsPage: React.FC = () => {
   return (
     <Layout>
-      <div className="p-6 space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="p-4 md:p-6 space-y-6">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-800">
               Advanced Statistics
             </h1>
-            <p className="text-gray-600 mt-1">
-              High-level analytics and detailed production insights, organized into lazy-loaded tabs.
-            </p>
           </div>
         </div>
 
         <Tabs defaultValue="management" className="w-full">
-          <TabsList className="mx-auto flex w-full max-w-xl rounded-full bg-gray-100 p-1 shadow-sm">
+          <TabsList className="mx-auto flex w-full flex-wrap gap-2 rounded-2xl bg-gray-100 p-1 shadow-sm h-auto">
             <TabsTrigger
               value="management"
-              className="flex-1 flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-gray-600 transition-all data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-blue-100"
+              className="flex-1 min-w-[12rem] flex items-center justify-center gap-2 rounded-2xl px-4 py-2 text-sm font-medium text-gray-600 transition-all data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-blue-100"
             >
               <BarChart3 className="h-4 w-4" />
               <span className="truncate">Production Management</span>
             </TabsTrigger>
             <TabsTrigger
               value="tracking"
-              className="flex-1 flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-gray-600 transition-all data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-blue-100"
+              className="flex-1 min-w-[12rem] flex items-center justify-center gap-2 rounded-2xl px-4 py-2 text-sm font-medium text-gray-600 transition-all data-[state=active]:bg-white data-[state=active]:text-blue-600 data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-blue-100"
             >
               <Activity className="h-4 w-4" />
-              <span className="truncate">Production Tracking</span>
+              <span className="truncate">Production Operations</span>
             </TabsTrigger>
           </TabsList>
 

@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # Report Configuration
     REPORT_RETENTION_DAYS: int = 30
     REPORTS_DIR: str = "backend/reports"
+
+    # Zebra second-degree Arabic line (^A@): path as on printer (e.g. E:SWISS271.TTF after upload)
+    ZEBRA_SECOND_DEGREE_ARABIC_FONT: str = "E:SWISS271.TTF"
+    ZEBRA_SECOND_DEGREE_ARABIC_FONT_HEIGHT: int = 50
+    ZEBRA_SECOND_DEGREE_ARABIC_FONT_WIDTH: int = 50
+    ZEBRA_SECOND_DEGREE_ARABIC_FO_X: int = 580
+    ZEBRA_SECOND_DEGREE_ARABIC_FO_Y: int = 340
     
     model_config = SettingsConfigDict(case_sensitive=True, env_file=".env")
     

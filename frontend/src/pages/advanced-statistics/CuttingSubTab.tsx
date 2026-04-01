@@ -839,6 +839,7 @@ const CuttingSubTab: React.FC = () => {
                 value={fromDate}
                 onChange={(e) => setFromDate(e.target.value)}
                 disabled={allDates}
+                className="min-w-0 max-w-full overflow-hidden whitespace-nowrap text-ellipsis appearance-none"
               />
             </div>
             <div className="space-y-1">
@@ -851,6 +852,7 @@ const CuttingSubTab: React.FC = () => {
                 value={toDate}
                 onChange={(e) => setToDate(e.target.value)}
                 disabled={allDates}
+                className="min-w-0 max-w-full overflow-hidden whitespace-nowrap text-ellipsis appearance-none"
               />
             </div>
             <div className="flex flex-col items-stretch gap-2 md:flex-row md:items-center md:gap-4">
@@ -882,7 +884,7 @@ const CuttingSubTab: React.FC = () => {
             <Button
               variant="outline"
               size="sm"
-              className="inline-flex items-center gap-1.5"
+              className="inline-flex w-full sm:w-auto justify-center items-center gap-1.5"
               onClick={downloadExcel}
               disabled={cutRows.length === 0}
             >

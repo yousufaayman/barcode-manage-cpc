@@ -167,14 +167,9 @@ const SchematicDetailsPage: React.FC = () => {
               <LayoutGrid className="h-6 w-6 text-primary" />
             </div>
             <div className="min-w-0 flex-1">
-              <h1 className="truncate text-2xl font-bold tracking-tight text-gray-900 md:text-3xl">
+              <h1 className="truncate text-xl sm:text-2xl md:text-3xl font-bold tracking-tight text-gray-900">
                 {t('productionManagement.details.title')}
               </h1>
-              <p className="mt-0.5 text-sm text-gray-500">
-                <Link to="/production" className="text-primary hover:underline">
-                  {t('productionManagement.details.backToProduction')}
-                </Link>
-              </p>
             </div>
             {schematic && user?.role === 'admin' && (
               <Button variant="outline" size="sm" asChild>
@@ -203,7 +198,9 @@ const SchematicDetailsPage: React.FC = () => {
               <Card className="overflow-hidden border-gray-200/80 shadow-sm">
                 <div className="border-l-4 border-primary bg-primary/5">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-xl font-semibold text-gray-900">{schematic.name}</CardTitle>
+                    <CardTitle className="text-lg sm:text-xl font-semibold text-gray-900 break-words">
+                      {schematic.name}
+                    </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3 pb-6">
                     <div className="flex flex-wrap items-center gap-x-6 gap-y-1">

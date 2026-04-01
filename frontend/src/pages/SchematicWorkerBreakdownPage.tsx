@@ -168,7 +168,7 @@ const SchematicWorkerBreakdownPage: React.FC = () => {
 
   return (
     <Layout>
-      <div className="p-6 space-y-4">
+      <div className="p-4 md:p-6 space-y-4">
         <div className="space-y-1">
           <h1 className="text-2xl font-bold text-gray-800">
             Schematic Worker Production Breakdown
@@ -212,8 +212,8 @@ const SchematicWorkerBreakdownPage: React.FC = () => {
             )}
           </p>
 
-          <div className="mt-4 flex flex-wrap items-end gap-3">
-            <div className="space-y-1">
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+            <div className="space-y-1 w-full min-w-0 sm:w-auto overflow-hidden">
               <label
                 htmlFor="schematic-from-date"
                 className="text-xs font-medium text-gray-600"
@@ -225,10 +225,10 @@ const SchematicWorkerBreakdownPage: React.FC = () => {
                 type="date"
                 value={fromDate}
                 onChange={(e) => setFromDate(e.target.value)}
-                className="h-9 w-full rounded-md border border-gray-300 px-2 text-sm"
+                className="h-9 w-full min-w-0 max-w-full overflow-hidden whitespace-nowrap text-ellipsis appearance-none rounded-md border border-gray-300 px-2 text-sm"
               />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1 w-full min-w-0 sm:w-auto overflow-hidden">
               <label
                 htmlFor="schematic-to-date"
                 className="text-xs font-medium text-gray-600"
@@ -240,15 +240,15 @@ const SchematicWorkerBreakdownPage: React.FC = () => {
                 type="date"
                 value={toDate}
                 onChange={(e) => setToDate(e.target.value)}
-                className="h-9 w-full rounded-md border border-gray-300 px-2 text-sm"
+                className="h-9 w-full min-w-0 max-w-full overflow-hidden whitespace-nowrap text-ellipsis appearance-none rounded-md border border-gray-300 px-2 text-sm"
               />
             </div>
-            <div className="pb-1">
+            <div className="pb-1 w-full sm:w-auto">
               <button
                 type="button"
                 onClick={handleApplyRange}
                 disabled={!fromDate || !toDate}
-                className="mt-4 inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+                className="inline-flex w-full sm:w-auto justify-center items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300 sm:mt-4"
               >
                 Apply range
               </button>

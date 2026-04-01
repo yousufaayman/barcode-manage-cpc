@@ -1,0 +1,3 @@
+# Second-degree Arabic ZPL: arabic-reshaper + python-bidi (printer font e.g. Swiss 271 via ^A@)
+arabic-reshaper>=3.0.0
+python-bidi>=0.4.2

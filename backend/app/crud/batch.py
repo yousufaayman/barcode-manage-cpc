@@ -15,6 +15,10 @@ from .ledger_helpers import (
     crosses_phase_type_boundary
 )
 
+# Cut-generated batches: layers = cut_sequence_per_job_order * LAYERS_ROLL_MOD + roll_number
+# cut_sequence: 1st cut for the job order = 1, 2nd = 2, ... (ORDER BY cut_id). Roll: decimal 0..99 (×100 packing).
+LAYERS_ROLL_MOD = 100
+
 # Batch CRUD operations and helpers will be moved here from crud.py 
 
 # All batch, timeline, archive, and batch-related helper functions from crud.py should be moved here with their full implementation. 
@@ -384,11 +388,9 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
         if quantity_changed:
             deduction_to_phase = update_data.get('deduction_to_phase')
             deduction_amount = old_quantity - new_quantity if old_quantity > new_quantity else 0
-            increment_amount = new_quantity - old_quantity if new_quantity > old_quantity else 0
             quantity_decrement_type_raw = update_data.get('quantity_decrement_type')
             quantity_decrement_type = quantity_decrement_type_raw.value if hasattr(quantity_decrement_type_raw, 'value') else quantity_decrement_type_raw
             quantity_decrement_reason = update_data.get('quantity_decrement_reason')
-            quantity_increment_reason = update_data.get('quantity_increment_reason')
             
             if deduction_to_phase and deduction_amount > 0:
                 create_scan_event(
@@ -409,7 +411,6 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
                     quantity_decrement_phase_id = getattr(batch, 'quantity_decrement_phase_id', None)
                     if quantity_decrement_phase_id is None:
                         quantity_decrement_phase_id = update_data.get('quantity_decrement_phase_id')
-                    quantity_decrement_daily_assignment_id = update_data.get('quantity_decrement_daily_assignment_id')
                     try:
                         from .rejection import create_rejection
                         from ..schemas import SingleRejectionCreate
@@ -418,18 +419,48 @@ def update_batch(db: Session, db_batch: models.Batch, batch: schemas.BatchUpdate
                         if quantity_decrement_type == 'lost':
                             rejection_reason = 'lost/untracked'
                             return_to_phase_id = new_phase
-                            # When return phase is sewing, responsible_daily_assignment_id is still required (passed from frontend)
                         else:
                             rejection_reason = quantity_decrement_reason or f"Quantity decremented by {deduction_amount}"
                             return_to_phase_id = quantity_decrement_phase_id
-                        
+
+                        rework_op_batch_id = None
+                        if quantity_decrement_type == 'rejection':
+                            # IMPORTANT: rework creation is driven by the *responsible phase* selected in the UI,
+                            # not necessarily the batch's current phase (new_phase).
+                            responsible_phase_id = quantity_decrement_phase_id
+                            dec_phase_obj = (
+                                db.query(models.ProductionPhase)
+                                .filter(models.ProductionPhase.phase_id == responsible_phase_id)
+                                .first()
+                                if responsible_phase_id is not None
+                                else None
+                            )
+                            stage_nm = update_data.get("quantity_decrement_stage_name")
+                            if (
+                                dec_phase_obj
+                                and (dec_phase_obj.type or "").lower() == "sewing"
+                                and stage_nm
+                                and str(stage_nm).strip()
+                            ):
+                                from .sewing_rejection_rework import resolve_sewing_rework_operational_batch_id
+
+                                rework_op_batch_id = resolve_sewing_rework_operational_batch_id(
+                                    db,
+                                    db_batch,
+                                    deduction_amount,
+                                    str(stage_nm).strip(),
+                                    responsible_phase_id,
+                                    user_id,
+                                )
+
                         rejection_create = SingleRejectionCreate(
                             batch_id=db_batch.batch_id,
                             rejected_from_phase_id=new_phase,
                             return_to_phase_id=return_to_phase_id,
-                            responsible_daily_assignment_id=quantity_decrement_daily_assignment_id,
                             quantity=deduction_amount,
                             rejection_reason=rejection_reason,
+                            worker_id=update_data.get("quantity_decrement_worker_id"),
+                            new_batch_id=rework_op_batch_id,
                         )
                         create_rejection(db=db, rejection=rejection_create, user_id=user_id, commit=False)
                     except SQLAlchemyError as e:
@@ -1210,7 +1241,8 @@ def create_scan_event(db: Session, batch_id: int, action_type: str, phase_id: in
                      old_quantity: Optional[int] = None, new_quantity: Optional[int] = None,
                      old_phase: Optional[int] = None, new_phase: Optional[int] = None,
                      user_id: Optional[int] = None, notes: Optional[str] = None,
-                     is_reversal: bool = False, reversed_event_id: Optional[int] = None):
+                     is_reversal: bool = False, reversed_event_id: Optional[int] = None,
+                     autocommit: bool = True):
     """
     Create a new scan event record and write ledger entry.
     
@@ -1257,7 +1289,8 @@ def create_scan_event(db: Session, batch_id: int, action_type: str, phase_id: in
             quantity_delta=quantity_delta
         )
     
-    db.commit()
+    if autocommit:
+        db.commit()
     return event
 
 def get_scan_events_by_batch(db: Session, batch_id: int, limit: int = 100):
@@ -1442,13 +1475,13 @@ def apply_size_transitions_to_batches(
     
     For each transition:
     1. Deduct from LAST batch of source size only
-    2. Add to LAST batch of target size only
+    2. Add to FIRST batch of target size only
     3. Create new batches if needed for remaining quantity
     4. Apply threshold merging after transitions
     
     CRITICAL: Size transitions should only be applied to:
     - The last batch of the transitioned-from size (for deduction)
-    - The last batch of the transitioned-to size (for addition)
+    - The first batch of the transitioned-to size (for addition)
     """
     from ..crud.helpers import generate_barcode_string, get_next_serial_number
     from .. import models
@@ -1537,43 +1570,45 @@ def apply_size_transitions_to_batches(
             # No source batches, nothing to deduct
             qty_to_add = 0
         
-        # Step 2: Add to LAST batch of target size only
+        # Step 2: Add to FIRST batch of target size only
         if qty_to_add <= 0:
             continue  # Nothing to add, skip to next transition
         
         target_batches = batches_by_size.get(to_size_value, [])
         
-        # Find layers for barcode regeneration (use from existing batches)
+        # Find layers for barcode regeneration.
+        # We must preserve roll/layers consistency: use the target batch layers when target exists,
+        # otherwise fall back to the source batch layers.
         layers = 1
         if target_batches:
-            layers = max(1, target_batches[-1].get("layers", 1))
+            layers = max(1, target_batches[0].get("layers", 1))
         elif source_batches:
             layers = max(1, source_batches[-1].get("layers", 1))
         
         if target_batches:
-            # Get the last batch (highest batch number) for this size
-            last_target_batch = target_batches[-1]
-            current_qty = last_target_batch.get("quantity", 0)
+            # Get the first batch (lowest batch number) for this size
+            first_target_batch = target_batches[0]
+            current_qty = first_target_batch.get("quantity", 0)
             
             # Check max_batch_size constraint
             if max_batch_size:
                 available_space = max_batch_size - current_qty
                 if available_space <= 0:
-                    # Last batch is full, we'll need to create a new batch
+                    # First batch is full, we'll need to create new batch(es)
                     qty_remaining = qty_to_add
                 else:
-                    # Add to last batch up to max_batch_size
+                    # Add to first batch up to max_batch_size
                     qty_to_add_to_batch = min(qty_to_add, available_space)
                     new_qty = current_qty + qty_to_add_to_batch
-                    last_target_batch["quantity"] = new_qty
+                    first_target_batch["quantity"] = new_qty
                     
                     # Regenerate barcode with new quantity
-                    serial_number = last_target_batch.get("serial_number")
+                    serial_number = first_target_batch.get("serial_number")
                     if not serial_number:
                         serial_number = get_next_serial_number(db, job_order_id, to_size_id, color_id)
-                        last_target_batch["serial_number"] = serial_number
+                        first_target_batch["serial_number"] = serial_number
                     
-                    last_target_batch["barcode"] = generate_barcode_string(
+                    first_target_batch["barcode"] = generate_barcode_string(
                         job_order_id,
                         to_size_id,
                         color_id,
@@ -1583,17 +1618,17 @@ def apply_size_transitions_to_batches(
                     
                     qty_remaining = qty_to_add - qty_to_add_to_batch
             else:
-                # No max limit, add all quantity to last batch
+                # No max limit, add all quantity to first batch
                 new_qty = current_qty + qty_to_add
-                last_target_batch["quantity"] = new_qty
+                first_target_batch["quantity"] = new_qty
                 
                 # Regenerate barcode with new quantity
-                serial_number = last_target_batch.get("serial_number")
+                serial_number = first_target_batch.get("serial_number")
                 if not serial_number:
                     serial_number = get_next_serial_number(db, job_order_id, to_size_id, color_id)
-                    last_target_batch["serial_number"] = serial_number
+                    first_target_batch["serial_number"] = serial_number
                 
-                last_target_batch["barcode"] = generate_barcode_string(
+                first_target_batch["barcode"] = generate_barcode_string(
                     job_order_id,
                     to_size_id,
                     color_id,
@@ -1776,43 +1811,21 @@ def generate_batches_from_cut_manual(
     if not job_order:
         raise ValueError(f"Job order with ID {job_order_id} not found")
     
-    ratios = cut_details.get('job_order_items_ratios', {}) or {}
+    cut_seq = cut_crud.get_cut_sequence_per_job_order(db, job_order_id, cut_id)
+    
     rolls = cut_details.get('rolls', [])
-    transitions = cut_details.get('transitions', [])
+    # NOTE: cut_details_view.total_pieces already includes cut_size_transitions adjustments.
+    # We still load transitions elsewhere for display, but generation should not reapply them.
     color_id = cut_details['color_id']
     
-    total_size_quantities = {}
-    
-    for roll in rolls:
-        num_layers = roll.get('num_of_layers', 0)
-        if num_layers <= 0:
+    # Use cut_details['sizes'] (system-of-record) instead of recomputing via per-roll truncation.
+    total_size_quantities: Dict[str, int] = {}
+    for s in cut_details.get("sizes") or []:
+        sv = s.get("size_value")
+        tp = s.get("total_pieces")
+        if not sv or tp is None:
             continue
-        
-        for item_id_str, ratio_per_layer in ratios.items():
-            item_id = int(item_id_str)
-            
-            job_order_item = db.query(models.JobOrderItem).filter(
-                models.JobOrderItem.item_id == item_id,
-                models.JobOrderItem.job_order_id == job_order_id,
-                models.JobOrderItem.color_id == color_id
-            ).first()
-            
-            if not job_order_item:
-                continue
-            
-            size_id = job_order_item.size_id
-            size = db.query(models.Size).filter(models.Size.size_id == size_id).first()
-            if not size:
-                continue
-            
-            total_items = ratio_per_layer * num_layers
-            quantity_int = int(total_items)
-            
-            if quantity_int > 0:
-                size_value = size.size_value
-                if size_value not in total_size_quantities:
-                    total_size_quantities[size_value] = 0
-                total_size_quantities[size_value] += quantity_int
+        total_size_quantities[str(sv)] = int(tp)
     
     # Step 1: Create batches from totals (without applying transitions yet)
     batches = []
@@ -1855,8 +1868,11 @@ def generate_batches_from_cut_manual(
         
         size_id = size_obj.size_id
         roll_number = rolls[0].get('roll_number', 1) if rolls else 1
-        # Combine cut_id and roll_number: cut_id * 10000 + roll_number
-        layers = cut_id * 10000 + roll_number
+        if roll_number < 0 or roll_number >= LAYERS_ROLL_MOD:
+            raise ValueError(
+                f"roll_number must be 0..{LAYERS_ROLL_MOD - 1} (decimal), got {roll_number}"
+            )
+        layers = cut_seq * LAYERS_ROLL_MOD + roll_number
         
         size_batches = []
         last_serial_for_size = None
@@ -1928,17 +1944,9 @@ def generate_batches_from_cut_manual(
         
         batches.extend(size_batches)
     
-    # Step 2: Apply size transitions to batches (only affects last batch of source and first batch of target)
-    if transitions:
-        batches = apply_size_transitions_to_batches(
-            db,
-            batches,
-            transitions,
-            job_order_id,
-            color_id,
-            max_batch_size=max_batch_size,
-            extra_pieces_threshold=extra_pieces_threshold
-        )
+    # IMPORTANT:
+    # ops.cut_details_view.total_pieces is already transition-adjusted in this codebase.
+    # Applying cut_size_transitions again here would double-apply them.
     
     # Step 3: Apply threshold merging (merge small batches backward)
     if extra_pieces_threshold:
@@ -2015,39 +2023,8 @@ def generate_batches_from_cut_manual(
         batch["batch"] = i
     
     # Step 5: Validate quantity integrity
-    # Calculate expected totals after transitions
+    # Expected totals come directly from cut_details_view totals.
     adjusted_total_size_quantities = total_size_quantities.copy()
-    for transition in transitions:
-        from_item_id = transition.get('from_item_id')
-        to_item_id = transition.get('to_item_id')
-        quantity = transition.get('quantity', 0)
-        
-        if quantity <= 0:
-            continue
-        
-        from_item = db.query(models.JobOrderItem).filter(models.JobOrderItem.item_id == from_item_id).first()
-        to_item = db.query(models.JobOrderItem).filter(models.JobOrderItem.item_id == to_item_id).first()
-        
-        if not from_item or not to_item:
-            continue
-        
-        from_size = db.query(models.Size).filter(models.Size.size_id == from_item.size_id).first()
-        to_size = db.query(models.Size).filter(models.Size.size_id == to_item.size_id).first()
-        
-        if not from_size or not to_size:
-            continue
-        
-        from_size_value = from_size.size_value
-        to_size_value = to_size.size_value
-        
-        # Deduct from source size
-        if from_size_value in adjusted_total_size_quantities:
-            adjusted_total_size_quantities[from_size_value] = max(0, adjusted_total_size_quantities[from_size_value] - quantity)
-        
-        # Add to target size
-        if to_size_value not in adjusted_total_size_quantities:
-            adjusted_total_size_quantities[to_size_value] = 0
-        adjusted_total_size_quantities[to_size_value] += quantity
     
     final_totals_by_size = {}
     for batch in batches:
@@ -2125,62 +2102,154 @@ def generate_batches_from_cut(
     if not job_order:
         raise ValueError(f"Job order with ID {job_order_id} not found")
     
+    cut_seq = cut_crud.get_cut_sequence_per_job_order(db, job_order_id, cut_id)
+    
     ratios = cut_details.get('job_order_items_ratios', {}) or {}
     rolls = cut_details.get('rolls', [])
-    transitions = cut_details.get('transitions', [])
+    # NOTE: cut_details_view.total_pieces already includes cut_size_transitions adjustments.
+    # We still load transitions elsewhere for display, but generation should not reapply them.
     color_id = cut_details['color_id']
     
-    # Step 1: Calculate quantities per roll and total quantities per size
-    roll_batches = []
-    total_size_quantities = {}  # size_id -> total quantity
-    
-    for roll in rolls:
-        num_layers = roll.get('num_of_layers', 0)
-        roll_number = roll.get('roll_number', 1)
-        if num_layers <= 0:
+    # Step 1: Calculate integer quantities per roll+size WITHOUT dropping pieces.
+    # We derive expected totals from cut_details['sizes'] (which is already the system-of-record total_pieces),
+    # then distribute any rounding residues across rolls by largest fractional remainder.
+    roll_batches: List[Dict[str, Any]] = []
+    total_size_quantities: Dict[int, int] = {}  # size_id -> expected total pieces across ALL rolls
+
+    expected_from_cut: Dict[int, int] = {}
+    for s in cut_details.get("sizes") or []:
+        sid = s.get("size_id")
+        tp = s.get("total_pieces")
+        if sid is None or tp is None:
             continue
-        
-        roll_size_quantities = {}
-        
-        for item_id_str, ratio_per_layer in ratios.items():
+        expected_from_cut[int(sid)] = int(tp)
+
+    # Map item_id -> size_id once (avoid per-roll queries)
+    item_id_to_size_id: Dict[int, int] = {}
+    for item_id_str in ratios.keys():
+        try:
             item_id = int(item_id_str)
-            
-            job_order_item = db.query(models.JobOrderItem).filter(
-                models.JobOrderItem.item_id == item_id,
-                models.JobOrderItem.job_order_id == job_order_id,
-                models.JobOrderItem.color_id == color_id
-            ).first()
-            
-            if not job_order_item:
+        except (TypeError, ValueError):
+            continue
+        job_order_item = db.query(models.JobOrderItem).filter(
+            models.JobOrderItem.item_id == item_id,
+            models.JobOrderItem.job_order_id == job_order_id,
+            models.JobOrderItem.color_id == color_id
+        ).first()
+        if job_order_item:
+            item_id_to_size_id[item_id] = int(job_order_item.size_id)
+
+    # Compute exact quantities per (roll, size)
+    roll_meta: List[Tuple[int, int]] = []  # (roll_id, roll_number)
+    exact_by_roll_size: Dict[int, Dict[int, float]] = {}
+    base_by_roll_size: Dict[int, Dict[int, int]] = {}
+    frac_by_roll_size: Dict[int, Dict[int, float]] = {}
+
+    for roll in rolls:
+        roll_id = int(roll.get("roll_id") or 0) or None
+        if roll_id is None:
+            # Fallback to roll_number identity if roll_id isn't present
+            roll_id = int(roll.get("roll_number") or 0)
+
+        num_layers = roll.get('num_of_layers', 0)
+        roll_number = int(roll.get('roll_number', 1))
+        if roll_number < 0 or roll_number >= LAYERS_ROLL_MOD:
+            raise ValueError(
+                f"roll_number must be 0..{LAYERS_ROLL_MOD - 1} (decimal), got {roll_number}"
+            )
+        if not num_layers or num_layers <= 0:
+            continue
+
+        roll_meta.append((roll_id, roll_number))
+        exact_by_roll_size[roll_id] = {}
+        base_by_roll_size[roll_id] = {}
+        frac_by_roll_size[roll_id] = {}
+
+        for item_id_str, ratio_per_layer in ratios.items():
+            try:
+                item_id = int(item_id_str)
+            except (TypeError, ValueError):
                 continue
-            
-            size_id = job_order_item.size_id
-            
-            # Sum fractional quantities across layers, then truncate
-            total_items_for_roll = ratio_per_layer * num_layers
-            quantity_int = int(total_items_for_roll)
-            
-            if quantity_int > 0:
-                if size_id not in roll_size_quantities:
-                    roll_size_quantities[size_id] = 0
-                roll_size_quantities[size_id] += quantity_int
-                
-                # Track totals per size
-                if size_id not in total_size_quantities:
-                    total_size_quantities[size_id] = 0
-                total_size_quantities[size_id] += quantity_int
-        
-        for size_id, quantity in roll_size_quantities.items():
-            if quantity > 0:
-                # Combine cut_id and roll_number: cut_id * 10000 + roll_number
-                # This allows decoding: cut_id = layers // 10000, roll_number = layers % 10000
-                layers_value = cut_id * 10000 + roll_number
-                roll_batches.append({
-                    "size_id": size_id,
-                    "quantity": quantity,
-                    "layers": layers_value,
-                    "roll_number": roll_number
-                })
+            size_id = item_id_to_size_id.get(item_id)
+            if not size_id:
+                continue
+
+            exact = float(ratio_per_layer or 0) * float(num_layers or 0)
+            if exact <= 0:
+                continue
+            base = int(exact // 1)
+            frac = float(exact - base)
+
+            exact_by_roll_size[roll_id][size_id] = exact_by_roll_size[roll_id].get(size_id, 0.0) + exact
+            base_by_roll_size[roll_id][size_id] = base_by_roll_size[roll_id].get(size_id, 0) + base
+            # Keep a representative remainder for allocation (sum remainders is fine too, but representative is enough
+            # because we're only distributing small diffs; we use summed frac to be safe.)
+            frac_by_roll_size[roll_id][size_id] = frac_by_roll_size[roll_id].get(size_id, 0.0) + frac
+
+    # Distribute rounding diff per size across rolls
+    # Start from base integers; then add/subtract 1 where needed.
+    roll_qty_by_size: Dict[int, Dict[int, int]] = {rid: dict(smap) for rid, smap in base_by_roll_size.items()}
+
+    # Determine expected totals:
+    # Prefer cut_details['sizes'] totals (system-of-record), otherwise fall back to rounding sum(exact).
+    all_size_ids = set()
+    for rid in roll_qty_by_size:
+        all_size_ids.update(roll_qty_by_size[rid].keys())
+
+    for size_id in all_size_ids:
+        base_sum = sum(roll_qty_by_size[rid].get(size_id, 0) for rid, _ in roll_meta)
+        expected_total = expected_from_cut.get(size_id)
+        if expected_total is None:
+            exact_sum = sum(exact_by_roll_size.get(rid, {}).get(size_id, 0.0) for rid, _ in roll_meta)
+            expected_total = int(round(exact_sum))
+        diff = int(expected_total) - int(base_sum)
+
+        if diff == 0:
+            total_size_quantities[size_id] = int(expected_total)
+            continue
+
+        # Sort rolls by remainder: if we need to add pieces, give to largest remainder;
+        # if we need to remove pieces, take from smallest remainder (and only from rolls that have >0).
+        remainders = []
+        for rid, _rn in roll_meta:
+            remainders.append((rid, float(frac_by_roll_size.get(rid, {}).get(size_id, 0.0))))
+
+        if diff > 0:
+            remainders.sort(key=lambda x: x[1], reverse=True)
+            idx = 0
+            while diff > 0 and remainders:
+                rid, _ = remainders[idx % len(remainders)]
+                roll_qty_by_size.setdefault(rid, {})
+                roll_qty_by_size[rid][size_id] = int(roll_qty_by_size[rid].get(size_id, 0)) + 1
+                diff -= 1
+                idx += 1
+        else:
+            to_remove = -diff
+            remainders.sort(key=lambda x: x[1])  # smallest remainder loses first
+            idx = 0
+            while to_remove > 0 and remainders:
+                rid, _ = remainders[idx % len(remainders)]
+                cur = int(roll_qty_by_size.get(rid, {}).get(size_id, 0))
+                if cur > 0:
+                    roll_qty_by_size[rid][size_id] = cur - 1
+                    to_remove -= 1
+                idx += 1
+
+        total_size_quantities[size_id] = int(expected_total)
+
+    # Build roll_batches list from distributed integers
+    for rid, roll_number in roll_meta:
+        layers_value = cut_seq * LAYERS_ROLL_MOD + roll_number
+        for size_id, qty in (roll_qty_by_size.get(rid) or {}).items():
+            if qty and qty > 0:
+                roll_batches.append(
+                    {
+                        "size_id": int(size_id),
+                        "quantity": int(qty),
+                        "layers": int(layers_value),
+                        "roll_number": int(roll_number),
+                    }
+                )
     
     # Step 2: Create batches from roll quantities (without applying transitions yet)
     batches = []
@@ -2189,29 +2258,26 @@ def generate_batches_from_cut(
     # Track serial numbers per size-roll_number combination to ensure uniqueness
     serial_counters: Dict[Tuple[int, int, int], int] = {}
     
-    def get_next_serial_for_size_roll(size_id: int, roll_number: int, color_id: int) -> int:
-        """Get next serial number for a size-roll_number combination, tracking in memory"""
-        key = (size_id, roll_number, color_id)
+    def get_next_serial_for_size_roll(size_id: int, layers_value: int, color_id: int) -> int:
+        """Next serial for this job order + size + color + encoded cut/roll (full Batch.layers)."""
+        key = (size_id, layers_value, color_id)
         if key not in serial_counters:
-            # Initialize with existing database count for this size-roll_number combo
-            # Query existing batches with same size, roll_number (layers), and color
             existing_count = db.query(models.Batch).filter(
                 models.Batch.job_order_id == job_order_id,
                 models.Batch.size_id == size_id,
                 models.Batch.color_id == color_id,
-                models.Batch.layers == roll_number
+                models.Batch.layers == layers_value,
             ).count()
             serial_counters[key] = existing_count + 1
         else:
-            # Increment for next batch
             serial_counters[key] += 1
         return serial_counters[key]
     
     for batch_info in roll_batches:
         size_id = batch_info["size_id"]
         quantity = batch_info["quantity"]  # Already adjusted by transitions
-        layers_value = batch_info["layers"]  # This is cut_id * 10000 + roll_number
-        roll_number = batch_info.get("roll_number", layers_value % 10000)  # Extract roll_number for serial tracking
+        layers_value = batch_info["layers"]  # cut_seq * LAYERS_ROLL_MOD + roll_number
+        roll_number = batch_info.get("roll_number", layers_value % LAYERS_ROLL_MOD)
         
         if quantity <= 0:
             continue
@@ -2227,7 +2293,7 @@ def generate_batches_from_cut(
             leftover = quantity % max_batch_size
             
             for i in range(full_batches):
-                serial_number = get_next_serial_for_size_roll(size_id, roll_number, color_id)
+                serial_number = get_next_serial_for_size_roll(size_id, layers_value, color_id)
                 
                 barcode = generate_barcode_string(
                     job_order_id,
@@ -2253,7 +2319,7 @@ def generate_batches_from_cut(
                 if extra_pieces_threshold and leftover < extra_pieces_threshold and batches:
                     last_batch_same_size_roll = None
                     for i in range(len(batches) - 1, -1, -1):
-                        batch_roll = batches[i].get("layers", 0) % 10000
+                        batch_roll = batches[i].get("layers", 0) % LAYERS_ROLL_MOD
                         if batches[i].get("size_id") == size_id and batch_roll == roll_number:
                             last_batch_same_size_roll = batches[i]
                             break
@@ -2262,7 +2328,7 @@ def generate_batches_from_cut(
                         new_quantity = last_batch_same_size_roll["quantity"] + leftover
                         last_serial = last_batch_same_size_roll.get("serial_number")
                         if not last_serial:
-                            last_serial = get_next_serial_for_size_roll(size_id, roll_number, color_id)
+                            last_serial = get_next_serial_for_size_roll(size_id, layers_value, color_id)
                         
                         last_batch_same_size_roll["quantity"] = new_quantity
                         last_batch_same_size_roll["barcode"] = generate_barcode_string(
@@ -2273,7 +2339,7 @@ def generate_batches_from_cut(
                             last_serial
                         )
                     else:
-                        serial_number = get_next_serial_for_size_roll(size_id, roll_number, color_id)
+                        serial_number = get_next_serial_for_size_roll(size_id, layers_value, color_id)
                         
                         barcode = generate_barcode_string(
                             job_order_id,
@@ -2295,7 +2361,7 @@ def generate_batches_from_cut(
                         
                         batch_number += 1
                 else:
-                    serial_number = get_next_serial_for_size_roll(size_id, roll_number, color_id)
+                    serial_number = get_next_serial_for_size_roll(size_id, layers_value, color_id)
                     
                     barcode = generate_barcode_string(
                         job_order_id,
@@ -2317,8 +2383,8 @@ def generate_batches_from_cut(
                     
                     batch_number += 1
         else:
-            serial_number = get_next_serial_for_size_roll(size_id, roll_number, color_id)
-            
+            serial_number = get_next_serial_for_size_roll(size_id, layers_value, color_id)
+
             barcode = generate_barcode_string(
                 job_order_id,
                 size_id,
@@ -2326,7 +2392,7 @@ def generate_batches_from_cut(
                 layers_value,
                 serial_number
             )
-            
+
             batches.append({
                 "batch": batch_number,
                 "size": size_value,
@@ -2339,17 +2405,9 @@ def generate_batches_from_cut(
             
             batch_number += 1
     
-    # Step 3: Apply size transitions to batches (only affects last batch of source and first batch of target)
-    if transitions:
-        batches = apply_size_transitions_to_batches(
-            db,
-            batches,
-            transitions,
-            job_order_id,
-            color_id,
-            max_batch_size=max_batch_size,
-            extra_pieces_threshold=extra_pieces_threshold
-        )
+    # IMPORTANT:
+    # ops.cut_details_view.total_pieces is already transition-adjusted in this codebase.
+    # Applying cut_size_transitions again here would double-apply them.
     
     # Step 4: Apply threshold merging (merge small batches backward)
     if extra_pieces_threshold:
@@ -2357,8 +2415,8 @@ def generate_batches_from_cut(
         batches_by_size_roll: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
         for batch in batches:
             size_value = batch.get("size")
-            layers_value = batch.get("layers", cut_id * 10000 + 1)
-            roll_number = layers_value % 10000  # Extract roll_number from layers
+            layers_value = batch.get("layers", cut_seq * LAYERS_ROLL_MOD + 1)
+            roll_number = layers_value % LAYERS_ROLL_MOD  # Extract roll_number from layers
             if size_value:
                 key = (size_value, roll_number)
                 if key not in batches_by_size_roll:
@@ -2391,11 +2449,10 @@ def generate_batches_from_cut(
                         
                         # Regenerate barcode
                         size_id = prev_batch.get("size_id")
-                        layers_value = prev_batch.get("layers", cut_id * 10000 + 1)
-                        roll_number_val = layers_value % 10000  # Extract roll_number for serial tracking
+                        layers_value = prev_batch.get("layers", cut_seq * LAYERS_ROLL_MOD + 1)
                         serial_number = prev_batch.get("serial_number")
                         if not serial_number:
-                            serial_number = get_next_serial_for_size_roll(size_id, roll_number_val, color_id)
+                            serial_number = get_next_serial_for_size_roll(size_id, layers_value, color_id)
                             prev_batch["serial_number"] = serial_number
                         
                         prev_batch["barcode"] = generate_barcode_string(
@@ -2416,8 +2473,8 @@ def generate_batches_from_cut(
             batches_by_size_roll = {}
             for batch in batches:
                 size_value = batch.get("size")
-                layers_value = batch.get("layers", cut_id * 10000 + 1)
-                roll_number = layers_value % 10000  # Extract roll_number from layers
+                layers_value = batch.get("layers", cut_seq * LAYERS_ROLL_MOD + 1)
+                roll_number = layers_value % LAYERS_ROLL_MOD  # Extract roll_number from layers
                 if size_value:
                     key = (size_value, roll_number)
                     if key not in batches_by_size_roll:
@@ -2433,33 +2490,8 @@ def generate_batches_from_cut(
         batch["batch"] = i
     
     # Step 7: Validate quantity integrity
-    # Calculate expected totals after transitions
+    # Expected totals come directly from cut_details_view totals.
     adjusted_total_size_quantities = total_size_quantities.copy()
-    for transition in transitions:
-        from_item_id = transition.get('from_item_id')
-        to_item_id = transition.get('to_item_id')
-        quantity = transition.get('quantity', 0)
-        
-        if quantity <= 0:
-            continue
-        
-        from_item = db.query(models.JobOrderItem).filter(models.JobOrderItem.item_id == from_item_id).first()
-        to_item = db.query(models.JobOrderItem).filter(models.JobOrderItem.item_id == to_item_id).first()
-        
-        if not from_item or not to_item:
-            continue
-        
-        from_size_id = from_item.size_id
-        to_size_id = to_item.size_id
-        
-        # Deduct from source size total
-        if from_size_id in adjusted_total_size_quantities:
-            adjusted_total_size_quantities[from_size_id] = max(0, adjusted_total_size_quantities[from_size_id] - quantity)
-        
-        # Add to target size total
-        if to_size_id not in adjusted_total_size_quantities:
-            adjusted_total_size_quantities[to_size_id] = 0
-        adjusted_total_size_quantities[to_size_id] += quantity
     
     final_totals_by_size = {}
     for batch in batches:
