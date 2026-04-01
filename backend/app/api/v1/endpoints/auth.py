@@ -1,5 +1,5 @@
 from datetime import timedelta
-from typing import Any, List
+from typing import Any, Annotated, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -17,6 +17,8 @@ from app.crud.system import system as system_crud
 from app.models import System
 
 router = APIRouter()
+
+USER_NOT_FOUND_DETAIL = "User not found"
 
 
 # Request/response schemas for user management (OPS-only)
@@ -41,9 +43,17 @@ class ResetPasswordBody(BaseModel):
     new_password: str
 
 
-@router.post("/login", response_model=schemas.Token)
+@router.post(
+    "/login",
+    response_model=schemas.Token,
+    responses={
+        400: {"description": "Incorrect username or password"},
+        403: {"description": "Access denied. User does not have any role in OPS system."},
+    },
+)
 def login_access_token(
-    db: Session = Depends(deps.get_db), form_data: OAuth2PasswordRequestForm = Depends()
+    db: Annotated[Session, Depends(deps.get_db)],
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
 ) -> Any:
     """
     OAuth2 compatible token login, get an access token for future requests.
@@ -70,17 +80,11 @@ def login_access_token(
     }
 
 
-@router.post("/test-token", response_model=schemas.User)
-def test_token(current_user: models.User = Depends(deps.get_current_active_user)) -> Any:
-    """
-    Test access token.
-    """
-    return current_user
 
 
 @router.get("/me")
 def read_user_me(
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: Annotated[models.User, Depends(deps.get_current_active_user)],
 ) -> Any:
     """
     Get current user with OPS system role only.
@@ -102,8 +106,8 @@ def read_user_me(
 
 @router.get("/me/roles")
 def read_user_roles(
-    current_user: models.User = Depends(deps.get_current_active_user),
-    db: Session = Depends(deps.get_db)
+    current_user: Annotated[models.User, Depends(deps.get_current_active_user)],
+    db: Annotated[Session, Depends(deps.get_db)],
 ) -> Any:
     """
     Get current user's roles in all systems.
@@ -140,8 +144,8 @@ def _get_ops_system(db: Session) -> System:
 
 @router.get("/users", response_model=List[UserResponseOPS])
 def list_users(
-    db: Session = Depends(deps.get_db),
-    current_user: models.User = Depends(deps.get_current_active_superuser),
+    db: Annotated[Session, Depends(deps.get_db)],
+    current_user: Annotated[models.User, Depends(deps.get_current_active_superuser)],
 ) -> Any:
     """List all users that have a role in the OPS system (admin only)."""
     all_users = get_users(db, skip=0, limit=1000)
@@ -154,11 +158,18 @@ def list_users(
     return result
 
 
-@router.post("/users", response_model=UserResponseOPS)
+@router.post(
+    "/users",
+    response_model=UserResponseOPS,
+    responses={
+        400: {"description": "Username already exists"},
+        500: {"description": "OPS system not configured"},
+    },
+)
 def create_user_ops(
     body: UserCreateOPS,
-    db: Session = Depends(deps.get_db),
-    current_user: models.User = Depends(deps.get_current_active_superuser),
+    db: Annotated[Session, Depends(deps.get_db)],
+    current_user: Annotated[models.User, Depends(deps.get_current_active_superuser)],
 ) -> Any:
     """Create a new user with an OPS role (admin only)."""
     if get_user_by_username(db, username=body.username):
@@ -173,17 +184,25 @@ def create_user_ops(
     return UserResponseOPS(id=new_user.id, username=new_user.username, role=role_val)
 
 
-@router.put("/users/{user_id}", response_model=UserResponseOPS)
+@router.put(
+    "/users/{user_id}",
+    response_model=UserResponseOPS,
+    responses={
+        400: {"description": "Username already exists"},
+        404: {"description": "User not found"},
+        500: {"description": "OPS system not configured"},
+    },
+)
 def update_user_ops(
     user_id: int,
     body: UserUpdateOPS,
-    db: Session = Depends(deps.get_db),
-    current_user: models.User = Depends(deps.get_current_active_superuser),
+    db: Annotated[Session, Depends(deps.get_db)],
+    current_user: Annotated[models.User, Depends(deps.get_current_active_superuser)],
 ) -> Any:
     """Update a user's username and/or OPS role (admin only)."""
     db_user = get_user(db, id=user_id)
     if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail=USER_NOT_FOUND_DETAIL)
     ops = _get_ops_system(db)
     if body.username is not None:
         existing = get_user_by_username(db, username=body.username)
@@ -202,33 +221,45 @@ def update_user_ops(
     return UserResponseOPS(id=db_user.id, username=db_user.username, role=role_val)
 
 
-@router.delete("/users/{user_id}")
+@router.delete(
+    "/users/{user_id}",
+    responses={
+        400: {"description": "Cannot delete your own user"},
+        404: {"description": "User not found"},
+    },
+)
 def delete_user_ops(
     user_id: int,
-    db: Session = Depends(deps.get_db),
-    current_user: models.User = Depends(deps.get_current_active_superuser),
+    db: Annotated[Session, Depends(deps.get_db)],
+    current_user: Annotated[models.User, Depends(deps.get_current_active_superuser)],
 ) -> Any:
     """Delete a user (admin only). Cannot delete yourself."""
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own user")
     db_user = get_user(db, id=user_id)
     if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail=USER_NOT_FOUND_DETAIL)
     delete_user(db, id=user_id)
     return {"message": "User deleted"}
 
 
-@router.put("/users/{user_id}/reset-password")
+@router.put(
+    "/users/{user_id}/reset-password",
+    responses={
+        400: {"description": "Password must be at least 6 characters"},
+        404: {"description": "User not found"},
+    },
+)
 def reset_user_password(
     user_id: int,
     body: ResetPasswordBody,
-    db: Session = Depends(deps.get_db),
-    current_user: models.User = Depends(deps.get_current_active_superuser),
+    db: Annotated[Session, Depends(deps.get_db)],
+    current_user: Annotated[models.User, Depends(deps.get_current_active_superuser)],
 ) -> Any:
     """Set a new password for a user (admin only)."""
     db_user = get_user(db, id=user_id)
     if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail=USER_NOT_FOUND_DETAIL)
     if len(body.new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     update_user(db, db_obj=db_user, obj_in={"password": body.new_password})

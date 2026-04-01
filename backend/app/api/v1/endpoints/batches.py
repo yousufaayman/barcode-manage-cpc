@@ -16,9 +16,6 @@ class BatchListResponse(BaseModel):
     items: List[schemas.BatchResponse]
     total: int
 
-class BulkArchiveRequest(BaseModel):
-    batch_ids: List[int]
-
 # Client endpoints (renamed from Brand)
 @router.get("/clients/", response_model=List[schemas.Client])
 def read_clients(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
@@ -77,80 +74,39 @@ def read_batches(
     job_order_number: str = None,
     job_order_id: Optional[int] = None,
     color_id: Optional[int] = None,
-    archived: bool = False,
     is_second_degree: Optional[bool] = None,
     current_user: Optional[schemas.User] = Depends(get_optional_current_user)
 ):
     """Get all batches with optional filtering"""
-    # Require admin access for archived batches
-    if archived:
-        if not current_user or not has_role_in_system(db=db, user_id=current_user.id, system_name="OPS", role="admin"):
-            raise HTTPException(
-                status_code=403,
-                detail="Access denied. Admin privileges required to view archived batches."
-            )
-    
-    # Choose the base table based on archived parameter
-    base_table = models.ArchivedBatch if archived else models.Batch
-    
-    if archived:
-        # For archived batches, use outer joins since the referenced data might not exist
-        query = db.query(
-            base_table,
-            models.Client.client_name.label('client_name'),
-            models.Model.model_name.label('model_name'),
-            models.Size.size_value.label('size_value'),
-            models.Color.color_name.label('color_name'),
-            models.ProductionPhase.phase_name.label('phase_name'),
-            models.JobOrder.job_order_number.label('job_order_number')
-        ).outerjoin(
-            models.JobOrder,
-            base_table.job_order_id == models.JobOrder.job_order_id
-        ).outerjoin(
-            models.Client,
-            models.JobOrder.client_id == models.Client.client_id
-        ).outerjoin(
-            models.Model,
-            models.JobOrder.model_id == models.Model.model_id
-        ).outerjoin(
-            models.Size,
-            base_table.size_id == models.Size.size_id
-        ).outerjoin(
-            models.Color,
-            base_table.color_id == models.Color.color_id
-        ).outerjoin(
-            models.ProductionPhase,
-            base_table.current_phase == models.ProductionPhase.phase_id
-        )
-    else:
-        # For active batches, use regular joins
-        query = db.query(
-            base_table,
-            models.Client.client_name.label('client_name'),
-            models.Model.model_name.label('model_name'),
-            models.Size.size_value.label('size_value'),
-            models.Color.color_name.label('color_name'),
-            models.ProductionPhase.phase_name.label('phase_name'),
-            models.JobOrder.job_order_number.label('job_order_number')
-        ).join(
-            models.JobOrder,
-            base_table.job_order_id == models.JobOrder.job_order_id
-        ).outerjoin(
-            models.Client,
-            models.JobOrder.client_id == models.Client.client_id
-        ).outerjoin(
-            models.Model,
-            models.JobOrder.model_id == models.Model.model_id
-        ).join(
-            models.Size,
-            base_table.size_id == models.Size.size_id
-        ).join(
-            models.Color,
-            base_table.color_id == models.Color.color_id
-        ).join(
-            models.ProductionPhase,
-            base_table.current_phase == models.ProductionPhase.phase_id
-        )
+    base_table = models.Batch
+
+    query = db.query(
+        base_table,
+        models.Client.client_name.label('client_name'),
+        models.Model.model_name.label('model_name'),
+        models.Size.size_value.label('size_value'),
+        models.Color.color_name.label('color_name'),
+        models.ProductionPhase.phase_name.label('phase_name'),
+        models.JobOrder.job_order_number.label('job_order_number')
+    ).join(
+        models.JobOrder,
+        base_table.job_order_id == models.JobOrder.job_order_id
+    ).outerjoin(
+        models.Client,
+        models.JobOrder.client_id == models.Client.client_id
+    ).outerjoin(
+        models.Model,
+        models.JobOrder.model_id == models.Model.model_id
+    ).join(
+        models.Size,
+        base_table.size_id == models.Size.size_id
+    ).join(
+        models.Color,
+        base_table.color_id == models.Color.color_id
+    ).join(
+        models.ProductionPhase,
+        base_table.current_phase == models.ProductionPhase.phase_id
+    )
 
     # Apply filters if provided
     if barcode:
@@ -204,7 +160,7 @@ def read_batches(
                 color_name=batch[4] if batch[4] else "Unknown",
                 phase_name=batch[5] if batch[5] else "Unknown",
                 last_updated=batch[0].last_updated,
-                archived_at=getattr(batch[0], 'archived_at', None) if archived else None,
+                archived_at=None,
                 is_second_degree=bool(batch[0].is_second_degree)
             )
             for batch in batches
@@ -356,189 +312,6 @@ def delete_batch(
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     return batch
-
-@router.delete("/archived/{batch_id}", response_model=schemas.BatchResponse)
-def delete_archived_batch(
-    *,
-    db: Session = Depends(get_db),
-    batch_id: int,
-    current_user: Optional[schemas.User] = Depends(get_current_user)
-):
-    """Delete an archived batch"""
-    # Require admin access for deleting archived batches
-    if not current_user or not has_role_in_system(db=db, user_id=current_user.id, system_name="OPS", role="admin"):
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied. Admin privileges required to delete archived batches."
-        )
-    
-    from app.crud.batch import delete_archived_batch as crud_delete_archived_batch
-    batch = crud_delete_archived_batch(db, batch_id=batch_id)
-    if not batch:
-        raise HTTPException(status_code=404, detail="Archived batch not found")
-    return batch
-
-@router.post("/{batch_id}/archive", response_model=schemas.BatchResponse)
-def archive_batch(
-    *,
-    db: Session = Depends(get_db),
-    batch_id: int,
-    current_user: Optional[schemas.User] = Depends(get_current_user)
-):
-    """Archive a batch by moving it to the archived_batches table"""
-    # Require admin access for archiving
-    if not current_user or not has_role_in_system(db=db, user_id=current_user.id, system_name="OPS", role="admin"):
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied. Admin privileges required to archive batches."
-        )
-    
-    batch = get_batch(db, batch_id=batch_id)
-    if not batch:
-        raise HTTPException(status_code=404, detail="Batch not found")
-    
-    from app.crud.batch import archive_batch as crud_archive_batch
-    return crud_archive_batch(db=db, batch_id=batch_id)
-
-@router.post("/archive/bulk", response_model=List[schemas.BatchResponse])
-def archive_batches_bulk_endpoint(
-    *,
-    db: Session = Depends(get_db),
-    request: BulkArchiveRequest,
-    current_user: Optional[schemas.User] = Depends(get_current_user)
-):
-    """Archive multiple batches by moving them to the archived_batches table"""
-    # Require admin access for archiving
-    if not current_user or not has_role_in_system(db=db, user_id=current_user.id, system_name="OPS", role="admin"):
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied. Admin privileges required to archive batches."
-        )
-    
-    if not request.batch_ids:
-        raise HTTPException(status_code=400, detail="No batch IDs provided")
-    
-    from app.crud.batch import archive_batches_bulk as crud_archive_batches_bulk
-    return crud_archive_batches_bulk(db=db, batch_ids=request.batch_ids)
-
-@router.post("/archived/{batch_id}/recover", response_model=schemas.BatchResponse)
-def recover_archived_batch_endpoint(
-    *,
-    db: Session = Depends(get_db),
-    batch_id: int,
-    current_user: models.User = Depends(get_current_active_superuser)
-):
-    """Recover an archived batch by moving it back to the active batches table"""
-    
-    try:
-        from app.crud.batch import recover_archived_batch as crud_recover_archived_batch
-        recovered_batch = crud_recover_archived_batch(db, batch_id=batch_id)
-        if not recovered_batch:
-            raise HTTPException(status_code=404, detail="Archived batch not found")
-        return recovered_batch
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error recovering batch: {str(e)}")
-
-@router.post("/archived/recover/bulk", response_model=List[schemas.BatchResponse])
-def recover_archived_batches_bulk_endpoint(
-    *,
-    db: Session = Depends(get_db),
-    request: BulkArchiveRequest,
-    current_user: models.User = Depends(get_current_active_superuser)
-):
-    """Recover multiple archived batches by moving them back to the active batches table"""
-    
-    if not request.batch_ids:
-        raise HTTPException(status_code=400, detail="No batch IDs provided")
-    
-    try:
-        from app.crud.batch import recover_archived_batches_bulk as crud_recover_archived_batches_bulk
-        return crud_recover_archived_batches_bulk(db=db, batch_ids=request.batch_ids)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error recovering batches: {str(e)}")
-
-# --- Archive Batches Child Page Endpoint ---
-
-@router.get("/archive/batches/", response_model=List[schemas.BatchResponse])
-def get_archived_batches_detailed(
-    db: Session = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100,
-    barcode: Optional[str] = None,
-    job_order_id: Optional[int] = None,
-    current_user: models.User = Depends(get_current_active_superuser)
-):
-    """Get all archived batches with filtering and pagination for the archive child page"""
-    
-    # Build query
-    query = db.query(models.ArchivedBatch)
-    
-    # Apply filters
-    if barcode:
-        query = query.filter(models.ArchivedBatch.barcode.ilike(f"%{barcode}%"))
-    if job_order_id:
-        query = query.filter(models.ArchivedBatch.job_order_id == job_order_id)
-    
-    # Apply pagination
-    archived_batches = query.offset(skip).limit(limit).all()
-    
-    result = []
-    for batch in archived_batches:
-        # Get related information
-        job_order = db.query(models.JobOrder).filter(
-            models.JobOrder.job_order_id == batch.job_order_id
-        ).first()
-        
-        client = None
-        model = None
-        if job_order:
-            client = db.query(models.Client).filter(
-                models.Client.client_id == job_order.client_id
-            ).first() if job_order.client_id else None
-            model = db.query(models.Model).filter(
-                models.Model.model_id == job_order.model_id
-            ).first()
-        
-        size = db.query(models.Size).filter(
-            models.Size.size_id == batch.size_id
-        ).first() if batch.size_id else None
-        
-        color = db.query(models.Color).filter(
-            models.Color.color_id == batch.color_id
-        ).first() if batch.color_id else None
-        
-        phase = db.query(models.ProductionPhase).filter(
-            models.ProductionPhase.phase_id == batch.current_phase
-        ).first() if batch.current_phase else None
-        
-        result.append(schemas.BatchResponse(
-            batch_id=batch.batch_id,
-            job_order_id=batch.job_order_id,
-            job_order_number=job_order.job_order_number if job_order else None,
-            barcode=batch.barcode,
-            size_id=batch.size_id,
-            color_id=batch.color_id,
-            quantity=batch.quantity,
-            layers=batch.layers,
-            serial=str(batch.serial),
-            current_phase=batch.current_phase,
-            status=batch.status,
-            client_name=client.client_name if client else None,
-            model_name=model.model_name if model else None,
-            size_value=size.size_value if size else None,
-            color_name=color.color_name if color else None,
-            phase_name=phase.phase_name if phase else None,
-            last_updated=batch.last_updated,
-            archived_at=batch.archived_at,
-            is_second_degree=False  # Archived batches don't have this field
-        ))
-    
-    return result
-
 @router.get("/barcode/{barcode}", response_model=schemas.BatchResponse)
 def read_batch_by_barcode(
     barcode: str,
