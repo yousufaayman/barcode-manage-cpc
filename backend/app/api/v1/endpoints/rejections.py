@@ -1,18 +1,26 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Annotated, List, Optional
 from app.crud import get_rejection, get_rejections, create_rejection, update_rejection, delete_rejection
 from app import models, schemas
 from app.core.deps import get_db, get_current_active_user, get_current_active_superuser
 
 router = APIRouter()
 
+REJECTION_NOT_FOUND = "Rejection not found"
 
-@router.post("/", response_model=schemas.SingleRejection)
+
+@router.post(
+    "/",
+    response_model=schemas.SingleRejection,
+    responses={
+        400: {"description": "Invalid request (e.g. validation or business rule violation)."},
+    },
+)
 def create_rejection_endpoint(
     rejection: schemas.SingleRejectionCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_active_user)],
 ):
     try:
         return create_rejection(db=db, rejection=rejection, user_id=current_user.id)
@@ -22,13 +30,13 @@ def create_rejection_endpoint(
 
 @router.get("/", response_model=List[schemas.SingleRejection])
 def get_rejections_endpoint(
+    db: Annotated[Session, Depends(get_db)],
     batch_id: Optional[int] = None,
     phase_id: Optional[int] = None,
     is_resolved: Optional[bool] = None,
     job_order_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
 ):
     return get_rejections(
         db=db,
@@ -41,51 +49,65 @@ def get_rejections_endpoint(
     )
 
 
-@router.get("/{rejection_id}", response_model=schemas.SingleRejection)
+@router.get(
+    "/{rejection_id}",
+    response_model=schemas.SingleRejection,
+    responses={404: {"description": REJECTION_NOT_FOUND}},
+)
 def get_rejection_endpoint(
     rejection_id: int,
-    db: Session = Depends(get_db)
+    db: Annotated[Session, Depends(get_db)],
 ):
     rejection = get_rejection(db, rejection_id)
     if not rejection:
-        raise HTTPException(status_code=404, detail="Rejection not found")
+        raise HTTPException(status_code=404, detail=REJECTION_NOT_FOUND)
     return rejection
 
 
-@router.patch("/{rejection_id}", response_model=schemas.SingleRejection)
+@router.patch(
+    "/{rejection_id}",
+    response_model=schemas.SingleRejection,
+    responses={404: {"description": REJECTION_NOT_FOUND}},
+)
 def update_rejection_endpoint(
     rejection_id: int,
     rejection_update: schemas.SingleRejectionUpdate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_active_user)],
 ):
     rejection = update_rejection(db=db, rejection_id=rejection_id, rejection_update=rejection_update, user_id=current_user.id)
     if not rejection:
-        raise HTTPException(status_code=404, detail="Rejection not found")
+        raise HTTPException(status_code=404, detail=REJECTION_NOT_FOUND)
     return rejection
 
 
-@router.patch("/{rejection_id}/resolve", response_model=schemas.SingleRejection)
+@router.patch(
+    "/{rejection_id}/resolve",
+    response_model=schemas.SingleRejection,
+    responses={404: {"description": REJECTION_NOT_FOUND}},
+)
 def resolve_rejection_endpoint(
     rejection_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_active_user)],
 ):
     rejection_update = schemas.SingleRejectionUpdate(is_resolved=True)
     rejection = update_rejection(db=db, rejection_id=rejection_id, rejection_update=rejection_update, user_id=current_user.id)
     if not rejection:
-        raise HTTPException(status_code=404, detail="Rejection not found")
+        raise HTTPException(status_code=404, detail=REJECTION_NOT_FOUND)
     return rejection
 
 
-@router.delete("/{rejection_id}")
+@router.delete(
+    "/{rejection_id}",
+    responses={404: {"description": REJECTION_NOT_FOUND}},
+)
 def delete_rejection_endpoint(
     rejection_id: int,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_superuser)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_active_superuser)],
 ):
     rejection = delete_rejection(db=db, rejection_id=rejection_id)
     if not rejection:
-        raise HTTPException(status_code=404, detail="Rejection not found")
+        raise HTTPException(status_code=404, detail=REJECTION_NOT_FOUND)
     return {"message": "Rejection deleted successfully"}
-

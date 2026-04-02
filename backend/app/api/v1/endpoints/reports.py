@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from typing import Optional, List, Dict, Any
+from typing import Annotated, Optional, List, Dict, Any
 
 from app import schemas
 from app.core.config import settings
@@ -18,14 +18,18 @@ router = APIRouter()
 
 @router.get("/daily-cutting-report")
 async def generate_daily_cutting_report(
-    date: str = Query(..., description="Report date in YYYY-MM-DD format"),
-    client_name: Optional[str] = Query(None, description="Filter by client name"),
-    model_name: Optional[str] = Query(None, description="Filter by model name"),
-    job_order_number: Optional[str] = Query(
-        None, description="Filter by job order number"
-    ),
-    db: Session = Depends(get_db),
-    current_user: schemas.User = Depends(get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
+    date: Annotated[str, Query(..., description="Report date in YYYY-MM-DD format")],
+    client_name: Annotated[
+        Optional[str], Query(description="Filter by client name")
+    ] = None,
+    model_name: Annotated[
+        Optional[str], Query(description="Filter by model name")
+    ] = None,
+    job_order_number: Annotated[
+        Optional[str], Query(description="Filter by job order number")
+    ] = None,
 ):
     """
     Generate a daily Cutting production PDF report with an appended Sewing section.
@@ -78,9 +82,9 @@ async def generate_daily_cutting_report(
 
 @router.get("/sewing-daily-data")
 async def get_sewing_daily_data(
-    date: str = Query(..., description="Report date in YYYY-MM-DD format"),
-    db: Session = Depends(get_db),
-    current_user: schemas.User = Depends(get_current_user),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
+    date: Annotated[str, Query(..., description="Report date in YYYY-MM-DD format")],
 ) -> List[Dict[str, Any]]:
     """
     Return Sewing daily report data (phases → schematics → stages) for a single date.
