@@ -10,12 +10,11 @@ from app.crud import (
     get_colors,
     get_batch as crud_get_batch,
     get_batch_by_barcode as crud_get_batch_by_barcode,
-    create_batch as crud_create_batch,
     update_batch as crud_update_batch,
     get_job_order as crud_get_job_order,
 )
 from app import models, schemas
-from app.core.deps import get_db, get_current_active_superuser, get_current_user, get_optional_current_user, get_current_active_user
+from app.core.deps import get_db, get_current_active_superuser, get_current_user, get_optional_current_user
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -303,17 +302,6 @@ def read_batch(
     if db_batch is None:
         raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
     return db_batch
-
-@router.post("/", response_model=schemas.BatchResponse)
-def create_batch(
-    *,
-    db: Annotated[Session, Depends(get_db)],
-    batch_in: schemas.BatchCreate,
-    current_user: Annotated[models.User, Depends(get_current_active_user)],
-):
-    """Create a new batch"""
-    batch = crud_create_batch(db=db, batch=batch_in, user_id=current_user.id)
-    return batch
 
 @router.put(
     "/{batch_id}",

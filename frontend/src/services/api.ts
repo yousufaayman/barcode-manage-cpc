@@ -551,11 +551,6 @@ export interface JobOrderListResponse {
   total: number;
 }
 
-export interface BulkValidationResponse {
-  valid_rows: any[];
-  error_rows: { rowNumber: number; data: any; error: string }[];
-}
-
 export interface BulkSubmitResponse {
   created_batches: any[];
   duplicate_barcodes: any[];
@@ -719,29 +714,6 @@ export const barcodeApi = {
         status: status
       }
     });
-    return response.data;
-  },
-
-  downloadTemplate: async (): Promise<Blob> => {
-    const response = await api.get('/barcodes/template', {
-      responseType: 'blob'
-    });
-    return response.data;
-  },
-
-  validateBulkBarcodes: async (file: File): Promise<BulkValidationResponse> => {
-    const formData = new FormData();
-    formData.append('file', file);
-    const response = await api.post<BulkValidationResponse>('/barcodes/bulk/validate', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-    return response.data;
-  },
-
-  submitBulkBarcodes: async (barcodes: any[]): Promise<BulkSubmitResponse> => {
-    const response = await api.post<BulkSubmitResponse>('/barcodes/bulk/submit', barcodes);
     return response.data;
   },
 
