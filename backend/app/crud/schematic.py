@@ -1,4 +1,5 @@
 from collections import defaultdict
+from typing import Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -175,3 +176,111 @@ def get_schematics(db: Session, skip: int = 0, limit: int = 100, active_only: bo
         )
         for s, phase_name in rows
     ]
+
+
+def delete_schematic_cascade(db: Session, schematic_id: int) -> Optional[schemas.SewingLineSchematicDeleteResult]:
+    """
+    Delete a sewing line schematic and all sewing production rows that reference it:
+    overtime requests/history, daily stage assignments, production_history,
+    reporting.worker_daily_stage_production (via stage CASCADE), and stages.
+
+    Does not delete batches or batch_phase_history.
+    """
+    schematic = (
+        db.query(models.SewingLineSchematic)
+        .filter(models.SewingLineSchematic.schematic_id == schematic_id)
+        .first()
+    )
+    if not schematic:
+        return None
+
+    # Copy scalars before deleting the row; ORM instance becomes invalid after delete().
+    schematic_name = schematic.name
+
+    stage_ids = [
+        r[0]
+        for r in db.query(models.SewingLineStage.stage_id)
+        .filter(models.SewingLineStage.schematic_id == schematic_id)
+        .all()
+    ]
+
+    n_otr = (
+        db.query(func.count())
+        .select_from(models.WorkerOvertimeRequest)
+        .filter(models.WorkerOvertimeRequest.schematic_id == schematic_id)
+        .scalar()
+    )
+    n_oth = (
+        db.query(func.count())
+        .select_from(models.WorkerOvertimeHistory)
+        .filter(models.WorkerOvertimeHistory.stage_id.in_(stage_ids))
+        .scalar()
+        if stage_ids
+        else 0
+    )
+    assign_subq = db.query(models.WorkerDailyStageAssignment.daily_assignment_id).filter(
+        models.WorkerDailyStageAssignment.stage_id.in_(stage_ids)
+    )
+    n_wda = (
+        db.query(func.count())
+        .select_from(models.WorkerDailyStageAssignment)
+        .filter(models.WorkerDailyStageAssignment.stage_id.in_(stage_ids))
+        .scalar()
+        if stage_ids
+        else 0
+    )
+    n_ph = (
+        db.query(func.count())
+        .select_from(models.ProductionHistory)
+        .filter(models.ProductionHistory.daily_assignment_id.in_(assign_subq))
+        .scalar()
+        if stage_ids
+        else 0
+    )
+    n_wdsp = (
+        db.query(func.count())
+        .select_from(models.WorkerDailyStageProduction)
+        .filter(models.WorkerDailyStageProduction.stage_id.in_(stage_ids))
+        .scalar()
+        if stage_ids
+        else 0
+    )
+    n_stages = len(stage_ids)
+
+    db.query(models.WorkerOvertimeRequest).filter(
+        models.WorkerOvertimeRequest.schematic_id == schematic_id
+    ).delete(synchronize_session=False)
+
+    if stage_ids:
+        db.query(models.WorkerOvertimeHistory).filter(
+            models.WorkerOvertimeHistory.stage_id.in_(stage_ids)
+        ).delete(synchronize_session=False)
+
+        db.query(models.ProductionHistory).filter(
+            models.ProductionHistory.daily_assignment_id.in_(assign_subq)
+        ).delete(synchronize_session=False)
+
+        db.query(models.WorkerDailyStageAssignment).filter(
+            models.WorkerDailyStageAssignment.stage_id.in_(stage_ids)
+        ).delete(synchronize_session=False)
+
+        db.query(models.WorkerDailyStageProduction).filter(
+            models.WorkerDailyStageProduction.stage_id.in_(stage_ids)
+        ).delete(synchronize_session=False)
+
+    db.query(models.SewingLineSchematic).filter(
+        models.SewingLineSchematic.schematic_id == schematic_id
+    ).delete(synchronize_session=False)
+
+    db.commit()
+
+    return schemas.SewingLineSchematicDeleteResult(
+        schematic_id=schematic_id,
+        name=schematic_name,
+        worker_overtime_requests=int(n_otr or 0),
+        worker_overtime_history=int(n_oth or 0),
+        worker_daily_stage_assignments=int(n_wda or 0),
+        production_history=int(n_ph or 0),
+        worker_daily_stage_production=int(n_wdsp or 0),
+        sewing_line_stages=n_stages,
+    )

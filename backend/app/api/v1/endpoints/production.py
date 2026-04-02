@@ -116,6 +116,27 @@ def create_sewing_line_schematic(
     )
 
 
+@router.delete(
+    "/schematics/{schematic_id}",
+    response_model=schemas.SewingLineSchematicDeleteResult,
+    responses=_OPENAPI_404,
+)
+def delete_schematic_cascade(
+    schematic_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    _: Annotated[models.User, Depends(get_current_active_superuser)],
+):
+    """
+    Admin only. Permanently delete a schematic and all sewing production data tied to it
+    (overtime requests/history, worker–stage assignments, production_history, reporting snapshots, stages).
+    Does not delete batches.
+    """
+    result = crud.schematic.delete_schematic_cascade(db, schematic_id)
+    if not result:
+        raise HTTPException(status_code=404, detail=MSG_SCHEMATIC_NOT_FOUND)
+    return result
+
+
 # Workers
 @router.get("/workers", response_model=List[schemas.Worker])
 def list_workers(

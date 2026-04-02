@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import {
   DndContext,
   closestCenter,
@@ -19,7 +19,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import Layout from '../components/Layout';
 import { useTranslation } from 'react-i18next';
-import { productionApi, barcodeApi } from '../services/api';
+import { productionApi, barcodeApi, SewingLineStageResponse } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -151,9 +151,50 @@ function SortableStageRow({ stage, index, updateStage, removeStage, bottleneckTy
   );
 }
 
+/** Map API stages (one row per machine/variation) back to create-page rows with a variations count. */
+function schematicStagesToCreateRows(apiStages: SewingLineStageResponse[]): StageRow[] {
+  const sorted = [...apiStages].sort(
+    (a, b) => a.stage_order - b.stage_order || a.stage_id - b.stage_id
+  );
+  const rows: StageRow[] = [];
+  let i = 0;
+  let rowIdx = 0;
+  while (i < sorted.length) {
+    const s = sorted[i];
+    let count = 1;
+    let j = i + 1;
+    while (
+      j < sorted.length &&
+      sorted[j].stage_order === s.stage_order &&
+      sorted[j].stage_name === s.stage_name &&
+      sorted[j].production_qty === s.production_qty &&
+      sorted[j].active === s.active
+    ) {
+      count++;
+      j++;
+    }
+    const id =
+      typeof globalThis !== 'undefined' && globalThis.crypto && 'randomUUID' in globalThis.crypto
+        ? `stage-${globalThis.crypto.randomUUID()}`
+        : `stage-${Date.now()}-${rowIdx}`;
+    rows.push({
+      id,
+      stage_name: s.stage_name,
+      variations: count,
+      production_qty: s.production_qty != null ? String(s.production_qty) : '',
+      active: s.active,
+    });
+    rowIdx++;
+    i = j;
+  }
+  return rows;
+}
+
 const CreateSewingLineSchematicPage: React.FC = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const copyFromRaw = searchParams.get('copyFrom');
   const { toast } = useToast();
   const [phases, setPhases] = useState<PhaseOption[]>([]);
   const [loadingPhases, setLoadingPhases] = useState(true);
@@ -262,11 +303,17 @@ const CreateSewingLineSchematicPage: React.FC = () => {
       try {
         const data = await barcodeApi.getPhases();
         const sewingPhases = Array.isArray(data)
-          ? (data as PhaseOption[]).filter((p) => (p.type || '').toLowerCase() === 'sewing')
+          ? (data as PhaseOption[]).filter(
+              (p) =>
+                (p.type || '').toLowerCase() === 'sewing' &&
+                (p.phase_name || '').trim().toLowerCase() !== 'sewing'
+            )
           : [];
         setPhases(sewingPhases);
-        if (sewingPhases.length > 0 && form.production_phase_id === 0) {
-          setForm((f) => ({ ...f, production_phase_id: sewingPhases[0].phase_id }));
+        const copyId = copyFromRaw != null && copyFromRaw !== '' ? Number.parseInt(copyFromRaw, 10) : NaN;
+        const isCopyFromSchematic = Number.isFinite(copyId) && copyId > 0;
+        if (!isCopyFromSchematic && sewingPhases.length > 0) {
+          setForm((f) => (f.production_phase_id === 0 ? { ...f, production_phase_id: sewingPhases[0].phase_id } : f));
         }
       } catch {
         setPhases([]);
@@ -274,8 +321,39 @@ const CreateSewingLineSchematicPage: React.FC = () => {
         setLoadingPhases(false);
       }
     };
-    fetchPhases();
-  }, []);
+    void fetchPhases();
+  }, [copyFromRaw]);
+
+  useEffect(() => {
+    const id = copyFromRaw != null && copyFromRaw !== '' ? Number.parseInt(copyFromRaw, 10) : NaN;
+    if (!Number.isFinite(id) || id <= 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const detail = await productionApi.getSchematicById(id);
+        if (cancelled) return;
+        setForm((f) => ({
+          ...f,
+          production_phase_id: 0,
+          name: '',
+          active: detail.active,
+          working_hours: detail.working_hours != null ? String(detail.working_hours) : '',
+        }));
+        setStages(schematicStagesToCreateRows(detail.stages ?? []));
+      } catch {
+        if (!cancelled) {
+          toast({
+            title: t('common.error'),
+            description: t('productionManagement.copy.loadFailed'),
+            variant: 'destructive',
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [copyFromRaw, t, toast]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -357,7 +435,11 @@ const CreateSewingLineSchematicPage: React.FC = () => {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-gray-800">{t('productionManagement.create.title')}</h1>
-            <p className="text-sm text-gray-500">{t('productionManagement.create.subtitle')}</p>
+            <p className="text-sm text-gray-500">
+              {copyFromRaw != null && copyFromRaw !== '' && Number.parseInt(copyFromRaw, 10) > 0
+                ? t('productionManagement.copy.subtitle')
+                : t('productionManagement.create.subtitle')}
+            </p>
           </div>
         </div>
 

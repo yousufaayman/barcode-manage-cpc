@@ -241,6 +241,19 @@ class SewingLineSchematicDetail(SewingLineSchematic):
     stages: List[SewingLineStageResponse] = []
 
 
+class SewingLineSchematicDeleteResult(BaseModel):
+    """Row counts removed when deleting a schematic and dependent sewing production data."""
+
+    schematic_id: int
+    name: str
+    worker_overtime_requests: int
+    worker_overtime_history: int
+    worker_daily_stage_assignments: int
+    production_history: int
+    worker_daily_stage_production: int
+    sewing_line_stages: int
+
+
 # Workers (production management)
 class WorkerBase(BaseModel):
     worker_name: str

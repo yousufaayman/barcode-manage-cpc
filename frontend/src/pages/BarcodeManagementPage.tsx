@@ -718,6 +718,7 @@ const BarcodeManagementPage: React.FC = () => {
                   <option value="">{t('common.loading')}</option>
                 ) : (
                   phases
+                    .filter((phase) => (phase.phase_name || '').trim().toLowerCase() !== 'sewing')
                     .filter(phase => {
                       if (user?.role === 'admin') return true;
                       return getAllowedPhasesForRole(user?.role || '').includes(phase.phase_id);

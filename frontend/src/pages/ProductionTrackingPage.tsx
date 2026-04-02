@@ -198,10 +198,12 @@ const ProductionTrackingPage: React.FC = () => {
   const [stages, setStages] = useState<StageOption[]>([]);
 
   // --- Tab 3: Schematic View (read-only) ---
+  const [schematicViewPhaseId, setSchematicViewPhaseId] = useState<number | null>(null);
   const [schematicViewList, setSchematicViewList] = useState<SewingLineSchematic[]>([]);
   const [schematicViewSelectedId, setSchematicViewSelectedId] = useState<number | null>(null);
   const [schematicViewDetail, setSchematicViewDetail] = useState<SewingLineSchematicDetail | null>(null);
   const [loadingSchematicView, setLoadingSchematicView] = useState(false);
+  const [loadingSchematicViewList, setLoadingSchematicViewList] = useState(false);
   const [schematicViewAssignments, setSchematicViewAssignments] = useState<DailyAssignmentResponse[]>([]);
   const stageIdToWorker = useMemo(() => {
     const m: Record<number, { name: string; id: number }> = {};
@@ -227,12 +229,49 @@ const ProductionTrackingPage: React.FC = () => {
     productionApi.getStages().then(setStages).catch(() => setStages([]));
   }, []);
 
-  // Load schematics list and today's assignments when Schematic View tab is active
+  // Schematic View tab: today's assignments (for worker names on machines)
   useEffect(() => {
     if (activeTab !== 'schematic-view') return;
-    productionApi.getSchematics({ active_only: false }).then(setSchematicViewList).catch(() => setSchematicViewList([]));
     productionApi.getAssignments(todayStr).then(setSchematicViewAssignments).catch(() => setSchematicViewAssignments([]));
   }, [activeTab, todayStr]);
+
+  // Schematic View: default sewing phase when opening tab (same phase list as worker assignment)
+  useEffect(() => {
+    if (activeTab !== 'schematic-view') return;
+    if (schematicViewPhaseId != null) return;
+    if (sewingPhases.length > 0) setSchematicViewPhaseId(sewingPhases[0].phase_id);
+  }, [activeTab, sewingPhases, schematicViewPhaseId]);
+
+  // Schematic View: load schematics for selected phase (include inactive, like former single-dropdown list)
+  useEffect(() => {
+    if (schematicViewPhaseId == null) {
+      setSchematicViewList([]);
+      setSchematicViewSelectedId(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingSchematicViewList(true);
+    void productionApi
+      .getSchematics({ active_only: false })
+      .then((all) => {
+        if (cancelled) return;
+        const forPhase = all.filter((s) => s.production_phase_id === schematicViewPhaseId);
+        setSchematicViewList(forPhase);
+        setSchematicViewSelectedId(forPhase.length > 0 ? forPhase[0].schematic_id : null);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSchematicViewList([]);
+          setSchematicViewSelectedId(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSchematicViewList(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [schematicViewPhaseId]);
 
   // Load schematic detail when selection changes (Schematic View tab)
   useEffect(() => {
@@ -254,7 +293,11 @@ const ProductionTrackingPage: React.FC = () => {
       setLoadingPhases(true);
       try {
         const phases = await barcodeApi.getPhases();
-        const sewing = (phases || []).filter((p) => (p.type || '').toLowerCase() === 'sewing');
+        const sewing = (phases || []).filter(
+          (p) =>
+            (p.type || '').toLowerCase() === 'sewing' &&
+            (p.phase_name || '').trim().toLowerCase() !== 'sewing'
+        );
         setSewingPhases(sewing);
         if (sewing.length > 0 && selectedPhaseId == null) setSelectedPhaseId(sewing[0].phase_id);
       } catch {
@@ -1252,26 +1295,53 @@ const ProductionTrackingPage: React.FC = () => {
                 </p>
               </CardHeader>
               <CardContent className="space-y-6">
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium text-gray-600">
-                    {t('productionTracking.schematicViewSelect')}
-                  </Label>
-                  <Select
-                    value={schematicViewSelectedId == null ? '' : String(schematicViewSelectedId)}
-                    onValueChange={(v) => setSchematicViewSelectedId(v ? Number(v) : null)}
-                    disabled={schematicViewList.length === 0}
-                  >
-                    <SelectTrigger className="max-w-md">
-                      <SelectValue placeholder={t('productionTracking.schematicViewSelectPlaceholder')} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {schematicViewList.map((s) => (
-                        <SelectItem key={s.schematic_id} value={String(s.schematic_id)}>
-                          {s.name} {s.phase_name ? `(${s.phase_name})` : ''}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="grid gap-4 sm:gap-6 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label className="text-sm sm:text-base font-medium text-gray-600">
+                      {t('productionTracking.workerAssignment.productionPhase')}
+                    </Label>
+                    <Select
+                      value={schematicViewPhaseId == null ? '' : String(schematicViewPhaseId)}
+                      onValueChange={(v) => setSchematicViewPhaseId(v ? Number(v) : null)}
+                      disabled={loadingPhases || sewingPhases.length === 0}
+                    >
+                      <SelectTrigger className="min-h-11 sm:min-h-12 text-base w-full max-w-md">
+                        <SelectValue placeholder={t('productionTracking.workerAssignment.selectPhase')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {sewingPhases.map((p) => (
+                          <SelectItem key={p.phase_id} value={String(p.phase_id)} className="text-base py-3">
+                            {p.phase_name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm sm:text-base font-medium text-gray-600">
+                      {t('productionTracking.workerAssignment.schematic')}
+                    </Label>
+                    <Select
+                      value={schematicViewSelectedId == null ? '' : String(schematicViewSelectedId)}
+                      onValueChange={(v) => setSchematicViewSelectedId(v ? Number(v) : null)}
+                      disabled={
+                        loadingSchematicViewList ||
+                        schematicViewList.length === 0 ||
+                        schematicViewPhaseId == null
+                      }
+                    >
+                      <SelectTrigger className="min-h-11 sm:min-h-12 text-base w-full max-w-md">
+                        <SelectValue placeholder={t('productionTracking.workerAssignment.selectSchematic')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {schematicViewList.map((s) => (
+                          <SelectItem key={s.schematic_id} value={String(s.schematic_id)} className="text-base py-3">
+                            {s.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
 
                 {loadingSchematicView && (

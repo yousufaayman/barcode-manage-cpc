@@ -1310,6 +1310,17 @@ export interface SewingLineSchematicUpdate {
   stages?: SewingLineStageCreate[];
 }
 
+export interface SewingLineSchematicDeleteResult {
+  schematic_id: number;
+  name: string;
+  worker_overtime_requests: number;
+  worker_overtime_history: number;
+  worker_daily_stage_assignments: number;
+  production_history: number;
+  worker_daily_stage_production: number;
+  sewing_line_stages: number;
+}
+
 export interface StageOption {
   stage_id: number;
   stage_name: string;
@@ -1574,6 +1585,11 @@ export const productionApi = {
     data: SewingLineSchematicUpdate
   ): Promise<SewingLineSchematic> => {
     const response = await api.put<SewingLineSchematic>(`/production/schematics/${schematicId}`, data);
+    return response.data;
+  },
+
+  deleteSchematicCascade: async (schematicId: number): Promise<SewingLineSchematicDeleteResult> => {
+    const response = await api.delete<SewingLineSchematicDeleteResult>(`/production/schematics/${schematicId}`);
     return response.data;
   },
 

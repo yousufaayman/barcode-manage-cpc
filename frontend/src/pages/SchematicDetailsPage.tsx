@@ -7,7 +7,7 @@ import { productionApi, SewingLineSchematicDetail, SewingLineStageResponse } fro
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { ArrowLeft, ChevronDown, LayoutGrid, Loader2, Pencil } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Copy, LayoutGrid, Loader2, Pencil } from 'lucide-react';
 
 const STAGE_BOX_COLORS = [
   'border-emerald-400/60 bg-emerald-50/50 hover:border-emerald-500/70',
@@ -172,12 +172,23 @@ const SchematicDetailsPage: React.FC = () => {
               </h1>
             </div>
             {schematic && user?.role === 'admin' && (
-              <Button variant="outline" size="sm" asChild>
-                <Link to={`/production/schematics/${schematic.schematic_id}/edit`}>
-                  <Pencil className="mr-2 h-4 w-4" />
-                  {t('productionManagement.details.edit')}
-                </Link>
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" asChild>
+                  <Link
+                    to={`/production/create?copyFrom=${schematic.schematic_id}`}
+                    title={t('productionManagement.copy.copyAction')}
+                  >
+                    <Copy className="mr-2 h-4 w-4" />
+                    {t('productionManagement.copy.copyFromDetails')}
+                  </Link>
+                </Button>
+                <Button variant="outline" size="sm" asChild>
+                  <Link to={`/production/schematics/${schematic.schematic_id}/edit`}>
+                    <Pencil className="mr-2 h-4 w-4" />
+                    {t('productionManagement.details.edit')}
+                  </Link>
+                </Button>
+              </div>
             )}
           </header>
 
