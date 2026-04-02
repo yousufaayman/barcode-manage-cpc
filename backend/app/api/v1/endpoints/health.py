@@ -6,11 +6,22 @@ import logging
 import os
 import psutil
 import threading
-from typing import Dict, List, Optional
+from typing import Annotated, Dict, List, Optional
 
 router = APIRouter()
 
-# Global handle monitoring data
+DbSessionDep = Annotated[Session, Depends(get_db)]
+
+_HANDLE_MONITOR_HTTP_500 = {
+    500: {"description": "Unexpected server error while collecting handle monitoring data."},
+}
+
+_HEALTH_CHECK_HTTP_503 = {
+    503: {
+        "description": "Service unavailable: health check dependency failed or verification errored.",
+    },
+}
+
 _handle_monitor_data = {
     "last_check": None,
     "process_handles": {},
@@ -95,50 +106,62 @@ def get_system_handle_limits() -> Dict:
                     "max_files": max_files,
                     "usage_percentage": (allocated / max_files * 100) if max_files > 0 else 0
                 }
-        except (FileNotFoundError, OSError):
+        except OSError:
             pass
         
         return limits
     except Exception as e:
         return {"error": str(e)}
 
+def _fd_usage_warnings(process_info: Dict, system_limits: Dict) -> List[str]:
+    if "file_descriptors" not in process_info:
+        return []
+    fd_count = process_info["file_descriptors"]
+    out: List[str] = []
+    lim = system_limits.get("file_descriptors")
+    if lim and fd_count > lim["soft_limit"] * 0.8:
+        soft = lim["soft_limit"]
+        pct = fd_count / soft * 100
+        out.append(f"High file descriptor usage: {fd_count}/{soft} ({pct:.1f}%)")
+    if fd_count > 500:
+        out.append(f"Very high file descriptor count: {fd_count}")
+    return out
+
+
+def _connection_warnings(process_info: Dict) -> List[str]:
+    if "connections" not in process_info:
+        return []
+    conn_count = process_info["connections"]
+    if conn_count <= 100:
+        return []
+    return [f"High connection count: {conn_count}"]
+
+
+def _open_files_warnings(process_info: Dict) -> List[str]:
+    if "open_files" not in process_info:
+        return []
+    n = process_info["open_files"]
+    if n <= 50:
+        return []
+    return [f"High open files count: {n}"]
+
+
+def _system_fd_warnings(system_limits: Dict) -> List[str]:
+    info = system_limits.get("system_file_descriptors")
+    if not info or info["usage_percentage"] <= 80:
+        return []
+    pct = info["usage_percentage"]
+    return [f"System-wide file descriptor usage high: {pct:.1f}%"]
+
+
 def check_handle_warnings(process_info: Dict, system_limits: Dict) -> List[str]:
     """Check for potential handle-related issues and return warnings"""
-    warnings = []
-    
-    # Check file descriptor usage
-    if "file_descriptors" in process_info:
-        fd_count = process_info["file_descriptors"]
-        
-        # Check against soft limit
-        if "file_descriptors" in system_limits:
-            soft_limit = system_limits["file_descriptors"]["soft_limit"]
-            if fd_count > soft_limit * 0.8:
-                warnings.append(f"High file descriptor usage: {fd_count}/{soft_limit} ({fd_count/soft_limit*100:.1f}%)")
-        
-        # General warning for high FD count
-        if fd_count > 500:
-            warnings.append(f"Very high file descriptor count: {fd_count}")
-    
-    # Check connection count
-    if "connections" in process_info:
-        conn_count = process_info["connections"]
-        if conn_count > 100:
-            warnings.append(f"High connection count: {conn_count}")
-    
-    # Check open files
-    if "open_files" in process_info:
-        open_files_count = process_info["open_files"]
-        if open_files_count > 50:
-            warnings.append(f"High open files count: {open_files_count}")
-    
-    # Check system-wide limits
-    if "system_file_descriptors" in system_limits:
-        sys_fd_info = system_limits["system_file_descriptors"]
-        if sys_fd_info["usage_percentage"] > 80:
-            warnings.append(f"System-wide file descriptor usage high: {sys_fd_info['usage_percentage']:.1f}%")
-    
-    return warnings
+    return (
+        _fd_usage_warnings(process_info, system_limits)
+        + _connection_warnings(process_info)
+        + _open_files_warnings(process_info)
+        + _system_fd_warnings(system_limits)
+    )
 
 def update_handle_monitor_data():
     """Update the global handle monitoring data"""
@@ -172,7 +195,7 @@ async def health_check():
     """Basic health check endpoint"""
     return {"status": "healthy", "message": "Service is running"}
 
-@router.get("/handles")
+@router.get("/handles", responses=_HANDLE_MONITOR_HTTP_500)
 async def handle_monitor():
     """Multi-process handle monitoring endpoint"""
     try:
@@ -202,7 +225,7 @@ async def handle_monitor():
         logging.error(f"Handle monitor failed: {e}")
         raise HTTPException(status_code=500, detail=f"Handle monitoring failed: {str(e)}")
 
-@router.get("/handles/process/{pid}")
+@router.get("/handles/process/{pid}", responses=_HANDLE_MONITOR_HTTP_500)
 async def handle_monitor_process(pid: int):
     """Monitor handles for a specific process"""
     try:
@@ -228,7 +251,7 @@ async def handle_monitor_process(pid: int):
         logging.error(f"Process handle monitor failed for PID {pid}: {e}")
         raise HTTPException(status_code=500, detail=f"Process handle monitoring failed: {str(e)}")
 
-@router.get("/handles/system")
+@router.get("/handles/system", responses=_HANDLE_MONITOR_HTTP_500)
 async def handle_monitor_system():
     """System-wide handle monitoring"""
     try:
@@ -265,8 +288,8 @@ async def handle_monitor_system():
         logging.error(f"System handle monitor failed: {e}")
         raise HTTPException(status_code=500, detail=f"System handle monitoring failed: {str(e)}")
 
-@router.get("/database")
-async def database_health_check(db: Session = Depends(get_db)):
+@router.get("/database", responses=_HEALTH_CHECK_HTTP_503)
+async def database_health_check(db: DbSessionDep):
     """Database health check with connection test"""
     try:
         # Test database connection
@@ -286,7 +309,7 @@ async def database_health_check(db: Session = Depends(get_db)):
         logging.error(f"Database health check failed: {e}")
         raise HTTPException(status_code=503, detail=f"Database connection failed: {str(e)}")
 
-@router.get("/pool")
+@router.get("/pool", responses=_HEALTH_CHECK_HTTP_503)
 async def pool_health_check():
     """Connection pool status and health check"""
     try:
@@ -333,8 +356,8 @@ def get_pool_recommendations(pool_status: dict, utilization: float) -> list:
     
     return recommendations
 
-@router.get("/full")
-async def full_health_check(db: Session = Depends(get_db)):
+@router.get("/full", responses=_HEALTH_CHECK_HTTP_503)
+async def full_health_check(db: DbSessionDep):
     """Comprehensive health check including database, pool status, and handle monitoring"""
     try:
         # Database health
