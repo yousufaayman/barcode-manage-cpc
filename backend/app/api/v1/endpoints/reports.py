@@ -16,7 +16,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-@router.get("/daily-cutting-report")
+INVALID_DATE_FORMAT_MSG = "Invalid date format. Expected YYYY-MM-DD."
+
+
+@router.get(
+    "/daily-cutting-report",
+    responses={
+        400: {"description": INVALID_DATE_FORMAT_MSG},
+        500: {"description": "Report generation failed (PDF missing or unexpected error)."},
+    },
+)
 async def generate_daily_cutting_report(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[schemas.User, Depends(get_current_user)],
@@ -47,7 +56,7 @@ async def generate_daily_cutting_report(
         except ValueError:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid date format. Expected YYYY-MM-DD.",
+                detail=INVALID_DATE_FORMAT_MSG,
             )
 
         service = ReportPDFService(reports_dir=settings.REPORTS_DIR)
@@ -80,7 +89,12 @@ async def generate_daily_cutting_report(
         )
 
 
-@router.get("/sewing-daily-data")
+@router.get(
+    "/sewing-daily-data",
+    responses={
+        400: {"description": INVALID_DATE_FORMAT_MSG},
+    },
+)
 async def get_sewing_daily_data(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[schemas.User, Depends(get_current_user)],
@@ -96,7 +110,7 @@ async def get_sewing_daily_data(
     except ValueError:
         raise HTTPException(
             status_code=400,
-            detail="Invalid date format. Expected YYYY-MM-DD.",
+            detail=INVALID_DATE_FORMAT_MSG,
         )
 
     data = get_sewing_daily_report_data(db, target_date)
