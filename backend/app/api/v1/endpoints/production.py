@@ -6,28 +6,40 @@ from app.db.session import get_db
 from app import crud, schemas, models
 from app.crud import rework_batch as rework_batch_crud
 from app.core.deps import get_current_active_superuser, get_current_general_ops_or_above
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 router = APIRouter()
+
+MSG_SCHEMATIC_NOT_FOUND = "Schematic not found"
+MSG_DATE_RANGE_INVALID = "date_from must be <= date_to"
+
+_OPENAPI_404 = {404: {"description": "Not found"}}
+_OPENAPI_400 = {400: {"description": "Bad request"}}
+_OPENAPI_409 = {409: {"description": "Conflict"}}
+_OPENAPI_400_404 = {**_OPENAPI_400, **_OPENAPI_404}
 
 
 @router.get("/schematics", response_model=List[schemas.SewingLineSchematic])
 def list_sewing_line_schematics(
+    db: Annotated[Session, Depends(get_db)],
     skip: int = 0,
     limit: int = 100,
     active_only: bool = False,
-    db: Session = Depends(get_db),
 ):
     """List all sewing line schematics (optionally active only), ordered by phase and schematic id."""
     return crud.schematic.get_schematics(db, skip=skip, limit=limit, active_only=active_only)
 
 
-@router.get("/schematics/{schematic_id}", response_model=schemas.SewingLineSchematicDetail)
-def get_schematic(schematic_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/schematics/{schematic_id}",
+    response_model=schemas.SewingLineSchematicDetail,
+    responses=_OPENAPI_404,
+)
+def get_schematic(schematic_id: int, db: Annotated[Session, Depends(get_db)]):
     """Get a single schematic by ID with its stages."""
     row = crud.schematic.get_schematic_by_id(db, schematic_id)
     if not row:
-        raise HTTPException(status_code=404, detail="Schematic not found")
+        raise HTTPException(status_code=404, detail=MSG_SCHEMATIC_NOT_FOUND)
     schematic, phase_name = row
     stages = crud.schematic.get_stages_for_schematic(db, schematic_id)
     return schemas.SewingLineSchematicDetail(
@@ -53,16 +65,20 @@ def get_schematic(schematic_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.put("/schematics/{schematic_id}", response_model=schemas.SewingLineSchematic)
+@router.put(
+    "/schematics/{schematic_id}",
+    response_model=schemas.SewingLineSchematic,
+    responses=_OPENAPI_404,
+)
 def update_schematic(
     schematic_id: int,
     data: schemas.SewingLineSchematicUpdate,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Update a schematic (name, phase, active, working_hours, and optionally replace all stages)."""
     updated = crud.schematic.update_schematic(db, schematic_id, data)
     if not updated:
-        raise HTTPException(status_code=404, detail="Schematic not found")
+        raise HTTPException(status_code=404, detail=MSG_SCHEMATIC_NOT_FOUND)
     phase_row = db.query(models.ProductionPhase).filter(
         models.ProductionPhase.phase_id == updated.production_phase_id
     ).first()
@@ -81,7 +97,7 @@ def update_schematic(
 @router.post("/schematics", response_model=schemas.SewingLineSchematic)
 def create_sewing_line_schematic(
     schematic: schemas.SewingLineSchematicCreate,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Create a new sewing line schematic."""
     db_schematic = crud.schematic.create_schematic(db, schematic)
@@ -103,10 +119,10 @@ def create_sewing_line_schematic(
 # Workers
 @router.get("/workers", response_model=List[schemas.Worker])
 def list_workers(
+    db: Annotated[Session, Depends(get_db)],
     skip: int = 0,
     limit: int = 500,
     active_only: bool = False,
-    db: Session = Depends(get_db),
 ):
     """List all workers."""
     return crud.worker.get_workers(db, skip=skip, limit=limit, active_only=active_only)
@@ -115,11 +131,12 @@ def list_workers(
 @router.get(
     "/workers/breakdown",
     response_model=schemas.AllWorkersProductionBreakdownResponse,
+    responses=_OPENAPI_400,
 )
 def get_all_workers_breakdown(
     date_from: date,
     date_to: date,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """
     All-workers production breakdown over a date range. Returns per-worker records
@@ -127,7 +144,7 @@ def get_all_workers_breakdown(
     across all phases and schematics.
     """
     if date_from > date_to:
-        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+        raise HTTPException(status_code=400, detail=MSG_DATE_RANGE_INVALID)
 
     # Read precomputed daily output from reporting.worker_daily_stage_production.
     #
@@ -260,11 +277,12 @@ def get_all_workers_breakdown(
 @router.get(
     "/sewing/schematic-daily-production",
     response_model=List[schemas.SchematicDailyProductionRecord],
+    responses=_OPENAPI_400,
 )
 def get_sewing_schematic_daily_production(
     date_from: date,
     date_to: date,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """
     Daily expected/true output per schematic in sewing phases.
@@ -278,7 +296,7 @@ def get_sewing_schematic_daily_production(
     This makes range aggregation a simple sum over days on the client.
     """
     if date_from > date_to:
-        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+        raise HTTPException(status_code=400, detail=MSG_DATE_RANGE_INVALID)
 
     rows = db.execute(
         text(
@@ -384,8 +402,12 @@ def get_sewing_schematic_daily_production(
     ]
 
 
-@router.get("/workers/{worker_id}", response_model=schemas.Worker)
-def get_worker(worker_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/workers/{worker_id}",
+    response_model=schemas.Worker,
+    responses=_OPENAPI_404,
+)
+def get_worker(worker_id: int, db: Annotated[Session, Depends(get_db)]):
     """Get a worker by ID (e.g. for barcode lookup where barcode encodes worker_id)."""
     worker = crud.worker.get_worker_by_id(db, worker_id)
     if not worker:
@@ -393,10 +415,10 @@ def get_worker(worker_id: int, db: Session = Depends(get_db)):
     return worker
 
 
-@router.post("/workers", response_model=schemas.Worker)
+@router.post("/workers", response_model=schemas.Worker, responses=_OPENAPI_409)
 def create_worker(
     worker: schemas.WorkerCreate,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Create a new worker. If worker_id is provided, it must not already exist."""
     if worker.worker_id is not None:
@@ -409,11 +431,15 @@ def create_worker(
     return crud.worker.create_worker(db, worker)
 
 
-@router.put("/workers/{worker_id}", response_model=schemas.Worker)
+@router.put(
+    "/workers/{worker_id}",
+    response_model=schemas.Worker,
+    responses=_OPENAPI_404,
+)
 def update_worker(
     worker_id: int,
     worker_in: schemas.WorkerUpdate,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Update a worker (e.g. assign to a different worker group)."""
     updated = crud.worker.update_worker(db, worker_id, worker_in)
@@ -425,16 +451,20 @@ def update_worker(
 # Worker Groups
 @router.get("/worker-groups", response_model=List[schemas.WorkerGroup])
 def list_worker_groups(
+    db: Annotated[Session, Depends(get_db)],
     skip: int = 0,
     limit: int = 500,
-    db: Session = Depends(get_db),
 ):
     """List all worker groups with their default working hours."""
     return crud.worker_group.get_worker_groups(db, skip=skip, limit=limit)
 
 
-@router.get("/worker-groups/{group_id}", response_model=schemas.WorkerGroup)
-def get_worker_group(group_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/worker-groups/{group_id}",
+    response_model=schemas.WorkerGroup,
+    responses=_OPENAPI_404,
+)
+def get_worker_group(group_id: int, db: Annotated[Session, Depends(get_db)]):
     """Get a worker group by ID."""
     group = crud.worker_group.get_worker_group_by_id(db, group_id)
     if not group:
@@ -445,17 +475,21 @@ def get_worker_group(group_id: int, db: Session = Depends(get_db)):
 @router.post("/worker-groups", response_model=schemas.WorkerGroup)
 def create_worker_group(
     group: schemas.WorkerGroupCreate,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Create a new worker group (name + working hours)."""
     return crud.worker_group.create_worker_group(db, group)
 
 
-@router.put("/worker-groups/{group_id}", response_model=schemas.WorkerGroup)
+@router.put(
+    "/worker-groups/{group_id}",
+    response_model=schemas.WorkerGroup,
+    responses=_OPENAPI_404,
+)
 def update_worker_group(
     group_id: int,
     group_in: schemas.WorkerGroupUpdate,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Update worker group fields (e.g. working_hours)."""
     updated = crud.worker_group.update_worker_group(db, group_id, group_in)
@@ -466,7 +500,7 @@ def update_worker_group(
 
 # Production tracking (daily assignments + record production by barcode)
 @router.get("/stages", response_model=List[schemas.StageOption])
-def list_stages(db: Session = Depends(get_db)):
+def list_stages(db: Annotated[Session, Depends(get_db)]):
     """List all sewing line stages with schematic name (for assignment dropdown)."""
     rows = (
         db.query(
@@ -495,7 +529,7 @@ def list_stages(db: Session = Depends(get_db)):
 @router.get("/assignments", response_model=List[schemas.DailyAssignmentResponse])
 def list_assignments(
     assignment_date: date,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """List daily stage assignments for a date (worker + stage + schematic name)."""
     rows = crud.tracking.get_assignments_for_date(db, assignment_date)
@@ -518,7 +552,7 @@ def list_assignments(
 @router.post("/assignments", response_model=schemas.DailyAssignmentResponse)
 def create_or_get_assignment(
     body: schemas.DailyAssignmentCreate,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Get or create a daily assignment for the given date, worker, and stage."""
     assignment, _created = crud.tracking.get_or_create_assignment(
@@ -549,11 +583,15 @@ def create_or_get_assignment(
     )
 
 
-@router.post("/rework/batches", response_model=schemas.ReworkBatchResponse)
+@router.post(
+    "/rework/batches",
+    response_model=schemas.ReworkBatchResponse,
+    responses=_OPENAPI_400,
+)
 def create_rework_batch(
     body: schemas.ReworkBatchCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_general_ops_or_above),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_general_ops_or_above)],
 ):
     try:
         return rework_batch_crud.create_rework_batch(db, body, created_by_user_id=current_user.id)
@@ -563,9 +601,9 @@ def create_rework_batch(
 
 @router.get("/rework/batches", response_model=List[schemas.ReworkBatchResponse])
 def list_rework_batches(
+    db: Annotated[Session, Depends(get_db)],
     source_batch_id: Optional[int] = None,
     printed: Optional[bool] = None,
-    db: Session = Depends(get_db),
 ):
     return rework_batch_crud.list_rework_batches(
         db=db,
@@ -574,11 +612,15 @@ def list_rework_batches(
     )
 
 
-@router.patch("/rework/batches/{rework_batch_id}", response_model=schemas.ReworkBatchResponse)
+@router.patch(
+    "/rework/batches/{rework_batch_id}",
+    response_model=schemas.ReworkBatchResponse,
+    responses=_OPENAPI_404,
+)
 def update_rework_batch(
     rework_batch_id: int,
     body: schemas.ReworkBatchUpdate,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     updated = rework_batch_crud.update_rework_batch(db, rework_batch_id, body)
     if not updated:
@@ -586,12 +628,16 @@ def update_rework_batch(
     return updated
 
 
-@router.get("/tracking/max-quantity", response_model=schemas.MaxProductionQuantityResponse)
+@router.get(
+    "/tracking/max-quantity",
+    response_model=schemas.MaxProductionQuantityResponse,
+    responses=_OPENAPI_400_404,
+)
 def get_max_production_quantity(
+    db: Annotated[Session, Depends(get_db)],
     daily_assignment_id: int,
     barcode: str,
     tracking_date: Optional[date] = None,
-    db: Session = Depends(get_db),
 ):
     """Return max quantity that can be recorded for this batch at this stage type (same stage name in schematic).
     Assignment must be for tracking_date if provided, otherwise for the current server date."""
@@ -615,10 +661,14 @@ def get_max_production_quantity(
     )
 
 
-@router.post("/tracking/record", response_model=schemas.RecordProductionResponse)
+@router.post(
+    "/tracking/record",
+    response_model=schemas.RecordProductionResponse,
+    responses=_OPENAPI_400_404,
+)
 def record_production(
     body: schemas.RecordProductionRequest,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Record quantity produced for the given assignment and barcode (batch).
     Enforces: per stage type (same stage name in schematic), a batch cannot exceed
@@ -664,7 +714,7 @@ def record_production(
 def get_phase_daily_production(
     phase_id: int,
     target_date: date,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """
     Get total quantity produced (from production_history) for a production phase
@@ -686,12 +736,13 @@ def get_phase_daily_production(
 @router.get(
     "/phase-expected-work-range",
     response_model=schemas.PhaseExpectedWorkRangeResponse,
+    responses=_OPENAPI_400,
 )
 def get_phase_expected_work_range(
     phase_id: int,
     date_from: date,
     date_to: date,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """
     Get total expected work for a phase over a date range.
@@ -700,7 +751,7 @@ def get_phase_expected_work_range(
     active worker assignment on that day for any of its stages.
     """
     if date_from > date_to:
-        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+        raise HTTPException(status_code=400, detail=MSG_DATE_RANGE_INVALID)
     (
         expected,
         working_days_count,
@@ -725,12 +776,13 @@ def get_phase_expected_work_range(
 @router.get(
     "/schematics/{schematic_id}/worker-breakdown",
     response_model=schemas.SchematicWorkerBreakdownResponse,
+    responses=_OPENAPI_400_404,
 )
 def get_schematic_worker_breakdown(
     schematic_id: int,
     date_from: date,
     date_to: date,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """
     Worker-level production breakdown for a schematic over a date range.
@@ -741,14 +793,14 @@ def get_schematic_worker_breakdown(
     matching it against the assignment_date.
     """
     if date_from > date_to:
-        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+        raise HTTPException(status_code=400, detail=MSG_DATE_RANGE_INVALID)
 
     # Ensure schematic exists
     schematic = db.query(models.SewingLineSchematic).filter(
         models.SewingLineSchematic.schematic_id == schematic_id
     ).first()
     if schematic is None:
-        raise HTTPException(status_code=404, detail="Schematic not found")
+        raise HTTPException(status_code=404, detail=MSG_SCHEMATIC_NOT_FOUND)
 
     breakdown_list = crud.tracking.get_schematic_worker_breakdown_for_range(
         db, schematic_id, date_from, date_to
@@ -798,12 +850,13 @@ def get_schematic_worker_breakdown(
 @router.get(
     "/phase-schematic-work-range",
     response_model=schemas.PhaseSchematicWorkRangeResponse,
+    responses=_OPENAPI_400,
 )
 def get_phase_schematic_work_range(
     phase_id: int,
     date_from: date,
     date_to: date,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """
     Get per-schematic expected and true work statistics for a phase over a date range.
@@ -812,7 +865,7 @@ def get_phase_schematic_work_range(
     but returns a breakdown per active schematic in the phase.
     """
     if date_from > date_to:
-        raise HTTPException(status_code=400, detail="date_from must be <= date_to")
+        raise HTTPException(status_code=400, detail=MSG_DATE_RANGE_INVALID)
 
     rows = crud.tracking.get_schematic_work_for_phase_range(
         db, phase_id, date_from, date_to
@@ -850,8 +903,8 @@ def get_phase_schematic_work_range(
 )
 def create_overtime_request(
     body: schemas.WorkerOvertimeRequestCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_general_ops_or_above),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_general_ops_or_above)],
 ):
     """Create an overtime request (admin approval required before applying)."""
     req = crud.overtime.create_worker_overtime_request(
@@ -872,8 +925,8 @@ def create_overtime_request(
     response_model=List[schemas.WorkerOvertimePendingRequest],
 )
 def list_pending_overtime_requests(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_superuser),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_active_superuser)],
 ):
     """Admin: list all pending overtime requests."""
     pending = crud.overtime.get_pending_overtime_requests(db)
@@ -918,8 +971,8 @@ def list_pending_overtime_requests(
 def approve_overtime_request(
     request_id: int,
     body: schemas.WorkerOvertimeAdminDecision,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_superuser),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_active_superuser)],
 ):
     """Admin: approve the request and apply overtime to the latest worker_daily_stage_assignment per worker."""
     req = crud.overtime.approve_worker_overtime_request(
@@ -938,8 +991,8 @@ def approve_overtime_request(
 def reject_overtime_request(
     request_id: int,
     body: schemas.WorkerOvertimeAdminDecision,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_superuser),
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_active_superuser)],
 ):
     """Admin: reject and auto-delete the request (no assignment changes)."""
     req = crud.overtime.reject_worker_overtime_request(
