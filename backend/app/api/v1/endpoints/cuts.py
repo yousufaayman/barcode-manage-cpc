@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Annotated, List, Optional
 from math import ceil
 from sqlalchemy import text
 from app.crud import cut as cut_crud
@@ -10,16 +10,29 @@ from app.core.deps import get_current_user
 
 router = APIRouter()
 
-@router.get("/", response_model=schemas.CutDetailsListResponse)
+CUT_NOT_FOUND = "Cut not found"
+
+@router.get(
+    "/",
+    response_model=schemas.CutDetailsListResponse,
+    responses={
+        500: {"description": "Error retrieving cuts (e.g. database or cut_details_view failure)."},
+    },
+)
 def get_all_cuts(
-    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
-    limit: int = Query(10, ge=1, le=100, description="Number of items per page"),
-    job_order_id: Optional[int] = Query(None, description="Filter by job order ID"),
-    model_id: Optional[int] = Query(None, description="Filter by model ID"),
-    color_id: Optional[int] = Query(None, description="Filter by color ID"),
-    print_status: Optional[str] = Query(None, description="Filter by print status (pending, in_progress, completed, no_printing)"),
-    db: Session = Depends(get_db),
-    current_user: schemas.User = Depends(get_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
+    page: Annotated[int, Query(ge=1, description="Page number (1-indexed)")] = 1,
+    limit: Annotated[int, Query(ge=1, le=100, description="Number of items per page")] = 10,
+    job_order_id: Annotated[Optional[int], Query(description="Filter by job order ID")] = None,
+    model_id: Annotated[Optional[int], Query(description="Filter by model ID")] = None,
+    color_id: Annotated[Optional[int], Query(description="Filter by color ID")] = None,
+    print_status: Annotated[
+        Optional[str],
+        Query(
+            description="Filter by print status (pending, in_progress, completed, no_printing)"
+        ),
+    ] = None,
 ):
     """Get all cuts with their details from cut_details_view with pagination and filtering.
     
@@ -50,10 +63,15 @@ def get_all_cuts(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving cuts: {str(e)}")
 
-@router.get("/filter-options")
+@router.get(
+    "/filter-options",
+    responses={
+        500: {"description": "Error retrieving filter options (e.g. database or view failure)."},
+    },
+)
 def get_filter_options(
-    db: Session = Depends(get_db),
-    current_user: schemas.User = Depends(get_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
 ):
     """Get filter options for cuts (unique job orders, models, colors, print statuses)"""
     try:
@@ -109,11 +127,18 @@ def get_filter_options(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving filter options: {str(e)}")
 
-@router.post("/", response_model=schemas.CutDetailsResponse)
+@router.post(
+    "/",
+    response_model=schemas.CutDetailsResponse,
+    responses={
+        400: {"description": "Invalid cut payload or validation error."},
+        500: {"description": "Cut creation failed or unexpected server error."},
+    },
+)
 def create_cut(
     cut_in: schemas.CutCreate,
-    db: Session = Depends(get_db),
-    current_user: schemas.User = Depends(get_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
 ):
     """Create a new cut with optional rolls and transitions"""
     try:
@@ -127,17 +152,24 @@ def create_cut(
         raise HTTPException(status_code=500, detail=f"Error creating cut: {str(e)}")
 
 
-@router.get("/{cut_id}", response_model=schemas.CutDetailsResponse)
+@router.get(
+    "/{cut_id}",
+    response_model=schemas.CutDetailsResponse,
+    responses={
+        404: {"description": CUT_NOT_FOUND},
+        500: {"description": "Error retrieving cut details."},
+    },
+)
 def get_cut_by_id(
     cut_id: int,
-    db: Session = Depends(get_db),
-    current_user: schemas.User = Depends(get_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
 ):
     """Get cut details by cut_id"""
     try:
         cut = cut_crud.get_cut_details_by_id(db, cut_id=cut_id)
         if not cut:
-            raise HTTPException(status_code=404, detail="Cut not found")
+            raise HTTPException(status_code=404, detail=CUT_NOT_FOUND)
         
         # Ensure rolls and transitions are always lists (even if empty)
         if isinstance(cut, dict):
@@ -151,18 +183,26 @@ def get_cut_by_id(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving cut: {str(e)}")
 
-@router.put("/{cut_id}", response_model=schemas.CutDetailsResponse)
+@router.put(
+    "/{cut_id}",
+    response_model=schemas.CutDetailsResponse,
+    responses={
+        400: {"description": "Invalid update payload."},
+        404: {"description": f"{CUT_NOT_FOUND} or referenced resource not found."},
+        500: {"description": "Error updating cut."},
+    },
+)
 def update_cut(
     cut_id: int,
     cut_in: schemas.CutUpdate,
-    db: Session = Depends(get_db),
-    current_user: schemas.User = Depends(get_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
 ):
     """Update an existing cut."""
     try:
         cut = cut_crud.update_cut(db, cut_id=cut_id, cut_update=cut_in, user_id=current_user.id)
         if not cut:
-            raise HTTPException(status_code=404, detail="Cut not found")
+            raise HTTPException(status_code=404, detail=CUT_NOT_FOUND)
         return schemas.CutDetailsResponse(**cut)
     except ValueError as e:
         message = str(e)
@@ -172,17 +212,23 @@ def update_cut(
         raise HTTPException(status_code=500, detail=f"Error updating cut: {str(e)}")
 
 
-@router.delete("/{cut_id}")
+@router.delete(
+    "/{cut_id}",
+    responses={
+        404: {"description": CUT_NOT_FOUND},
+        500: {"description": "Error deleting cut."},
+    },
+)
 def delete_cut(
     cut_id: int,
-    db: Session = Depends(get_db),
-    current_user: schemas.User = Depends(get_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
 ):
     """Delete a cut and all its associated rolls and transitions."""
     try:
         result = cut_crud.delete_cut(db, cut_id=cut_id, user_id=current_user.id)
         if not result:
-            raise HTTPException(status_code=404, detail="Cut not found")
+            raise HTTPException(status_code=404, detail=CUT_NOT_FOUND)
         return {"message": f"Cut {cut_id} deleted successfully", "cut_id": cut_id}
     except HTTPException:
         raise
