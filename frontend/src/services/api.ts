@@ -575,12 +575,6 @@ export const authApi = {
     const response = await api.get<User>('/auth/me');
     return response.data;
   },
-
-  updateUser: async (userData: UserUpdate): Promise<User> => {
-    const response = await api.put<User>('/auth/me', userData);
-    return response.data;
-  },
-
   // Admin only endpoints
   getAllUsers: async (): Promise<User[]> => {
     const response = await api.get<User[]>('/auth/users');
@@ -761,12 +755,6 @@ export const barcodeApi = {
     const response = await api.get<{ phase_id: number; phase_name: string; type?: string; sequence_order?: number }[]>('/phases/');
     return response.data;
   },
-
-  getBarcodeTimeline: async (batch_id: number): Promise<BarcodeTimelineResponse> => {
-    const response = await api.get<BarcodeTimelineResponse>(`/batches/${batch_id}/timeline/details`);
-    return response.data;
-  },
-
   // Event-based timeline API functions
   getBatchScanEvents: async (batch_id: number, limit: number = 100): Promise<BarcodeScanEvent[]> => {
     const response = await api.get<BarcodeScanEvent[]>(`/batches/${batch_id}/events`, { params: { limit } });
