@@ -7,7 +7,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from .. import models
-from .batch import create_scan_event
+from .batch import ScanEventOptions, create_scan_event
 from .helpers import generate_barcode_string, get_next_serial_number
 
 
@@ -143,18 +143,17 @@ def resolve_sewing_rework_operational_batch_id(
     db.flush()
 
     create_scan_event(
-        db=db,
-        batch_id=operational.batch_id,
-        action_type="scan_in",
-        phase_id=phase_id,
-        old_status=None,
-        new_status="Pending",
-        old_quantity=None,
-        new_quantity=deduction_amount,
-        old_phase=None,
-        new_phase=phase_id,
-        user_id=user_id,
-        autocommit=False,
+        db,
+        operational.batch_id,
+        "scan_in",
+        phase_id,
+        ScanEventOptions(
+            new_status="Pending",
+            new_quantity=deduction_amount,
+            new_phase=phase_id,
+            user_id=user_id,
+            autocommit=False,
+        ),
     )
 
     row = models.ReworkBatch(

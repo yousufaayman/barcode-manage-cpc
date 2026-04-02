@@ -221,19 +221,22 @@ def create_scan_event(
     """
     Create scan event - delegates to batch.create_scan_event for Phase 2 ledger support.
     """
-    from .batch import create_scan_event as batch_create_scan_event
+    from .batch import ScanEventOptions, create_scan_event as batch_create_scan_event
+
     return batch_create_scan_event(
-        db=db,
-        batch_id=batch_id,
-        action_type=action_type,
-        phase_id=phase_id,
-        old_status=old_status,
-        new_status=new_status,
-        old_quantity=old_quantity,
-        new_quantity=new_quantity,
-        old_phase=old_phase,
-        new_phase=new_phase,
-        user_id=user_id,
-        notes=notes
+        db,
+        batch_id,
+        action_type,
+        phase_id,
+        ScanEventOptions(
+            old_status=old_status,
+            new_status=new_status,
+            old_quantity=old_quantity,
+            new_quantity=new_quantity,
+            old_phase=old_phase,
+            new_phase=new_phase,
+            user_id=user_id,
+            notes=notes,
+        ),
     )
 

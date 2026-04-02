@@ -921,7 +921,7 @@ def _second_degree_create_one(
     created_batches: List[schemas.BatchResponse],
 ) -> None:
     from app.crud.helpers import generate_barcode_string, get_next_serial_number
-    from app.crud.batch import get_batch_by_barcode, get_batch, create_scan_event
+    from app.crud.batch import get_batch_by_barcode, get_batch, create_scan_event, ScanEventOptions
 
     serial_number = get_next_serial_number(
         db,
@@ -962,17 +962,16 @@ def _second_degree_create_one(
     db.flush()
 
     create_scan_event(
-        db=db,
-        batch_id=db_batch.batch_id,
-        action_type="scan_in",
-        phase_id=db_batch.current_phase,
-        old_status=None,
-        new_status=db_batch.status,
-        old_quantity=None,
-        new_quantity=db_batch.quantity,
-        old_phase=None,
-        new_phase=db_batch.current_phase,
-        user_id=current_user.id if current_user else None,
+        db,
+        db_batch.batch_id,
+        "scan_in",
+        db_batch.current_phase,
+        ScanEventOptions(
+            new_status=db_batch.status,
+            new_quantity=db_batch.quantity,
+            new_phase=db_batch.current_phase,
+            user_id=current_user.id if current_user else None,
+        ),
     )
 
     db.refresh(db_batch)

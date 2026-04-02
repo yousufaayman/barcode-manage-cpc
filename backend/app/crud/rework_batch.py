@@ -3,7 +3,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session, joinedload
 
 from .. import models, schemas
-from .batch import create_scan_event
+from .batch import ScanEventOptions, create_scan_event
 from .helpers import generate_barcode_string, get_next_serial_number
 
 
@@ -70,17 +70,16 @@ def create_rework_batch(
     db.flush()
 
     create_scan_event(
-        db=db,
-        batch_id=operational_batch.batch_id,
-        action_type="scan_in",
-        phase_id=operational_batch.current_phase,
-        old_status=None,
-        new_status=operational_batch.status,
-        old_quantity=None,
-        new_quantity=operational_batch.quantity,
-        old_phase=None,
-        new_phase=operational_batch.current_phase,
-        user_id=created_by_user_id,
+        db,
+        operational_batch.batch_id,
+        "scan_in",
+        operational_batch.current_phase,
+        ScanEventOptions(
+            new_status=operational_batch.status,
+            new_quantity=operational_batch.quantity,
+            new_phase=operational_batch.current_phase,
+            user_id=created_by_user_id,
+        ),
     )
 
     row = models.ReworkBatch(
