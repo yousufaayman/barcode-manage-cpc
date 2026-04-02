@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Product Management System"
     
     # Server Configuration
-    PORT: int = 5000
+    PORT: int = 8000
     HOST: str = "0.0.0.0"
     
     # CORS Configuration - Dynamic from environment

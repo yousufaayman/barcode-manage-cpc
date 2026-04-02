@@ -1,9 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Annotated
 import logging
-from app.crud import *
+from app.crud import (
+    get_clients,
+    get_models,
+    get_sizes,
+    get_colors,
+    get_batch as crud_get_batch,
+    get_batch_by_barcode as crud_get_batch_by_barcode,
+    create_batch as crud_create_batch,
+    update_batch as crud_update_batch,
+    get_job_order as crud_get_job_order,
+)
 from app import models, schemas
 from app.core.deps import get_db, get_current_active_superuser, get_current_user, get_optional_current_user, get_current_active_user
 from pydantic import BaseModel
@@ -12,13 +22,38 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+STATUS_PENDING = "Pending"
+STATUS_IN_PROGRESS = "In Progress"
+STATUS_COMPLETED = "Completed"
+BATCH_NOT_FOUND = "Batch not found"
+
 class BatchListResponse(BaseModel):
     items: List[schemas.BatchResponse]
     total: int
 
+ 
+class BatchQueryParams(BaseModel):
+    skip: int = 0
+    limit: int = 100
+    barcode: Optional[str] = None
+    client: Optional[str] = None
+    model: Optional[str] = None
+    size: Optional[str] = None
+    color: Optional[str] = None
+    phase: Optional[str] = None
+    status: Optional[str] = None
+    job_order_number: Optional[str] = None
+    job_order_id: Optional[int] = None
+    color_id: Optional[int] = None
+    is_second_degree: Optional[bool] = None
+
 # Client endpoints (renamed from Brand)
 @router.get("/clients/", response_model=List[schemas.Client])
-def read_clients(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def read_clients(
+    db: Annotated[Session, Depends(get_db)],
+    skip: int = 0,
+    limit: int = 100,
+):
     """Get all clients"""
     clients = get_clients(db, skip=skip, limit=limit)
     return clients
@@ -26,7 +61,11 @@ def read_clients(skip: int = 0, limit: int = 100, db: Session = Depends(get_db))
 # Backward compatibility - brands endpoint redirects to clients
 @router.get("/brands", response_model=List[schemas.BrandResponse])
 @router.get("/brands/", response_model=List[schemas.BrandResponse])
-def read_brands(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def read_brands(
+    db: Annotated[Session, Depends(get_db)],
+    skip: int = 0,
+    limit: int = 100,
+):
     """Get all clients (backward compatibility for brands)"""
     clients = get_clients(db, skip=skip, limit=limit)
     # Transform client data to brand format for backward compatibility
@@ -40,42 +79,42 @@ def read_brands(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
 
 # Model endpoints
 @router.get("/models/", response_model=List[schemas.Model])
-def read_models(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def read_models(
+    db: Annotated[Session, Depends(get_db)],
+    skip: int = 0,
+    limit: int = 100,
+):
     """Get all models"""
     models_list = get_models(db, skip=skip, limit=limit)
     return models_list
 
 # Size endpoints
 @router.get("/sizes/", response_model=List[schemas.Size])
-def read_sizes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def read_sizes(
+    db: Annotated[Session, Depends(get_db)],
+    skip: int = 0,
+    limit: int = 100,
+):
     """Get all sizes"""
     sizes = get_sizes(db, skip=skip, limit=limit)
     return sizes
 
 # Color endpoints
 @router.get("/colors/", response_model=List[schemas.Color])
-def read_colors(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def read_colors(
+    db: Annotated[Session, Depends(get_db)],
+    skip: int = 0,
+    limit: int = 100,
+):
     """Get all colors"""
     colors = get_colors(db, skip=skip, limit=limit)
     return colors
 
 @router.get("/", response_model=schemas.BatchListResponse)
 def read_batches(
-    db: Session = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100,
-    barcode: str = None,
-    client: str = None,
-    model: str = None,
-    size: str = None,
-    color: str = None,
-    phase: str = None,
-    status: str = None,
-    job_order_number: str = None,
-    job_order_id: Optional[int] = None,
-    color_id: Optional[int] = None,
-    is_second_degree: Optional[bool] = None,
-    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    params: Annotated[BatchQueryParams, Depends()],
+    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)],
 ):
     """Get all batches with optional filtering"""
     base_table = models.Batch
@@ -108,35 +147,35 @@ def read_batches(
         base_table.current_phase == models.ProductionPhase.phase_id
     )
 
+    def _apply_filter(condition: bool, apply):
+        nonlocal query
+        if condition:
+            query = apply(query)
+
     # Apply filters if provided
-    if barcode:
-        query = query.filter(base_table.barcode.ilike(f"%{barcode}%"))
-    if client:
-        query = query.filter(models.Client.client_name == client)
-    if model:
-        query = query.filter(models.Model.model_name.ilike(f"%{model}%"))
-    if size:
-        query = query.filter(models.Size.size_value == size)
-    if color:
-        query = query.filter(models.Color.color_name == color)
-    if phase:
-        query = query.filter(models.ProductionPhase.phase_name == phase)
-    if status:
-        query = query.filter(base_table.status == status)
-    if job_order_number:
-        query = query.filter(models.JobOrder.job_order_number.ilike(f"%{job_order_number}%"))
-    if job_order_id is not None:
-        query = query.filter(base_table.job_order_id == job_order_id)
-    if color_id is not None:
-        query = query.filter(base_table.color_id == color_id)
-    if is_second_degree is not None:
-        query = query.filter(base_table.is_second_degree == is_second_degree)
+    _apply_filter(bool(params.barcode), lambda q: q.filter(base_table.barcode.ilike(f"%{params.barcode}%")))
+    _apply_filter(bool(params.client), lambda q: q.filter(models.Client.client_name == params.client))
+    _apply_filter(bool(params.model), lambda q: q.filter(models.Model.model_name.ilike(f"%{params.model}%")))
+    _apply_filter(bool(params.size), lambda q: q.filter(models.Size.size_value == params.size))
+    _apply_filter(bool(params.color), lambda q: q.filter(models.Color.color_name == params.color))
+    _apply_filter(bool(params.phase), lambda q: q.filter(models.ProductionPhase.phase_name == params.phase))
+    _apply_filter(bool(params.status), lambda q: q.filter(base_table.status == params.status))
+    _apply_filter(
+        bool(params.job_order_number),
+        lambda q: q.filter(models.JobOrder.job_order_number.ilike(f"%{params.job_order_number}%")),
+    )
+    _apply_filter(params.job_order_id is not None, lambda q: q.filter(base_table.job_order_id == params.job_order_id))
+    _apply_filter(params.color_id is not None, lambda q: q.filter(base_table.color_id == params.color_id))
+    _apply_filter(
+        params.is_second_degree is not None,
+        lambda q: q.filter(base_table.is_second_degree == params.is_second_degree),
+    )
 
     # Get total count before pagination
     total_count = query.count()
 
     # Apply pagination
-    batches = query.offset(skip).limit(limit).all()
+    batches = query.offset(params.skip).limit(params.limit).all()
 
     return {
         "items": [
@@ -169,14 +208,14 @@ def read_batches(
     }
 
 @router.get("/stats", response_model=schemas.BatchStats)
-def get_batch_stats(db: Session = Depends(get_db)):
+def get_batch_stats(db: Annotated[Session, Depends(get_db)]):
     """Get batch statistics"""
     total_batches = db.query(func.count(models.Batch.batch_id)).scalar()
     in_production = db.query(func.count(models.Batch.batch_id)).filter(
-        models.Batch.status.in_(['Pending', 'In Progress'])
+        models.Batch.status.in_([STATUS_PENDING, STATUS_IN_PROGRESS])
     ).scalar()
     completed = db.query(func.count(models.Batch.batch_id)).filter(
-        models.Batch.status == 'Completed'
+        models.Batch.status == STATUS_COMPLETED
     ).scalar()
     
     return {
@@ -186,7 +225,7 @@ def get_batch_stats(db: Session = Depends(get_db)):
     }
 
 @router.get("/phase-stats", response_model=schemas.PhaseStats)
-def get_phase_stats(db: Session = Depends(get_db)):
+def get_phase_stats(db: Annotated[Session, Depends(get_db)]):
     """Get batch statistics by phase"""
     # Get all phase statistics ordered by phase_id to maintain correct order
     phase_stats = db.query(
@@ -213,32 +252,30 @@ def get_phase_stats(db: Session = Depends(get_db)):
         'QC': {'pending': 0, 'in_progress': 0, 'completed': 0}
     }
     
+    def _phase_group(name: str) -> Optional[str]:
+        exact = {"Cutting": "Cutting", "Packaging": "Packaging", "QC": "QC"}
+        group = exact.get(name)
+        if group:
+            return group
+        for prefix, prefix_group in (("Sewing", "Sewing"), ("QC", "QC")):
+            if name.startswith(prefix):
+                return prefix_group
+        return None
+
+    status_key = {STATUS_PENDING: "pending", STATUS_IN_PROGRESS: "in_progress", STATUS_COMPLETED: "completed"}
+    mode = {"Cutting": "set", "Packaging": "set", "Sewing": "add", "QC": "add"}
+
     # Process the results
     for phase_id, phase_name, status, count in phase_stats:
-        if phase_name == 'Cutting':
-            if status == 'Pending':
-                phase_counts['Cutting']['pending'] = count
-            elif status == 'In Progress':
-                phase_counts['Cutting']['in_progress'] = count
-        elif phase_name.startswith('Sewing'):  # Handle all sewing phases (Sewing - 1, Sewing - 2, etc.)
-            if status == 'Pending':
-                phase_counts['Sewing']['pending'] += count
-            elif status == 'In Progress':
-                phase_counts['Sewing']['in_progress'] += count
-        elif phase_name == 'Packaging':
-            if status == 'Completed':
-                phase_counts['Packaging']['completed'] = count
-            elif status == 'Pending':
-                phase_counts['Packaging']['pending'] = count
-            elif status == 'In Progress':
-                phase_counts['Packaging']['in_progress'] = count
-        elif phase_name == 'QC' or phase_name.startswith('QC'):
-            if status == 'Completed':
-                phase_counts['QC']['completed'] += count
-            elif status == 'Pending':
-                phase_counts['QC']['pending'] += count
-            elif status == 'In Progress':
-                phase_counts['QC']['in_progress'] += count
+        group = _phase_group(phase_name)
+        key = status_key.get(status)
+        if not group or not key:
+            continue
+
+        if mode[group] == "add":
+            phase_counts[group][key] += count
+        else:
+            phase_counts[group][key] = count
     
     result = {
         "cutting": phase_counts['Cutting'],
@@ -252,46 +289,54 @@ def get_phase_stats(db: Session = Depends(get_db)):
     
     return result
 
-@router.get("/{batch_id}", response_model=schemas.BatchResponse)
+@router.get(
+    "/{batch_id}",
+    response_model=schemas.BatchResponse,
+    responses={404: {"description": BATCH_NOT_FOUND}},
+)
 def read_batch(
     batch_id: int,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Get a specific batch by ID"""
-    db_batch = get_batch(db, batch_id=batch_id)
+    db_batch = crud_get_batch(db, batch_id=batch_id)
     if db_batch is None:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
     return db_batch
 
 @router.post("/", response_model=schemas.BatchResponse)
 def create_batch(
     *,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
     batch_in: schemas.BatchCreate,
-    current_user: models.User = Depends(get_current_active_user),
+    current_user: Annotated[models.User, Depends(get_current_active_user)],
 ):
     """Create a new batch"""
-    batch = create_batch(db=db, batch=batch_in, user_id=current_user.id)
+    batch = crud_create_batch(db=db, batch=batch_in, user_id=current_user.id)
     return batch
 
-@router.put("/{batch_id}", response_model=schemas.BatchResponse)
+@router.put(
+    "/{batch_id}",
+    response_model=schemas.BatchResponse,
+    responses={404: {"description": BATCH_NOT_FOUND}, 500: {"description": "Internal server error"}},
+)
 def update_batch_endpoint(
     batch_id: int,
     batch_in: schemas.BatchUpdate,
-    db: Session = Depends(get_db)
+    db: Annotated[Session, Depends(get_db)],
 ):
-    db_batch = get_batch(db, batch_id)
+    db_batch = crud_get_batch(db, batch_id)
     if not db_batch:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
     
     # Get the SQLAlchemy model instance
     db_batch_model = db.query(models.Batch).filter(models.Batch.batch_id == batch_id).first()
     if not db_batch_model:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
     
     try:
         # Update the batch
-        updated_batch = update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
+        updated_batch = crud_update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
         return updated_batch
     except Exception as e:
         # Log the full error for debugging
@@ -300,49 +345,61 @@ def update_batch_endpoint(
         print(f"Error updating batch {batch_id}: {error_details}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.delete("/{batch_id}", response_model=schemas.BatchResponse)
+@router.delete(
+    "/{batch_id}",
+    response_model=schemas.BatchResponse,
+    responses={404: {"description": BATCH_NOT_FOUND}},
+)
 def delete_batch(
     *,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
     batch_id: int,
 ):
     """Delete a batch"""
     from app.crud.batch import delete_batch as crud_delete_batch
     batch = crud_delete_batch(db, batch_id=batch_id)
     if not batch:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
     return batch
-@router.get("/barcode/{barcode}", response_model=schemas.BatchResponse)
+@router.get(
+    "/barcode/{barcode}",
+    response_model=schemas.BatchResponse,
+    responses={404: {"description": BATCH_NOT_FOUND}},
+)
 def read_batch_by_barcode(
     barcode: str,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Get a specific batch by barcode"""
-    db_batch = get_batch_by_barcode(db, barcode=barcode)
+    db_batch = crud_get_batch_by_barcode(db, barcode=barcode)
     if db_batch is None:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
     return db_batch
 
-@router.put("/barcode/{barcode}", response_model=schemas.BatchResponse)
+@router.put(
+    "/barcode/{barcode}",
+    response_model=schemas.BatchResponse,
+    responses={404: {"description": BATCH_NOT_FOUND}, 500: {"description": "Internal server error"}},
+)
 def update_batch_by_barcode(
     barcode: str,
     batch_in: schemas.BatchUpdate,
-    db: Session = Depends(get_db),
-    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)],
 ):
     """Update a batch by barcode"""
-    db_batch = get_batch_by_barcode(db, barcode=barcode)
+    db_batch = crud_get_batch_by_barcode(db, barcode=barcode)
     if db_batch is None:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
     
     # Get the SQLAlchemy model instance
     db_batch_model = db.query(models.Batch).filter(models.Batch.barcode == barcode).first()
     if not db_batch_model:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
     
     try:
         user_id = current_user.id if current_user else None
-        updated_batch = update_batch(db=db, db_batch=db_batch_model, batch=batch_in, user_id=user_id)
+        updated_batch = crud_update_batch(db=db, db_batch=db_batch_model, batch=batch_in, user_id=user_id)
         return updated_batch
     except Exception as e:
         # Log the full error for debugging
@@ -355,8 +412,8 @@ def update_batch_by_barcode(
 
 @router.post("/transition-completed-phases", response_model=Dict[str, int])
 def transition_completed_phases(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_superuser)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[models.User, Depends(get_current_active_superuser)],
 ):
     """Manually transition all existing batches from completed phases to next phases:
     - Cutting (Completed) → Sewing - 1 (Pending)
@@ -371,8 +428,16 @@ def transition_completed_phases(
     
     return {"transitioned_count": transitioned_count} 
 
-@router.get("/{batch_id}/events", response_model=List[schemas.BarcodeScanEventResponse])
-def get_batch_scan_events(batch_id: int, limit: int = 100, db: Session = Depends(get_db)):
+@router.get(
+    "/{batch_id}/events",
+    response_model=List[schemas.BarcodeScanEventResponse],
+    responses={404: {"description": "No scan events found for this batch"}},
+)
+def get_batch_scan_events(
+    batch_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = 100,
+):
     """Get all scan events for a batch (detailed audit trail)"""
     from app.crud.batch import get_detailed_events_by_batch
     events = get_detailed_events_by_batch(db, batch_id, limit)
@@ -401,8 +466,15 @@ def get_batch_scan_events(batch_id: int, limit: int = 100, db: Session = Depends
     
     return event_responses
 
-@router.get("/{batch_id}/timeline/summary", response_model=schemas.TimelineSummaryResponse)
-def get_batch_timeline_summary(batch_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/{batch_id}/timeline/summary",
+    response_model=schemas.TimelineSummaryResponse,
+    responses={404: {"description": "No timeline data found for this batch"}},
+)
+def get_batch_timeline_summary(
+    batch_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
     """Get aggregated timeline summary for a batch (optimized for display)"""
     from app.crud.batch import get_timeline_summary_by_batch
     summary = get_timeline_summary_by_batch(db, batch_id)
@@ -432,7 +504,10 @@ def get_batch_timeline_summary(batch_id: int, db: Session = Depends(get_db)):
     ) 
 
 @router.get("/{batch_id}/visited-phases")
-def get_batch_visited_phases(batch_id: int, db: Session = Depends(get_db)):
+def get_batch_visited_phases(
+    batch_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
     """Get unique phases that a batch has visited"""
     from app.crud.batch import get_visited_phases_by_batch
     phases = get_visited_phases_by_batch(db, batch_id)
@@ -442,8 +517,8 @@ def get_batch_visited_phases(batch_id: int, db: Session = Depends(get_db)):
 @router.get("/{batch_id}/production-stages", response_model=List[schemas.StageOption])
 def get_batch_production_stages(
     batch_id: int,
+    db: Annotated[Session, Depends(get_db)],
     phase_id: Optional[int] = None,
-    db: Session = Depends(get_db),
 ):
     """
     Get distinct stages from production_history for a batch.
@@ -469,8 +544,8 @@ def get_batch_production_stages(
 @router.get("/{batch_id}/production-daily-assignments", response_model=List[schemas.BatchProductionDailyAssignmentOption])
 def get_batch_production_daily_assignments(
     batch_id: int,
+    db: Annotated[Session, Depends(get_db)],
     phase_id: Optional[int] = None,
-    db: Session = Depends(get_db),
 ):
     """
     Get daily assignments with production for a batch from production_history.
@@ -494,16 +569,19 @@ def get_batch_production_daily_assignments(
     ]
 
 
-@router.get("/barcode/{barcode}/job-order-item")
+@router.get(
+    "/barcode/{barcode}/job-order-item",
+    responses={404: {"description": "Not found"}},
+)
 def get_job_order_item_by_barcode(
     barcode: str,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Get job order item information for a batch by barcode"""
     # First get the batch
-    batch = get_batch_by_barcode(db, barcode=barcode)
+    batch = crud_get_batch_by_barcode(db, barcode=barcode)
     if not batch:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
     
     # Find the corresponding job order item
     job_order_item = db.query(models.JobOrderItem).filter(
@@ -531,7 +609,7 @@ def get_remaining_quantity_for_phase_status(
     size_id: int,
     phase_id: int,
     status: str,
-    db: Session = Depends(get_db),
+    db: Annotated[Session, Depends(get_db)],
 ):
     """Get remaining quantity for a specific job order item that are NOT in the specified phase-status combination"""
     
@@ -570,7 +648,9 @@ def get_remaining_quantity_for_phase_status(
     }
 
 @router.get("/by-phase/current", response_model=Dict[str, Dict[str, Any]])
-def get_current_batches_by_phase(db: Session = Depends(get_db)):
+def get_current_batches_by_phase(
+    db: Annotated[Session, Depends(get_db)],
+):
     """Get current batches grouped by production phases and status with model/color grouping"""
     
     # Get all current batches with their related information
@@ -933,8 +1013,8 @@ def get_current_batches_by_phase(db: Session = Depends(get_db)):
 @router.post("/generate", response_model=List[schemas.GeneratedBatch])
 def generate_batches(
     request: schemas.BatchGenerateRequest,
-    db: Session = Depends(get_db),
-    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)],
 ):
     """Generate batches from a cut based on rolls, layers, size ratios, and size transitions.
     
@@ -991,8 +1071,8 @@ def generate_batches(
 @router.post("/submit", response_model=schemas.BulkSubmitResponse)
 def submit_generated_batches(
     request: schemas.BatchSubmitRequest,
-    db: Session = Depends(get_db),
-    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)],
 ):
     """Submit generated batches to database with duplicate checking.
     
@@ -1066,7 +1146,7 @@ def submit_generated_batches(
                 layers=batch.layers or 1,
                 serial=str(batch.serial_number) if batch.serial_number else "1",
                 current_phase=1,
-                status="In Progress",
+                status=STATUS_IN_PROGRESS,
                 is_second_degree=False
             )
             
@@ -1128,18 +1208,22 @@ class SecondDegreeBatchRequest(BaseModel):
     job_order_id: int
     items: List[Dict[str, int]]
 
-@router.post("/create-second-degree", response_model=schemas.BulkSubmitResponse)
+@router.post(
+    "/create-second-degree",
+    response_model=schemas.BulkSubmitResponse,
+    responses={404: {"description": "Job order not found"}},
+)
 def create_second_degree_batches(
     request: SecondDegreeBatchRequest,
-    db: Session = Depends(get_db),
-    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)],
 ):
     """Create second degree batches for job order items.
     
     items format: [{"item_id": int, "count": int}, ...]
     where count is the number of second degree batches to create for that item.
     """
-    job_order = get_job_order(db, job_order_id=request.job_order_id)
+    job_order = crud_get_job_order(db, job_order_id=request.job_order_id)
     if not job_order:
         raise HTTPException(status_code=404, detail=f"Job order {request.job_order_id} not found")
 
@@ -1255,18 +1339,22 @@ class CompensationBatchRequest(BaseModel):
     job_order_id: int
     compensations: List[Dict[str, Any]]
 
-@router.post("/create-compensation", response_model=schemas.BulkSubmitResponse)
+@router.post(
+    "/create-compensation",
+    response_model=schemas.BulkSubmitResponse,
+    responses={404: {"description": "Job order not found"}},
+)
 def create_compensation_batches(
     request: CompensationBatchRequest,
-    db: Session = Depends(get_db),
-    current_user: Optional[schemas.User] = Depends(get_optional_current_user)
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)],
 ):
     """Create compensation batches for lost physical barcodes.
     
     Compensations format: [{"item_id": int, "phase_id": int, "quantity": int}, ...]
     These batches are NOT included in cut_qty or phase_in_qty calculations.
     """
-    job_order = get_job_order(db, job_order_id=request.job_order_id)
+    job_order = crud_get_job_order(db, job_order_id=request.job_order_id)
     if not job_order:
         raise HTTPException(status_code=404, detail=f"Job order {request.job_order_id} not found")
     
@@ -1335,7 +1423,7 @@ def create_compensation_batches(
                 layers=1,
                 serial=f"{serial_number:03d}",
                 current_phase=phase_id,
-                status="In Progress",
+                status=STATUS_IN_PROGRESS,
                 is_second_degree=False
             )
             
