@@ -4,8 +4,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import jwt
 from pydantic import ValidationError
 from sqlalchemy.orm import Session, joinedload
-
-from app.crud import *
+from app.crud.user import get_user_roles_in_system, has_role_in_system
 from app import models, schemas
 from app.core import security
 from app.core.config import settings
