@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import logging
+from collections import defaultdict
 from datetime import date, datetime
+from xml.sax.saxutils import escape as xml_escape
 from typing import Any, Dict, List, Optional, Tuple
 
 from reportlab.lib import colors
@@ -26,13 +28,96 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.utils.size_sort import get_size_sort_key
 from app.crud.tracking import get_sewing_daily_report_data
+from app.crud.qc_summary import (
+    build_job_order_qc_summary,
+    get_job_order_ids_with_qc_rejections_on_date,
+)
+from app import models
+from app.utils import pdf_fonts
+from app.utils.pdf_text import apply_pdf_unicode_to_table_rows, prepare_pdf_text
 
 
 logger = logging.getLogger(__name__)
 
 
+def _qc_sewing_top_workers_with_top_reason(
+    rejection_reason_counts: List[Dict[str, Any]],
+    limit: int = 5,
+) -> List[Tuple[str, int, str, int]]:
+    """
+    Worst workers by rejected pcs within one sewing phase; each row includes that worker's
+    single highest-volume reason (tie-break: reason name).
+    """
+    worker_total: Dict[str, int] = defaultdict(int)
+    worker_reasons: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for st in rejection_reason_counts or []:
+        for worker in st.get("workers") or []:
+            wname = str(worker.get("worker_name") or "Unassigned Worker")
+            for rr in worker.get("reasons") or []:
+                cnt = int(rr.get("count") or 0)
+                if cnt <= 0:
+                    continue
+                r = str(rr.get("reason") or "—")
+                worker_total[wname] += cnt
+                worker_reasons[wname][r] += cnt
+    ranked = sorted(worker_total.items(), key=lambda x: (-x[1], x[0].lower()))[:limit]
+    out: List[Tuple[str, int, str, int]] = []
+    for wname, total in ranked:
+        rmap = worker_reasons[wname]
+        if not rmap:
+            out.append((wname, total, "—", 0))
+            continue
+        top_reason, top_cnt = max(rmap.items(), key=lambda x: (-x[1], x[0]))
+        out.append((wname, total, top_reason, top_cnt))
+    return out
+
+
+def _qc_sewing_top_stages_with_top_reasons(
+    rejection_reason_counts: List[Dict[str, Any]],
+    stage_limit: int = 5,
+    reason_limit: int = 3,
+) -> List[Tuple[str, int, List[Tuple[str, int]]]]:
+    """Worst problem stages by volume; each with up to ``reason_limit`` reasons by count."""
+    stage_entries: List[Tuple[str, int, Dict[str, int]]] = []
+    for st in rejection_reason_counts or []:
+        sname = str(st.get("problem_stage_name") or "—")
+        reason_counts: Dict[str, int] = defaultdict(int)
+        for worker in st.get("workers") or []:
+            for rr in worker.get("reasons") or []:
+                cnt = int(rr.get("count") or 0)
+                if cnt <= 0:
+                    continue
+                r = str(rr.get("reason") or "—")
+                reason_counts[r] += cnt
+        stage_total = int(st.get("total_count") or 0)
+        if stage_total <= 0 and reason_counts:
+            stage_total = sum(reason_counts.values())
+        stage_entries.append((sname, stage_total, dict(reason_counts)))
+    stage_entries.sort(key=lambda x: (-x[1], x[0].lower()))
+    result: List[Tuple[str, int, List[Tuple[str, int]]]] = []
+    for sname, total, rmap in stage_entries[:stage_limit]:
+        top_reasons = sorted(rmap.items(), key=lambda x: (-x[1], x[0].lower()))[
+            :reason_limit
+        ]
+        result.append((sname, total, top_reasons))
+    return result
+
+
+def _qc_sorted_reason_rows_by_qty(
+    rejection_reason_totals: List[Dict[str, Any]],
+) -> List[Tuple[str, int]]:
+    """All reasons for cutting/QC phases, sorted by quantity descending."""
+    rows: List[Tuple[str, int]] = []
+    for r in rejection_reason_totals or []:
+        rows.append(
+            (str(r.get("reason") or "—"), int(r.get("count") or 0)),
+        )
+    rows.sort(key=lambda x: (-x[1], x[0].lower()))
+    return rows
+
+
 class ReportPDFService:
-    """Generate daily production report PDFs for all phases (Cutting, Sewing, etc.)."""
+    """Generate daily production report PDFs (Cutting, Sewing, and QC as separate documents)."""
 
     def __init__(self, reports_dir: Optional[str] = None) -> None:
         self.reports_dir = reports_dir or settings.REPORTS_DIR or "backend/reports"
@@ -50,7 +135,8 @@ class ReportPDFService:
         model_name: Optional[str] = None,
         job_order_number: Optional[str] = None,
     ) -> str:
-        """Generate the daily Cutting report (with Sewing section) and return the PDF file path."""
+        """Generate the daily Cutting report PDF and return its file path."""
+        pdf_fonts.ensure_pdf_fonts_registered()
         # Load base data from ops.cut_details_view joined with job_orders for client_name
         cuts = self._load_cuts_for_date(
             db=db,
@@ -72,9 +158,6 @@ class ReportPDFService:
             sizes = cut.get("sizes") or []
             total_cut_pieces += sum(int(s.get("total_pieces") or 0) for s in sizes)
 
-        # Load Sewing daily report data for the same date
-        sewing_data = get_sewing_daily_report_data(db, target_date)
-
         # Build PDF
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"daily_cutting_report_{target_date.isoformat()}_{timestamp}.pdf"
@@ -90,6 +173,7 @@ class ReportPDFService:
         )
 
         styles = getSampleStyleSheet()
+        pdf_fonts.patch_reportlab_sample_styles(styles)
         title_style = ParagraphStyle(
             "CuttingTitle",
             parent=styles["Heading1"],
@@ -114,7 +198,7 @@ class ReportPDFService:
             textColor=colors.HexColor("#1D4ED8"),  # blue accent
             spaceAfter=16,
             leading=15,
-            fontName="Helvetica-Bold",
+            fontName=pdf_fonts.PDF_FONT_BOLD,
         )
         small_label = ParagraphStyle(
             "SmallLabel",
@@ -150,13 +234,1032 @@ class ReportPDFService:
                 )
             )
 
-        # Sewing section (if there is data)
-        if sewing_data:
-            self._build_sewing_section(story, sewing_data)
-
         doc.build(story)
         logger.info("Cutting report PDF generated at %s", filepath)
         return filepath
+
+    def generate_daily_sewing_report(
+        self,
+        db: Session,
+        target_date: date,
+    ) -> str:
+        """Generate the daily Sewing production report PDF and return its file path."""
+        pdf_fonts.ensure_pdf_fonts_registered()
+        sewing_data = get_sewing_daily_report_data(db, target_date)
+
+        total_true_pieces = 0
+        for phase in sewing_data or []:
+            for schematic in phase.get("schematics") or []:
+                total_true_pieces += int(schematic.get("line_true_total") or 0)
+
+        if not sewing_data:
+            logger.info("No sewing daily report structure for %s", target_date)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"daily_sewing_report_{target_date.isoformat()}_{timestamp}.pdf"
+        filepath = os.path.join(self.reports_dir, filename)
+
+        doc = SimpleDocTemplate(
+            filepath,
+            pagesize=A4,
+            rightMargin=36,
+            leftMargin=36,
+            topMargin=48,
+            bottomMargin=36,
+        )
+
+        styles = getSampleStyleSheet()
+        pdf_fonts.patch_reportlab_sample_styles(styles)
+        title_style = ParagraphStyle(
+            "SewingTitle",
+            parent=styles["Heading1"],
+            alignment=TA_CENTER,
+            fontSize=20,
+            spaceAfter=18,
+            textColor=colors.HexColor("#1F2937"),
+        )
+        subtitle_style = ParagraphStyle(
+            "SewingSubtitle",
+            parent=styles["Normal"],
+            alignment=TA_CENTER,
+            fontSize=11,
+            textColor=colors.HexColor("#4B5563"),
+            spaceAfter=12,
+        )
+        total_sewing_style = ParagraphStyle(
+            "TotalSewing",
+            parent=styles["Normal"],
+            alignment=TA_CENTER,
+            fontSize=13,
+            textColor=colors.HexColor("#1D4ED8"),
+            spaceAfter=16,
+            leading=15,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+        )
+
+        story: List[Any] = []
+        self._build_sewing_document_header(
+            story,
+            title_style,
+            subtitle_style,
+            target_date,
+            total_true_pieces,
+            total_sewing_style,
+        )
+
+        if sewing_data:
+            self._build_sewing_section(story, sewing_data)
+        else:
+            story.append(Spacer(1, 24))
+            story.append(
+                Paragraph(
+                    "No sewing production data is available for this date.",
+                    styles["Italic"],
+                )
+            )
+
+        doc.build(story)
+        logger.info("Sewing report PDF generated at %s", filepath)
+        return filepath
+
+    def generate_daily_qc_report(
+        self,
+        db: Session,
+        target_date: date,
+        client_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        job_order_number: Optional[str] = None,
+    ) -> str:
+        """
+        Daily QC rejections PDF using the same aggregation as the job-order QC \"Today\" tab
+        for the given report date (rejections on that date, same-day sewing production for ratios).
+        """
+        pdf_fonts.ensure_pdf_fonts_registered()
+        jo_ids = get_job_order_ids_with_qc_rejections_on_date(
+            db,
+            target_date,
+            client_name=client_name,
+            model_name=model_name,
+            job_order_number=job_order_number,
+        )
+
+        job_sections: List[Dict[str, Any]] = []
+        grand_total_rejected = 0
+        for jid in jo_ids:
+            summary = build_job_order_qc_summary(
+                db, jid, today_reference_date=target_date
+            )
+            rejected = int(summary.get("today_rejected_pieces") or 0)
+            grand_total_rejected += rejected
+            jo = (
+                db.query(models.JobOrder)
+                .filter(models.JobOrder.job_order_id == jid)
+                .first()
+            )
+            model_n = ""
+            client_n = ""
+            jo_num = ""
+            if jo:
+                jo_num = jo.job_order_number or ""
+                if jo.model_id:
+                    m = (
+                        db.query(models.Model)
+                        .filter(models.Model.model_id == jo.model_id)
+                        .first()
+                    )
+                    model_n = m.model_name if m else ""
+                if jo.client_id:
+                    c = (
+                        db.query(models.Client)
+                        .filter(models.Client.client_id == jo.client_id)
+                        .first()
+                    )
+                    client_n = c.client_name if c else ""
+            job_sections.append(
+                {
+                    "job_order_id": jid,
+                    "job_order_number": jo_num,
+                    "client_name": client_n,
+                    "model_name": model_n,
+                    "today_rejected_pieces": rejected,
+                    "today_phases": summary.get("today_phases") or [],
+                }
+            )
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"daily_qc_report_{target_date.isoformat()}_{timestamp}.pdf"
+        filepath = os.path.join(self.reports_dir, filename)
+
+        doc = SimpleDocTemplate(
+            filepath,
+            pagesize=A4,
+            rightMargin=36,
+            leftMargin=36,
+            topMargin=48,
+            bottomMargin=36,
+        )
+
+        styles = getSampleStyleSheet()
+        pdf_fonts.patch_reportlab_sample_styles(styles)
+        title_style = ParagraphStyle(
+            "QcTitle",
+            parent=styles["Heading1"],
+            alignment=TA_CENTER,
+            fontSize=20,
+            spaceAfter=18,
+            textColor=colors.HexColor("#1F2937"),
+        )
+        subtitle_style = ParagraphStyle(
+            "QcSubtitle",
+            parent=styles["Normal"],
+            alignment=TA_CENTER,
+            fontSize=11,
+            textColor=colors.HexColor("#4B5563"),
+            spaceAfter=12,
+        )
+        total_qc_style = ParagraphStyle(
+            "TotalQc",
+            parent=styles["Normal"],
+            alignment=TA_CENTER,
+            fontSize=13,
+            textColor=colors.HexColor("#1D4ED8"),
+            spaceAfter=16,
+            leading=15,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+        )
+
+        story: List[Any] = []
+        self._build_qc_document_header(
+            story,
+            title_style,
+            subtitle_style,
+            target_date,
+            grand_total_rejected,
+            total_qc_style,
+            client_name,
+            model_name,
+            job_order_number,
+        )
+
+        date_label = target_date.strftime("%Y-%m-%d")
+        content_width = 7.0 * inch
+        if not job_sections:
+            story.append(Spacer(1, 24))
+            story.append(
+                Paragraph(
+                    f"No QC rejections are recorded for {date_label} (with the selected filters).",
+                    styles["Italic"],
+                )
+            )
+        else:
+            # Page 1: header (already appended) + cross–job-order summary only
+            self._append_qc_first_page_all_orders_summary(
+                story, job_sections, content_width, date_label
+            )
+
+            section_header_bg = colors.HexColor("#DBEAFE")
+            section_header_fg = colors.HexColor("#1F2937")
+
+            # Each job order with rejections starts on a new page
+            for block in job_sections:
+                story.append(PageBreak())
+
+                band_text = (
+                    f"Job order: {block['job_order_number'] or block['job_order_id']}  –  "
+                    f"Client: {block['client_name'] or '—'}  –  Model: {block['model_name'] or '—'}"
+                )
+                band = Table(
+                    apply_pdf_unicode_to_table_rows([[band_text]]),
+                    colWidths=[content_width],
+                )
+                band.hAlign = "LEFT"
+                band.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, -1), section_header_bg),
+                            ("TEXTCOLOR", (0, 0), (-1, -1), section_header_fg),
+                            ("FONTNAME", (0, 0), (-1, -1), pdf_fonts.PDF_FONT_BOLD),
+                            ("FONTSIZE", (0, 0), (-1, -1), 10),
+                            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                            ("TOPPADDING", (0, 0), (-1, -1), 4),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                        ]
+                    )
+                )
+                story.append(band)
+                story.append(Spacer(1, 8))
+
+                detail_head = ParagraphStyle(
+                    "QcJoDetailHead",
+                    parent=subtitle_style,
+                    alignment=TA_LEFT,
+                    fontSize=11,
+                    fontName=pdf_fonts.PDF_FONT_BOLD,
+                    spaceAfter=6,
+                )
+                story.append(
+                    Paragraph(
+                        f"Detail — rejected pieces ({date_label}): {block['today_rejected_pieces']:,}",
+                        detail_head,
+                    )
+                )
+                story.append(Spacer(1, 6))
+
+                self._append_qc_today_phases_table(
+                    story, block["today_phases"], content_width, target_date
+                )
+
+        doc.build(story)
+        logger.info("QC report PDF generated at %s", filepath)
+        return filepath
+
+    def _append_qc_first_page_all_orders_summary(
+        self,
+        story: List[Any],
+        job_sections: List[Dict[str, Any]],
+        content_width: float,
+        date_label: str,
+    ) -> None:
+        """First page only: totals combined across all job orders that had rejections."""
+        pdf_fonts.ensure_pdf_fonts_registered()
+        styles = getSampleStyleSheet()
+        pdf_fonts.patch_reportlab_sample_styles(styles)
+        h2 = ParagraphStyle(
+            "QcAllOrdersSummaryH2",
+            parent=styles["Normal"],
+            fontSize=13,
+            leading=16,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+            textColor=colors.HexColor("#111827"),
+            spaceBefore=4,
+            spaceAfter=8,
+        )
+        hdr_para = ParagraphStyle(
+            "QcSummaryTblHdr",
+            parent=styles["Normal"],
+            fontSize=9,
+            leading=11,
+            alignment=TA_CENTER,
+            textColor=colors.white,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+        )
+        header_bg = colors.HexColor("#1F2937")
+        grid_color = colors.HexColor("#E5E7EB")
+
+        story.append(
+            Paragraph(
+                f"Summary — all job orders ({date_label})",
+                h2,
+            )
+        )
+
+        sorted_blocks = sorted(
+            job_sections,
+            key=lambda b: (
+                (b.get("client_name") or "").lower(),
+                (b.get("job_order_number") or "").lower(),
+            ),
+        )
+
+        jo_hdr = [
+            Paragraph(lbl, hdr_para)
+            for lbl in ["Job order", "Client", "Model", "Rejected pcs"]
+        ]
+        jo_rows: List[List[Any]] = [jo_hdr]
+        for b in sorted_blocks:
+            jo_rows.append(
+                [
+                    str(b.get("job_order_number") or b.get("job_order_id") or "—"),
+                    str(b.get("client_name") or "—"),
+                    str(b.get("model_name") or "—"),
+                    str(int(b.get("today_rejected_pieces") or 0)),
+                ]
+            )
+
+        w0 = 1.25 * inch
+        w1 = 1.85 * inch
+        w2 = content_width - w0 - w1 - 0.9 * inch
+        w3 = 0.9 * inch
+        jo_tbl = Table(
+            apply_pdf_unicode_to_table_rows(jo_rows),
+            colWidths=[w0, w1, max(w2, 2.0 * inch), w3],
+            repeatRows=1,
+        )
+        jo_tbl.hAlign = "LEFT"
+        jo_tbl.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                    ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("FONTSIZE", (0, 1), (-1, -1), 9),
+                    ("ALIGN", (0, 1), (0, -1), "LEFT"),
+                    ("ALIGN", (1, 1), (1, -1), "LEFT"),
+                    ("ALIGN", (2, 1), (2, -1), "LEFT"),
+                    ("ALIGN", (3, 1), (3, -1), "CENTER"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("GRID", (0, 0), (-1, -1), 0.25, grid_color),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        story.append(jo_tbl)
+        story.append(Spacer(1, 16))
+
+        phase_key_agg: Dict[int, Dict[str, Any]] = {}
+        for block in job_sections:
+            for ph in block.get("today_phases") or []:
+                pid = int(ph.get("phase_id") or 0)
+                reject = int(ph.get("reject") or 0)
+                if reject <= 0:
+                    continue
+                if pid not in phase_key_agg:
+                    phase_key_agg[pid] = {
+                        "phase_name": str(ph.get("phase_name") or "—"),
+                        "reject": 0,
+                    }
+                phase_key_agg[pid]["reject"] += reject
+
+        story.append(
+            Paragraph(
+                "Totals by return phase (combined)",
+                h2,
+            )
+        )
+        ph_hdr = [
+            Paragraph(lbl, hdr_para)
+            for lbl in ["Return phase", "Rejected pcs"]
+        ]
+        ph_rows: List[List[Any]] = [ph_hdr]
+        for _pid, info in sorted(
+            phase_key_agg.items(),
+            key=lambda x: (x[1]["phase_name"].lower(), x[0]),
+        ):
+            ph_rows.append(
+                [
+                    str(info["phase_name"]),
+                    str(int(info["reject"])),
+                ]
+            )
+        if len(ph_rows) == 1:
+            ph_rows.append(["—", "0"])
+
+        pw0 = content_width - 1.0 * inch
+        pw1 = 1.0 * inch
+        ph_tbl = Table(
+            apply_pdf_unicode_to_table_rows(ph_rows),
+            colWidths=[max(pw0, 4.0 * inch), pw1],
+            repeatRows=1,
+        )
+        ph_tbl.hAlign = "LEFT"
+        ph_tbl.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                    ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("FONTSIZE", (0, 1), (-1, -1), 9),
+                    ("ALIGN", (0, 1), (0, -1), "LEFT"),
+                    ("ALIGN", (1, 1), (1, -1), "CENTER"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("GRID", (0, 0), (-1, -1), 0.25, grid_color),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        story.append(ph_tbl)
+        story.append(Spacer(1, 16))
+
+        # Worst workers across all phases (combined)
+        worker_totals: Dict[str, int] = defaultdict(int)
+        for block in job_sections:
+            for ph in block.get("today_phases") or []:
+                ptype = str(ph.get("phase_type") or "").strip().lower()
+                if ptype == "sewing":
+                    for st in ph.get("rejection_reason_counts") or []:
+                        for worker in st.get("workers") or []:
+                            wname = str(worker.get("worker_name") or "Unassigned Worker")
+                            worker_totals[wname] += int(worker.get("total_count") or 0)
+
+        story.append(Paragraph("Worst workers across all phases", h2))
+        ww_hdr = [Paragraph(lbl, hdr_para) for lbl in ["Worker", "Rejected pcs"]]
+        ww_rows: List[List[Any]] = [ww_hdr]
+        for wname, qty in sorted(
+            worker_totals.items(), key=lambda x: (-x[1], x[0].lower())
+        ):
+            if qty <= 0:
+                continue
+            ww_rows.append([wname, str(int(qty))])
+        if len(ww_rows) == 1:
+            ww_rows.append(["—", "0"])
+
+        ww_col0 = content_width - 1.0 * inch
+        ww_tbl = Table(
+            apply_pdf_unicode_to_table_rows(ww_rows),
+            colWidths=[max(ww_col0, 4.0 * inch), 1.0 * inch],
+            repeatRows=1,
+        )
+        ww_tbl.hAlign = "LEFT"
+        ww_tbl.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                    ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("FONTSIZE", (0, 1), (-1, -1), 9),
+                    ("ALIGN", (0, 1), (0, -1), "LEFT"),
+                    ("ALIGN", (1, 1), (1, -1), "CENTER"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("GRID", (0, 0), (-1, -1), 0.25, grid_color),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        story.append(ww_tbl)
+        story.append(Spacer(1, 16))
+
+        # Top 3 reasons (QC + Cutting) across all job orders
+        qc_reason_totals: Dict[str, int] = defaultdict(int)
+        cutting_reason_totals: Dict[str, int] = defaultdict(int)
+        for block in job_sections:
+            for ph in block.get("today_phases") or []:
+                ptype = str(ph.get("phase_type") or "").strip().lower()
+                if ptype not in ("qc", "cutting"):
+                    continue
+                for rr in ph.get("rejection_reason_totals") or []:
+                    rsn = str(rr.get("reason") or "—")
+                    cnt = int(rr.get("count") or 0)
+                    if cnt <= 0:
+                        continue
+                    if ptype == "qc":
+                        qc_reason_totals[rsn] += cnt
+                    else:
+                        cutting_reason_totals[rsn] += cnt
+
+        for label, totals in (
+            ("Top 3 reasons — QC (all job orders)", qc_reason_totals),
+            ("Top 3 reasons — Cutting (all job orders)", cutting_reason_totals),
+        ):
+            story.append(Paragraph(label, h2))
+            rr_hdr = [Paragraph(lbl, hdr_para) for lbl in ["Reason", "Qty"]]
+            rr_rows: List[List[Any]] = [rr_hdr]
+            for rsn, qty in sorted(
+                totals.items(), key=lambda x: (-x[1], x[0].lower())
+            )[:3]:
+                rr_rows.append([rsn, str(int(qty))])
+            if len(rr_rows) == 1:
+                rr_rows.append(["—", "0"])
+
+            rr_col0 = content_width - 1.0 * inch
+            rr_tbl = Table(
+                apply_pdf_unicode_to_table_rows(rr_rows),
+                colWidths=[max(rr_col0, 4.0 * inch), 1.0 * inch],
+                repeatRows=1,
+            )
+            rr_tbl.hAlign = "LEFT"
+            rr_tbl.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                        ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                        ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                        ("FONTSIZE", (0, 0), (-1, 0), 9),
+                        ("FONTSIZE", (0, 1), (-1, -1), 9),
+                        ("ALIGN", (0, 1), (0, -1), "LEFT"),
+                        ("ALIGN", (1, 1), (1, -1), "CENTER"),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                        ("GRID", (0, 0), (-1, -1), 0.25, grid_color),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                        ("TOPPADDING", (0, 0), (-1, -1), 4),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ]
+                )
+            )
+            story.append(rr_tbl)
+            story.append(Spacer(1, 12))
+
+    def _build_qc_document_header(
+        self,
+        story: List[Any],
+        title_style: ParagraphStyle,
+        subtitle_style: ParagraphStyle,
+        target_date: date,
+        grand_total_rejected: int,
+        total_qc_style: ParagraphStyle,
+        client_name: Optional[str],
+        model_name: Optional[str],
+        job_order_number: Optional[str],
+    ) -> None:
+        logo_path = "frontend/public/company-logo.png"
+        if os.path.exists(logo_path):
+            try:
+                logo = Image(logo_path, width=2.0 * inch, height=1.0 * inch)
+                logo.hAlign = "CENTER"
+                story.append(logo)
+                story.append(Spacer(1, 12))
+            except Exception as exc:
+                logger.warning("Could not add logo to report: %s", exc)
+
+        story.append(Paragraph("Daily Production Report – QC Rejections", title_style))
+        story.append(
+            Paragraph(
+                f"Report Date: {target_date.strftime('%Y-%m-%d')}",
+                subtitle_style,
+            )
+        )
+        story.append(
+            Paragraph(
+                f"Total rejected pieces (summary): {grand_total_rejected:,}",
+                total_qc_style,
+            )
+        )
+
+        filters: List[str] = []
+        if client_name:
+            filters.append(f"Client: {client_name}")
+        if model_name:
+            filters.append(f"Model: {model_name}")
+        if job_order_number:
+            filters.append(f"Job Order: {job_order_number}")
+        if filters:
+            story.append(
+                Paragraph(
+                    prepare_pdf_text("Filters: " + " – ".join(filters)),
+                    subtitle_style,
+                )
+            )
+
+        story.append(Spacer(1, 18))
+
+    def _append_qc_today_phases_table(
+        self,
+        story: List[Any],
+        today_phases: List[Dict[str, Any]],
+        content_width: float,
+        target_date: date,
+    ) -> None:
+        """Main table aligned with QC Today tab: phase, rejects, reject ratio %, active rework."""
+        pdf_fonts.ensure_pdf_fonts_registered()
+        date_label = target_date.strftime("%Y-%m-%d")
+        styles = getSampleStyleSheet()
+        pdf_fonts.patch_reportlab_sample_styles(styles)
+        if not today_phases:
+            story.append(
+                Paragraph(
+                    f"No phase-level rejections for this job order on {date_label}.",
+                    styles["Italic"],
+                )
+            )
+            return
+
+        header_cell_style = ParagraphStyle(
+            "QcTableHeader",
+            parent=styles["Normal"],
+            fontSize=9,
+            leading=10,
+            alignment=TA_CENTER,
+            textColor=colors.white,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+        )
+        header_labels = [
+            "Return phase",
+            "Rejected pcs",
+            "Reject ratio %",
+            "Active rework",
+        ]
+        header_row: List[Any] = [
+            Paragraph(str(lbl), header_cell_style) for lbl in header_labels
+        ]
+        table_data: List[List[Any]] = [header_row]
+
+        for phase in today_phases:
+            ptype = (phase.get("phase_type") or "") or ""
+            ratio = phase.get("reject_ratio_pct_today")
+            ratio_str = (
+                f"{float(ratio):.2f}%"
+                if ratio is not None and ptype in ("sewing", "cutting", "qc")
+                else "—"
+            )
+            rework = (
+                str(int(phase.get("active_rework_batches") or 0))
+                if ptype == "sewing"
+                else "-"
+            )
+            table_data.append(
+                [
+                    str(phase.get("phase_name") or ""),
+                    str(int(phase.get("reject") or 0)),
+                    ratio_str,
+                    rework,
+                ]
+            )
+
+        phase_col = 2.4 * inch
+        rej_col = 1.1 * inch
+        ratio_col = 1.2 * inch
+        rw_col = content_width - phase_col - rej_col - ratio_col
+        col_widths = [phase_col, rej_col, ratio_col, max(rw_col, 0.8 * inch)]
+
+        tbl = Table(apply_pdf_unicode_to_table_rows(table_data), colWidths=col_widths, repeatRows=1)
+        tbl.hAlign = "LEFT"
+        header_bg = colors.HexColor("#111827")
+        tbl_style = TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                ("FONTSIZE", (0, 0), (-1, 0), 9),
+                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#E5E7EB")),
+                ("FONTSIZE", (0, 1), (-1, -1), 9),
+                ("ALIGN", (0, 1), (0, -1), "LEFT"),
+                ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+            ]
+        )
+        tbl.setStyle(tbl_style)
+        story.append(tbl)
+        story.append(Spacer(1, 14))
+
+        self._append_qc_reason_summary_by_phase(
+            story, today_phases, content_width, date_label, styles
+        )
+
+    def _append_qc_reason_summary_by_phase(
+        self,
+        story: List[Any],
+        today_phases: List[Dict[str, Any]],
+        content_width: float,
+        date_label: str,
+        styles: Any,
+    ) -> None:
+        """Per-phase-type headings with reason tables (sewing: stage/worker/reason; else reason/qty)."""
+        reason_section_title_style = ParagraphStyle(
+            "QcReasonSummaryTitle",
+            parent=styles["Normal"],
+            fontSize=13,
+            leading=16,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+            textColor=colors.HexColor("#111827"),
+            spaceAfter=10,
+        )
+        story.append(
+            Paragraph(f"Reason summary ({date_label})", reason_section_title_style)
+        )
+
+        phase_heading_style = ParagraphStyle(
+            "QcReasonPhaseHeading",
+            parent=styles["Normal"],
+            fontSize=11,
+            leading=14,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+            textColor=colors.HexColor("#1F2937"),
+            spaceBefore=12,
+            spaceAfter=6,
+        )
+
+        tbl_header_para_style = ParagraphStyle(
+            "QcReasonTableHdrPara",
+            parent=styles["Normal"],
+            fontSize=9,
+            leading=11,
+            alignment=TA_CENTER,
+            textColor=colors.white,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+        )
+
+        type_labels = {"sewing": "Sewing", "cutting": "Cutting", "qc": "QC"}
+
+        header_bg = colors.HexColor("#374151")
+        grid_color = colors.HexColor("#E5E7EB")
+
+        sub_block_style = ParagraphStyle(
+            "QcReasonSubBlock",
+            parent=styles["Normal"],
+            fontSize=10,
+            leading=12,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+            textColor=colors.HexColor("#374151"),
+            spaceBefore=8,
+            spaceAfter=4,
+        )
+        reasons_cell_style = ParagraphStyle(
+            "QcReasonsCell",
+            parent=styles["Normal"],
+            fontSize=8,
+            leading=10,
+            textColor=colors.HexColor("#111827"),
+            fontName=pdf_fonts.PDF_FONT_REGULAR,
+        )
+
+        for phase in today_phases:
+            ptype = (phase.get("phase_type") or "").strip().lower()
+            pname = str(phase.get("phase_name") or "").strip() or "—"
+            type_lbl = type_labels.get(ptype, ptype.title() if ptype else "Phase")
+            if type_lbl.lower() == pname.lower():
+                phase_heading_text = type_lbl
+            else:
+                phase_heading_text = f"{type_lbl} — {pname}"
+            story.append(
+                Paragraph(
+                    prepare_pdf_text(phase_heading_text),
+                    phase_heading_style,
+                )
+            )
+
+            if ptype == "sewing":
+                src = phase.get("rejection_reason_counts") or []
+                top_workers = _qc_sewing_top_workers_with_top_reason(src, limit=5)
+                top_stages = _qc_sewing_top_stages_with_top_reasons(
+                    src, stage_limit=5, reason_limit=3
+                )
+
+                story.append(
+                    Paragraph(
+                        "Worst workers (top 5 by rejected pcs)",
+                        sub_block_style,
+                    )
+                )
+                w_hdr = [
+                    Paragraph(lbl, tbl_header_para_style)
+                    for lbl in ["Worker", "Rejected pcs", "Top reason", "Qty"]
+                ]
+                w_rows: List[List[Any]] = [w_hdr]
+                if not top_workers:
+                    w_rows.append(["—", "—", "No data", "—"])
+                else:
+                    for wname, total, rsn, rqty in top_workers:
+                        w_rows.append(
+                            [
+                                wname,
+                                str(total),
+                                rsn,
+                                str(rqty) if rqty else "—",
+                            ]
+                        )
+                ww0 = 1.5 * inch
+                ww1 = 0.95 * inch
+                ww2 = content_width - ww0 - ww1 - 0.75 * inch
+                ww3 = 0.75 * inch
+                w_tbl = Table(
+                    apply_pdf_unicode_to_table_rows(w_rows),
+                    colWidths=[ww0, ww1, max(ww2, 1.8 * inch), ww3],
+                    repeatRows=1,
+                )
+                w_tbl.hAlign = "LEFT"
+                w_tbl.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                            ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                            ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                            ("FONTSIZE", (0, 0), (-1, 0), 9),
+                            ("FONTSIZE", (0, 1), (-1, -1), 9),
+                            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                            ("ALIGN", (1, 1), (1, -1), "CENTER"),
+                            ("ALIGN", (3, 1), (3, -1), "CENTER"),
+                            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                            ("GRID", (0, 0), (-1, -1), 0.25, grid_color),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                            ("TOPPADDING", (0, 0), (-1, -1), 4),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                        ]
+                    )
+                )
+                story.append(w_tbl)
+                story.append(Spacer(1, 10))
+
+                story.append(
+                    Paragraph(
+                        "Worst problem stages (top 5 by rejected pcs)",
+                        sub_block_style,
+                    )
+                )
+                s_hdr = [
+                    Paragraph(lbl, tbl_header_para_style)
+                    for lbl in ["Problem stage", "Rejected pcs", "Top 3 reasons"]
+                ]
+                s_rows: List[List[Any]] = [s_hdr]
+                if not top_stages:
+                    s_rows.append(
+                        [
+                            "—",
+                            "—",
+                            Paragraph("No data", reasons_cell_style),
+                        ]
+                    )
+                else:
+                    for sname, stotal, top_rs in top_stages:
+                        if top_rs:
+                            reason_lines = "<br/>".join(
+                                f"{xml_escape(prepare_pdf_text(r))} ({c})"
+                                for r, c in top_rs
+                            )
+                        else:
+                            reason_lines = "—"
+                        s_rows.append(
+                            [
+                                sname,
+                                str(stotal),
+                                Paragraph(reason_lines, reasons_cell_style),
+                            ]
+                        )
+                sw0 = 1.55 * inch
+                sw1 = 0.85 * inch
+                sw2 = content_width - sw0 - sw1
+                s_tbl = Table(
+                    apply_pdf_unicode_to_table_rows(s_rows),
+                    colWidths=[sw0, sw1, max(sw2, 2.5 * inch)],
+                    repeatRows=1,
+                )
+                s_tbl.hAlign = "LEFT"
+                s_tbl.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                            ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                            ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                            ("FONTSIZE", (0, 0), (-1, 0), 9),
+                            ("FONTSIZE", (0, 1), (-1, -1), 9),
+                            ("ALIGN", (0, 1), (0, -1), "LEFT"),
+                            ("ALIGN", (1, 1), (1, -1), "CENTER"),
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("GRID", (0, 0), (-1, -1), 0.25, grid_color),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                            ("TOPPADDING", (0, 0), (-1, -1), 4),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                        ]
+                    )
+                )
+                story.append(s_tbl)
+                story.append(Spacer(1, 10))
+
+                story.append(
+                    Paragraph(
+                        "All stages — workers and reasons (detail)",
+                        sub_block_style,
+                    )
+                )
+                detail_hdr = [
+                    Paragraph(lbl, tbl_header_para_style)
+                    for lbl in ["Problem stage", "Worker", "Reason", "Qty"]
+                ]
+                detail_rows: List[List[Any]] = [detail_hdr]
+                for st in src:
+                    st_name = str(st.get("problem_stage_name") or "—")
+                    for worker in st.get("workers") or []:
+                        wname = str(worker.get("worker_name") or "—")
+                        for rr in worker.get("reasons") or []:
+                            detail_rows.append(
+                                [
+                                    st_name,
+                                    wname,
+                                    str(rr.get("reason") or "—"),
+                                    str(int(rr.get("count") or 0)),
+                                ]
+                            )
+                if len(detail_rows) == 1:
+                    detail_rows.append(["—", "—", "No reasons recorded", "—"])
+
+                d0 = 1.55 * inch
+                d1 = 1.35 * inch
+                d2 = content_width - d0 - d1 - 0.85 * inch
+                d3 = 0.85 * inch
+                detail_tbl = Table(
+                    apply_pdf_unicode_to_table_rows(detail_rows),
+                    colWidths=[d0, d1, max(d2, 1.2 * inch), d3],
+                    repeatRows=1,
+                )
+                detail_tbl.hAlign = "LEFT"
+                detail_tbl.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                            ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                            ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                            ("FONTSIZE", (0, 0), (-1, 0), 9),
+                            ("FONTSIZE", (0, 1), (-1, -1), 9),
+                            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                            ("ALIGN", (3, 1), (3, -1), "CENTER"),
+                            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                            ("GRID", (0, 0), (-1, -1), 0.25, grid_color),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                            ("TOPPADDING", (0, 0), (-1, -1), 4),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                        ]
+                    )
+                )
+                story.append(detail_tbl)
+            else:
+                hdr_labels2 = ["Reason", "Qty"]
+                hdr_row2: List[Any] = [
+                    Paragraph(lbl, tbl_header_para_style) for lbl in hdr_labels2
+                ]
+                rows2: List[List[Any]] = [hdr_row2]
+                sorted_reasons = _qc_sorted_reason_rows_by_qty(
+                    phase.get("rejection_reason_totals") or []
+                )
+                if not sorted_reasons:
+                    rows2.append(["No reasons recorded", "—"])
+                else:
+                    for rsn, cnt in sorted_reasons:
+                        rows2.append([rsn, str(cnt)])
+
+                rcol = content_width - 1.0 * inch
+                rtbl2 = Table(
+                    apply_pdf_unicode_to_table_rows(rows2),
+                    colWidths=[max(rcol, 3.0 * inch), 1.0 * inch],
+                    repeatRows=1,
+                )
+                rtbl2.hAlign = "LEFT"
+                rtbl2.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                            ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                            ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                            ("FONTSIZE", (0, 0), (-1, 0), 9),
+                            ("FONTSIZE", (0, 1), (-1, -1), 9),
+                            ("ALIGN", (0, 1), (0, -1), "LEFT"),
+                            ("ALIGN", (1, 1), (1, -1), "CENTER"),
+                            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                            ("GRID", (0, 0), (-1, -1), 0.25, grid_color),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                            ("TOPPADDING", (0, 0), (-1, -1), 4),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                        ]
+                    )
+                )
+                story.append(rtbl2)
+            story.append(Spacer(1, 6))
 
     # ------------------------------------------------------------------
     # Data loading and grouping
@@ -390,11 +1493,45 @@ class ReportPDFService:
         if filters:
             story.append(
                 Paragraph(
-                    "Filters: " + " – ".join(filters),
+                    prepare_pdf_text("Filters: " + " – ".join(filters)),
                     subtitle_style,
                 )
             )
 
+        story.append(Spacer(1, 18))
+
+    def _build_sewing_document_header(
+        self,
+        story: List[Any],
+        title_style: ParagraphStyle,
+        subtitle_style: ParagraphStyle,
+        target_date: date,
+        total_true_pieces: int,
+        total_sewing_style: ParagraphStyle,
+    ) -> None:
+        logo_path = "frontend/public/company-logo.png"
+        if os.path.exists(logo_path):
+            try:
+                logo = Image(logo_path, width=2.0 * inch, height=1.0 * inch)
+                logo.hAlign = "CENTER"
+                story.append(logo)
+                story.append(Spacer(1, 12))
+            except Exception as exc:
+                logger.warning("Could not add logo to report: %s", exc)
+
+        story.append(Paragraph("Daily Production Report – Sewing", title_style))
+        story.append(
+            Paragraph(
+                f"Report Date: {target_date.strftime('%Y-%m-%d')}",
+                subtitle_style,
+            )
+        )
+        story.append(
+            Paragraph(
+                f"Total true output (all lines): {total_true_pieces:,} pcs",
+                total_sewing_style,
+            )
+        )
         story.append(Spacer(1, 18))
 
     def _build_cutting_section(
@@ -421,11 +1558,9 @@ class ReportPDFService:
             model = container["model_name"]
 
             # Container header band
-            header_data = [
-                [
-                    f"Client: {client}   –   Model: {model}",
-                ]
-            ]
+            header_data = apply_pdf_unicode_to_table_rows(
+                [[f"Client: {client}   –   Model: {model}"]]
+            )
             header_table = Table(header_data, colWidths=[content_width])
             header_table.hAlign = "LEFT"
             header_table.setStyle(
@@ -433,7 +1568,7 @@ class ReportPDFService:
                     [
                         ("BACKGROUND", (0, 0), (-1, -1), section_header_bg),
                         ("TEXTCOLOR", (0, 0), (-1, -1), section_header_fg),
-                        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                        ("FONTNAME", (0, 0), (-1, -1), pdf_fonts.PDF_FONT_BOLD),
                         ("FONTSIZE", (0, 0), (-1, -1), 11),
                         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                         ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -455,7 +1590,7 @@ class ReportPDFService:
 
                 # Job order header band
                 job_header = Table(
-                    [[f"Job Order: {jo_number}"]],
+                    apply_pdf_unicode_to_table_rows([[f"Job Order: {jo_number}"]]),
                     colWidths=[content_width],
                 )
                 job_header.hAlign = "LEFT"
@@ -464,7 +1599,7 @@ class ReportPDFService:
                         [
                             ("BACKGROUND", (0, 0), (-1, -1), job_header_bg),
                             ("TEXTCOLOR", (0, 0), (-1, -1), job_header_fg),
-                            ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                            ("FONTNAME", (0, 0), (-1, -1), pdf_fonts.PDF_FONT_BOLD),
                             ("FONTSIZE", (0, 0), (-1, -1), 9),
                             ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                             ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -504,7 +1639,7 @@ class ReportPDFService:
 
                     # Color band
                     color_header = Table(
-                        [[f"Color: {color_name}"]],
+                        apply_pdf_unicode_to_table_rows([[f"Color: {color_name}"]]),
                         colWidths=[content_width],
                     )
                     color_header.hAlign = "LEFT"
@@ -513,7 +1648,7 @@ class ReportPDFService:
                             [
                                 ("BACKGROUND", (0, 0), (-1, -1), colors.white),
                                 ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#4B5563")),
-                                ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                                ("FONTNAME", (0, 0), (-1, -1), pdf_fonts.PDF_FONT_BOLD),
                                 ("FONTSIZE", (0, 0), (-1, -1), 9),
                                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -535,6 +1670,7 @@ class ReportPDFService:
 
                     # Use Paragraphs with smaller font so headers can wrap
                     header_styles = getSampleStyleSheet()
+                    pdf_fonts.patch_reportlab_sample_styles(header_styles)
                     header_cell_style = ParagraphStyle(
                         "CutTableHeader",
                         parent=header_styles["Normal"],
@@ -542,6 +1678,7 @@ class ReportPDFService:
                         leading=8,
                         alignment=TA_CENTER,
                         textColor=colors.white,
+                        fontName=pdf_fonts.PDF_FONT_BOLD,
                     )
 
                     header_row: List[Any] = [
@@ -655,7 +1792,11 @@ class ReportPDFService:
                     size_widths = [size_width for _ in size_labels]
                     col_widths = base_widths + size_widths + tail_widths
 
-                    tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
+                    tbl = Table(
+                        apply_pdf_unicode_to_table_rows(table_data),
+                        colWidths=col_widths,
+                        repeatRows=1,
+                    )
                     tbl.hAlign = "LEFT"
                     header_bg = colors.HexColor("#111827")
                     header_fg = colors.white
@@ -663,7 +1804,8 @@ class ReportPDFService:
                         [
                             ("BACKGROUND", (0, 0), (-1, 0), header_bg),
                             ("TEXTCOLOR", (0, 0), (-1, 0), header_fg),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                            ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                            ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
                             ("FONTSIZE", (0, 0), (-1, 0), 8),
                             ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -686,7 +1828,7 @@ class ReportPDFService:
                         "FONTNAME",
                         (0, color_total_row_index),
                         (-1, color_total_row_index),
-                        "Helvetica-Bold",
+                        pdf_fonts.PDF_FONT_BOLD,
                     )
 
                     tbl.setStyle(tbl_style)
@@ -725,7 +1867,7 @@ class ReportPDFService:
                     size_widths = [size_width for _ in size_labels]
                     col_widths = base_widths + size_widths + tail_widths
 
-                    jt = Table(jt_data, colWidths=col_widths)
+                    jt = Table(apply_pdf_unicode_to_table_rows(jt_data), colWidths=col_widths)
                     jt.hAlign = "LEFT"
                     jt.setStyle(
                         TableStyle(
@@ -740,7 +1882,7 @@ class ReportPDFService:
                                     "FONTNAME",
                                     (0, 0),
                                     (-1, -1),
-                                    "Helvetica-Bold",
+                                    pdf_fonts.PDF_FONT_BOLD,
                                 ),
                                 (
                                     "FONTSIZE",
@@ -771,45 +1913,13 @@ class ReportPDFService:
         if not sewing_data:
             return
 
-        # Start Sewing section on a new page
-        story.append(PageBreak())
-
-        section_header_bg = colors.HexColor("#1D4ED8")
-        section_header_fg = colors.white
-
         phase_header_bg = colors.HexColor("#DBEAFE")
         phase_header_fg = colors.HexColor("#1F2937")
 
         schematic_header_bg = colors.HexColor("#EEF2FF")
         schematic_header_fg = colors.HexColor("#111827")
 
-        schematic_total_bg = colors.HexColor("#D1FAE5")
-
         content_width = 7.0 * inch
-
-        # Top-level Sewing title band
-        sewing_title = Table(
-            [["Sewing – Daily Production"]],
-            colWidths=[content_width],
-        )
-        sewing_title.hAlign = "LEFT"
-        sewing_title.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, -1), section_header_bg),
-                    ("TEXTCOLOR", (0, 0), (-1, -1), section_header_fg),
-                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 12),
-                    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                    ("TOPPADDING", (0, 0), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-                ]
-            )
-        )
-        story.append(sewing_title)
-        story.append(Spacer(1, 10))
 
         for phase in sewing_data:
             phase_name = str(phase.get("phase_name") or "")
@@ -817,7 +1927,7 @@ class ReportPDFService:
 
             # Phase header
             phase_header = Table(
-                [[f"Phase: {phase_name}"]],
+                apply_pdf_unicode_to_table_rows([[f"Phase: {phase_name}"]]),
                 colWidths=[content_width],
             )
             phase_header.hAlign = "LEFT"
@@ -826,7 +1936,7 @@ class ReportPDFService:
                     [
                         ("BACKGROUND", (0, 0), (-1, -1), phase_header_bg),
                         ("TEXTCOLOR", (0, 0), (-1, -1), phase_header_fg),
-                        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                        ("FONTNAME", (0, 0), (-1, -1), pdf_fonts.PDF_FONT_BOLD),
                         ("FONTSIZE", (0, 0), (-1, -1), 10),
                         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                         ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -841,13 +1951,16 @@ class ReportPDFService:
 
             if not schematics:
                 no_schematic_tbl = Table(
-                    [["No schematics for this phase on the selected date."]],
+                    apply_pdf_unicode_to_table_rows(
+                        [["No schematics for this phase on the selected date."]]
+                    ),
                     colWidths=[content_width],
                 )
                 no_schematic_tbl.hAlign = "LEFT"
                 no_schematic_tbl.setStyle(
                     TableStyle(
                         [
+                            ("FONTNAME", (0, 0), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
                             ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#4B5563")),
                             ("FONTSIZE", (0, 0), (-1, -1), 8),
                             ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -886,16 +1999,19 @@ class ReportPDFService:
                 )
 
                 header_styles = getSampleStyleSheet()
+                pdf_fonts.patch_reportlab_sample_styles(header_styles)
                 schematic_header_style = ParagraphStyle(
                     "SchematicHeader",
                     parent=header_styles["Normal"],
                     fontSize=9,
                     leading=11,
                     textColor=schematic_header_fg,
+                    fontName=pdf_fonts.PDF_FONT_REGULAR,
                 )
 
+                schematic_safe = xml_escape(prepare_pdf_text(schematic_name))
                 header_html = (
-                    f"<b>Schematic:</b> {schematic_name} — <b>Working hours:</b> {working_hours:g}"
+                    f"<b>Schematic:</b> {schematic_safe} — <b>Working hours:</b> {working_hours:g}"
                     f"&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;<b>Expected:</b> {line_expected_total:,}"
                     f"&nbsp;&nbsp;&nbsp;<b>True:</b> {line_true_total:,}"
                     f"&nbsp;&nbsp;&nbsp;<b>Eff:</b> {eff_text}"
@@ -917,7 +2033,7 @@ class ReportPDFService:
                         [
                             ("BACKGROUND", (0, 0), (-1, -1), schematic_header_bg),
                             ("TEXTCOLOR", (0, 0), (-1, -1), schematic_header_fg),
-                            ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+                            ("FONTNAME", (0, 0), (-1, -1), pdf_fonts.PDF_FONT_BOLD),
                             ("FONTSIZE", (0, 0), (-1, -1), 9),
                             ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                             ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -938,6 +2054,7 @@ class ReportPDFService:
                     "Efficiency (%)",
                 ]
                 styles = getSampleStyleSheet()
+                pdf_fonts.patch_reportlab_sample_styles(styles)
                 header_cell_style = ParagraphStyle(
                     "SewingTableHeader",
                     parent=styles["Normal"],
@@ -945,6 +2062,7 @@ class ReportPDFService:
                     leading=8,
                     alignment=TA_CENTER,
                     textColor=colors.white,
+                    fontName=pdf_fonts.PDF_FONT_BOLD,
                 )
                 header_row: List[Any] = [
                     Paragraph(str(lbl), header_cell_style) for lbl in header_labels
@@ -990,7 +2108,11 @@ class ReportPDFService:
                     eff_col,
                 ]
 
-                tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
+                tbl = Table(
+                    apply_pdf_unicode_to_table_rows(table_data),
+                    colWidths=col_widths,
+                    repeatRows=1,
+                )
                 tbl.hAlign = "LEFT"
                 header_bg = colors.HexColor("#111827")
                 header_fg = colors.white
@@ -998,7 +2120,8 @@ class ReportPDFService:
                     [
                         ("BACKGROUND", (0, 0), (-1, 0), header_bg),
                         ("TEXTCOLOR", (0, 0), (-1, 0), header_fg),
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                        ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
                         ("FONTSIZE", (0, 0), (-1, 0), 8),
                         ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from app import models, schemas
 from app.core.deps import get_db, get_current_active_superuser, get_current_user, get_optional_current_user
 from app.crud import cut as cut_crud
+from app.crud.qc_summary import build_job_order_qc_summary
 from app.crud.job_order import (
     create_job_order as crud_create_job_order,
     create_job_order_with_names as crud_create_job_order_with_names,
@@ -202,6 +203,8 @@ def _apply_job_order_item_summary_filters(
 
 def _job_order_item_summary_orm_to_schema(
     item: models.JobOrderItemSummary,
+    true_consumption_kg: Optional[float] = None,
+    true_consumption_m: Optional[float] = None,
 ) -> schemas.JobOrderItemSummary:
     z = _summary_int
     return schemas.JobOrderItemSummary(
@@ -233,7 +236,16 @@ def _job_order_item_summary_orm_to_schema(
         overproduction_quantity=z(item.overproduction_quantity),
         production_status=_summary_production_status(item.production_status),
         notes=item.notes,
-        true_consumption=_summary_optional_float(item.true_consumption),
+        true_consumption=_summary_optional_float(
+            true_consumption_kg
+            if true_consumption_kg is not None
+            else item.true_consumption
+        ),
+        true_consumption_m=_summary_optional_float(
+            true_consumption_m
+            if true_consumption_m is not None
+            else item.true_consumption_m
+        ),
         last_calculated_at=item.last_calculated_at,
         last_quantity_change=None,
         last_completion_change=None,
@@ -422,6 +434,24 @@ def get_job_order_compensations_endpoint(
         "color_summary": color_summary,
         "compensations": result
     }
+
+
+@router.get(
+    "/{job_order_id}/qc-summary",
+    response_model=Dict,
+    responses=_OPENAPI_404,
+)
+def get_job_order_qc_summary_endpoint(
+    job_order_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)],
+):
+    """Get QC summary for a job order from single rejections and active rework batches."""
+    job_order = get_job_order(db, job_order_id=job_order_id)
+    if not job_order:
+        raise HTTPException(status_code=404, detail=f"Job order {job_order_id} not found")
+
+    return build_job_order_qc_summary(db, job_order_id, today_reference_date=None)
 
 @router.get(
     "/{job_order_id}",
@@ -791,7 +821,11 @@ def get_job_order_items_summary(
     )
     total_count = query.count()
     items = query.offset(skip).limit(limit).all()
-    mapped_items = [_job_order_item_summary_orm_to_schema(row) for row in items]
+
+    mapped_items = [
+        _job_order_item_summary_orm_to_schema(row)
+        for row in items
+    ]
     return schemas.JobOrderItemSummaryListResponse(
         items=mapped_items,
         total=total_count,

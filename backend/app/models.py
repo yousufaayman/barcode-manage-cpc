@@ -800,6 +800,7 @@ class JobOrderItemSummary(Base):
     production_status = Column(String(20), default='Not Started')
     notes = Column(Text, nullable=True)
     true_consumption = Column(DECIMAL(10, 4), nullable=True)
+    true_consumption_m = Column(DECIMAL(10, 4), nullable=True)
     last_calculated_at = Column(TIMESTAMP, nullable=True)
 
     # Relationships

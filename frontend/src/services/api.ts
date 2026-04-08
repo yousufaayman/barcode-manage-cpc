@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Use environment variable if available, otherwise use relative URL
-const API_URL = 'http://100.90.201.128:8000/api/v1';
+const API_URL = 'http://192.168.1.22:8000/api/v1';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -520,6 +520,7 @@ export interface JobOrderItemSummary {
   production_status: string;
   notes?: string;
   true_consumption?: number;
+  true_consumption_m?: number;
   last_calculated_at?: string;
   last_quantity_change?: string;
   last_completion_change?: string;
@@ -530,6 +531,59 @@ export interface JobOrderItemSummary {
 export interface JobOrderItemSummaryListResponse {
   items: JobOrderItemSummary[];
   total: number;
+}
+
+export interface JobOrderQcPhaseRow {
+  phase_id: number;
+  phase_name: string;
+  phase_type?: string | null;
+  reject: number;
+  /** Final-stage sewing output for this job order on this line (all assignments). */
+  final_stage_production_all_time?: number;
+  final_stage_production_today?: number;
+  /**
+   * Rejects ÷ throughput × 100: sewing = final-stage output; cutting = sum cut inspection;
+   * qc = sum QC out (job order item summaries). Null when baseline is 0 or not applicable.
+   */
+  reject_ratio_pct_all_time?: number | null;
+  reject_ratio_pct_today?: number | null;
+  active_rework_batches: number;
+  active_rework_problem_stages: Array<{
+    problem_stage_name: string;
+    count: number;
+  }>;
+  rejection_reason_counts: Array<{
+    problem_stage_name: string;
+    total_count: number;
+    workers: Array<{
+      worker_name: string;
+      total_count: number;
+      reasons: Array<{
+        reason: string;
+        count: number;
+      }>;
+    }>;
+  }>;
+  rejection_reason_totals?: Array<{
+    reason: string;
+    count: number;
+  }>;
+}
+
+export interface JobOrderQcSummary {
+  job_order_id: number;
+  total_rejected_pieces: number;
+  today_rejected_pieces?: number;
+  /** Sewing lines only: sum of final-stage production_history for this job order. */
+  final_stage_production_job_all_time?: number;
+  final_stage_production_job_today?: number;
+  /** Sewing rejects only (return_to_phase is sewing). */
+  sewing_rejected_pieces_all_time?: number;
+  sewing_rejected_pieces_today?: number;
+  reject_ratio_pct_job_all_time?: number | null;
+  reject_ratio_pct_job_today?: number | null;
+  phases: JobOrderQcPhaseRow[];
+  today_phases?: JobOrderQcPhaseRow[];
 }
 
 export interface ArchivedJobOrderItem {
@@ -951,6 +1005,10 @@ export const jobOrderApi = {
     }>;
   }> => {
     const response = await api.get(`/job-orders/${jobOrderId}/compensations`);
+    return response.data;
+  },
+  getQcSummary: async (jobOrderId: number): Promise<JobOrderQcSummary> => {
+    const response = await api.get<JobOrderQcSummary>(`/job-orders/${jobOrderId}/qc-summary`);
     return response.data;
   },
   getMaterials: async (jobOrderId: number): Promise<{id:number,material_id:number,material_name:string,color_name?:string,quantity:number,consumption?:number,notes?:string}[]> => {
@@ -1791,6 +1849,54 @@ export const productionApi = {
       { admin_comment: admin_comment ?? null }
     );
     return response.data;
+  },
+};
+
+/** Daily PDF reports (Cutting / Sewing / QC); same auth as rest of API. */
+export const reportsApi = {
+  downloadDailyCuttingReport: async (
+    date: string,
+    filters?: { client_name?: string; model_name?: string; job_order_number?: string }
+  ): Promise<void> => {
+    const response = await api.get('/reports/daily-cutting-report', {
+      params: { date, ...filters },
+      responseType: 'blob',
+    });
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `daily_cutting_report_${date}.pdf`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  },
+
+  downloadDailySewingReport: async (date: string): Promise<void> => {
+    const response = await api.get('/reports/daily-sewing-report', {
+      params: { date },
+      responseType: 'blob',
+    });
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `daily_sewing_report_${date}.pdf`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  },
+
+  downloadDailyQcReport: async (
+    date: string,
+    filters?: { client_name?: string; model_name?: string; job_order_number?: string }
+  ): Promise<void> => {
+    const response = await api.get('/reports/daily-qc-report', {
+      params: { date, ...filters },
+      responseType: 'blob',
+    });
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `daily_qc_report_${date}.pdf`;
+    a.click();
+    window.URL.revokeObjectURL(url);
   },
 };
 

@@ -1327,6 +1327,16 @@ def create_summary_refresh_functions():
         """
         DROP FUNCTION IF EXISTS ops.refresh_job_order_items_summary_for_jobs(INTEGER[]);
         """,
+
+        """
+        ALTER TABLE IF EXISTS reporting.job_order_items_summary
+        ADD COLUMN IF NOT EXISTS true_consumption NUMERIC(10, 4);
+        """,
+
+        """
+        ALTER TABLE IF EXISTS reporting.job_order_items_summary
+        ADD COLUMN IF NOT EXISTS true_consumption_m NUMERIC(10, 4);
+        """,
         
         """
         CREATE OR REPLACE FUNCTION ops.refresh_job_order_items_summary_for_jobs(p_job_order_ids INTEGER[])
@@ -1467,6 +1477,98 @@ def create_summary_refresh_functions():
                         AND sr.rejection_reason = 'lost/untracked'
                     WHERE joi.job_order_id = v_job_order_id
                     GROUP BY joi.item_id, joi.job_order_id, joi.color_id, joi.size_id
+                ),
+
+                item_consumption AS (
+                    SELECT
+                        joi.item_id,
+                        CASE
+                            WHEN COALESCE(
+                                SUM(
+                                    CASE
+                                        WHEN cut_totals.total_pieces_per_cut > 0 THEN cut_totals.total_pieces_per_cut::numeric
+                                        ELSE 0
+                                    END
+                                ),
+                                0
+                            ) > 0
+                            THEN
+                                SUM(
+                                    CASE
+                                        WHEN cut_totals.total_pieces_per_cut > 0 THEN
+                                            COALESCE(cd.marker_length, 0)::numeric * cd.total_layers::numeric
+                                        ELSE 0
+                                    END
+                                )
+                                / SUM(
+                                    CASE
+                                        WHEN cut_totals.total_pieces_per_cut > 0 THEN cut_totals.total_pieces_per_cut::numeric
+                                        ELSE 0
+                                    END
+                                )
+                            ELSE NULL
+                        END AS true_consumption_m,
+                        CASE
+                            WHEN COALESCE(
+                                SUM(
+                                    CASE
+                                        WHEN cut_totals.total_pieces_per_cut > 0 THEN cut_totals.total_pieces_per_cut::numeric
+                                        ELSE 0
+                                    END
+                                ),
+                                0
+                            ) > 0
+                            THEN
+                                SUM(
+                                    CASE
+                                        WHEN cut_totals.total_pieces_per_cut > 0 THEN
+                                            COALESCE(cut_weights.cut_weight, 0)::numeric
+                                        ELSE 0
+                                    END
+                                )
+                                / SUM(
+                                    CASE
+                                        WHEN cut_totals.total_pieces_per_cut > 0 THEN cut_totals.total_pieces_per_cut::numeric
+                                        ELSE 0
+                                    END
+                                )
+                            ELSE NULL
+                        END AS true_consumption_kg
+                    FROM core.job_order_items joi
+                    LEFT JOIN ops.cut_details cd
+                        ON cd.job_order_id = joi.job_order_id
+                        AND cd.color_id = joi.color_id
+                    LEFT JOIN LATERAL (
+                        -- Total kg per roll: use roll.weight (total). Old COALESCE(layer_weight, weight)
+                        -- picked per-layer weight first and undercounted badly.
+                        SELECT COALESCE(
+                            SUM(
+                                COALESCE(
+                                    NULLIF(cr.weight, 0),
+                                    cr.layer_weight * NULLIF(cr.num_of_layers, 0),
+                                    cr.weight,
+                                    0
+                                )
+                            ),
+                            0
+                        ) AS cut_weight
+                        FROM ops.cut_rolls cr
+                        WHERE cr.cut_id = cd.cut_id
+                    ) AS cut_weights ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT COALESCE(
+                            SUM(
+                                FLOOR(
+                                    cd.total_layers
+                                    * COALESCE((ratio_kv.value)::numeric, 0)
+                                )
+                            ),
+                            0
+                        ) AS total_pieces_per_cut
+                        FROM jsonb_each_text(COALESCE(cd.job_order_items_ratios, '{}'::jsonb)) AS ratio_kv(key, value)
+                    ) AS cut_totals ON TRUE
+                    WHERE joi.job_order_id = v_job_order_id
+                    GROUP BY joi.item_id
                 )
                 
                 INSERT INTO reporting.job_order_items_summary (
@@ -1477,6 +1579,7 @@ def create_summary_refresh_functions():
                     qc_in_qty, qc_out_qty,
                     packaging_in_qty, packaging_out_qty,
                     working_qty, second_degree_qty, lost_qty, completed_qty,
+                    true_consumption, true_consumption_m,
                     total_batches, has_issues, completion_percentage,
                     overproduction_quantity, production_status, last_calculated_at
                 )
@@ -1506,6 +1609,8 @@ def create_summary_refresh_functions():
                     COALESCE(isd.qty, 0) AS second_degree_qty,
                     COALESCE(lq.qty, 0) AS lost_qty,
                     COALESCE(bpha.packaging_out_qty, 0) AS completed_qty,
+                    ic.true_consumption_kg AS true_consumption,
+                    ic.true_consumption_m AS true_consumption_m,
                     
                     COALESCE(ibc.total_batches, 0) AS total_batches,
                     
@@ -1543,6 +1648,7 @@ def create_summary_refresh_functions():
                 LEFT JOIN item_batch_counts ibc ON joi.job_order_id = ibc.job_order_id 
                     AND joi.color_id = ibc.color_id AND joi.size_id = ibc.size_id
                 LEFT JOIN lost_qty lq ON joi.item_id = lq.item_id
+                LEFT JOIN item_consumption ic ON joi.item_id = ic.item_id
                 WHERE joi.job_order_id = v_job_order_id
                 ON CONFLICT (item_id) DO UPDATE SET
                     color_name = EXCLUDED.color_name,
@@ -1561,6 +1667,8 @@ def create_summary_refresh_functions():
                     second_degree_qty = EXCLUDED.second_degree_qty,
                     lost_qty = EXCLUDED.lost_qty,
                     completed_qty = EXCLUDED.completed_qty,
+                    true_consumption = EXCLUDED.true_consumption,
+                    true_consumption_m = EXCLUDED.true_consumption_m,
                     total_batches = EXCLUDED.total_batches,
                     has_issues = EXCLUDED.has_issues,
                     completion_percentage = EXCLUDED.completion_percentage,

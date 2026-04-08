@@ -69,6 +69,22 @@ const isCuttingOrSewingPhase = (phase: Phase | null): boolean => {
   return isCutting || isSewing;
 };
 
+const normalizeStatus = (status: string | undefined | null): string =>
+  (status || '').trim().toLowerCase().replace(/\s+/g, '_');
+
+const isPackagingPhase = (phase: Phase | null): boolean => {
+  if (!phase) return false;
+  const phaseType = (phase.type || '').toLowerCase();
+  const phaseName = (phase.name || '').toLowerCase();
+  return phaseType === 'packaging' || phaseName.includes('packaging');
+};
+
+const isQcPhase = (phase: Phase): boolean => {
+  const phaseType = (phase.type || '').toLowerCase();
+  const phaseName = (phase.name || '').toLowerCase();
+  return phaseType === 'qc' || phaseName === 'qc' || phaseName.includes('quality');
+};
+
 /** Defect list only for cutting / sewing responsible phases; QC, packaging, and other types use phase name */
 const getRejectionDefectsForPhase = (phase: Phase | null) => {
   if (!phase || !isCuttingOrSewingPhase(phase)) return [];
@@ -121,6 +137,7 @@ const BarcodeScannerPage: React.FC = () => {
   const [quantityDecrementType, setQuantityDecrementType] = useState<'rejection' | 'second_degree' | 'lost' | null>('second_degree');
   const [quantityDecrementReason, setQuantityDecrementReason] = useState<string>('');
   const [quantityDecrementCustomReason, setQuantityDecrementCustomReason] = useState<string>('');
+  const [quantityDecrementQcFailNumber, setQuantityDecrementQcFailNumber] = useState<string>('');
   const [quantityDecrementPhaseId, setQuantityDecrementPhaseId] = useState<number | null>(null);
   /** Sewing-line stage + worker selection; worker_id is sent with quantity update for single_rejections.worker_id */
   const [quantityDecrementDailyAssignmentId, setQuantityDecrementDailyAssignmentId] = useState<number | null>(null);
@@ -957,6 +974,10 @@ const BarcodeScannerPage: React.FC = () => {
       if (isDecrement && quantityDecrementType) {
         updatePayload.quantity_decrement_type = quantityDecrementType;
         if (quantityDecrementType === 'rejection') {
+          const currentBatchPhase = phases.find((p) => p.id === barcodeData.current_phase) ?? null;
+          const forceQcFailReason =
+            isPackagingPhase(currentBatchPhase) &&
+            ['pending', 'in_progress', 'completed'].includes(normalizeStatus(barcodeData.status));
           const decPhase =
             quantityDecrementPhaseId != null
               ? phases.find((p) => p.id === quantityDecrementPhaseId)
@@ -968,7 +989,15 @@ const BarcodeScannerPage: React.FC = () => {
             return;
           }
           let rejectionReasonToSave = '';
-          if (decPhase && isCuttingOrSewingPhase(decPhase)) {
+          if (forceQcFailReason) {
+            const qcFailNumber = quantityDecrementQcFailNumber.trim();
+            if (!qcFailNumber || !/^\d+$/.test(qcFailNumber)) {
+              setError('Please enter a valid QC fail number.');
+              setIsUpdatingQuantity(false);
+              return;
+            }
+            rejectionReasonToSave = `QC fail #${qcFailNumber}`;
+          } else if (decPhase && isCuttingOrSewingPhase(decPhase)) {
             rejectionReasonToSave =
               quantityDecrementReason === OTHER_REJECTION_REASON_VALUE
                 ? quantityDecrementCustomReason.trim()
@@ -1017,6 +1046,7 @@ const BarcodeScannerPage: React.FC = () => {
       setQuantityDecrementType(null);
       setQuantityDecrementReason('');
       setQuantityDecrementCustomReason('');
+      setQuantityDecrementQcFailNumber('');
       setQuantityDecrementPhaseId(null);
       setQuantityDecrementDailyAssignmentId(null);
       setDecrementSewingDailyAssignments([]);
@@ -1662,7 +1692,19 @@ const BarcodeScannerPage: React.FC = () => {
                           setQuantityDecrementType('rejection');
                           setQuantityDecrementReason('');
                           setQuantityDecrementCustomReason('');
+                          setQuantityDecrementQcFailNumber('');
                           if (barcodeData && phases.length > 0) {
+                            const currentBatchPhase = phases.find((p) => p.id === barcodeData.current_phase) ?? null;
+                            const forceQcPhaseSelection =
+                              isPackagingPhase(currentBatchPhase) &&
+                              ['pending', 'in_progress', 'completed'].includes(normalizeStatus(barcodeData.status));
+                            if (forceQcPhaseSelection) {
+                              const qcPhase = phases.find((p) => isQcPhase(p));
+                              if (qcPhase) {
+                                setQuantityDecrementPhaseId(qcPhase.id);
+                                return;
+                              }
+                            }
                             const currentPhase = phases.find(p => p.id === barcodeData.current_phase);
                             if (currentPhase) {
                               const currentSequenceOrder = currentPhase.sequence_order ?? 999;
@@ -1711,6 +1753,7 @@ const BarcodeScannerPage: React.FC = () => {
                           setQuantityDecrementType('second_degree');
                           setQuantityDecrementReason('');
                           setQuantityDecrementCustomReason('');
+                          setQuantityDecrementQcFailNumber('');
                         }}
                         className={`p-4 rounded-lg border-2 transition-all duration-200 touch-manipulation ${
                           quantityDecrementType === 'second_degree'
@@ -1743,6 +1786,7 @@ const BarcodeScannerPage: React.FC = () => {
                           setQuantityDecrementType('lost');
                           setQuantityDecrementReason('');
                           setQuantityDecrementCustomReason('');
+                          setQuantityDecrementQcFailNumber('');
                           if (barcodeData) {
                             setQuantityDecrementPhaseId(barcodeData.current_phase);
                           }
@@ -1775,9 +1819,16 @@ const BarcodeScannerPage: React.FC = () => {
 
                     {(quantityDecrementType === 'rejection' || quantityDecrementType === 'lost') && (() => {
                       const currentPhaseId = barcodeData.current_phase;
+                      const currentBatchPhase = phases.find((p) => p.id === currentPhaseId) ?? null;
+                      const forceQcForPackagingRejection =
+                        quantityDecrementType === 'rejection' &&
+                        isPackagingPhase(currentBatchPhase) &&
+                        ['pending', 'in_progress', 'completed'].includes(normalizeStatus(barcodeData.status));
                       let availablePhases: Phase[] = [];
                       
-                      if (quantityDecrementType === 'rejection') {
+                      if (forceQcForPackagingRejection) {
+                        availablePhases = phases.filter((p) => isQcPhase(p));
+                      } else if (quantityDecrementType === 'rejection') {
                         const currentPhase = phases.find(p => p.id === currentPhaseId);
                         if (currentPhase) {
                           const currentSequenceOrder = currentPhase.sequence_order ?? 999;
@@ -1812,10 +1863,12 @@ const BarcodeScannerPage: React.FC = () => {
                         : null;
                       const showDefectRejectionReason =
                         quantityDecrementType === 'rejection' &&
+                        !forceQcForPackagingRejection &&
                         selectedPhase != null &&
                         isCuttingOrSewingPhase(selectedPhase);
                       const showPhaseNameRejectionReason =
                         quantityDecrementType === 'rejection' &&
+                        !forceQcForPackagingRejection &&
                         selectedPhase != null &&
                         !isCuttingOrSewingPhase(selectedPhase);
                       const rejectionDefects = showDefectRejectionReason
@@ -1925,6 +1978,28 @@ const BarcodeScannerPage: React.FC = () => {
                                   className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
                                 />
                               )}
+                            </div>
+                          )}
+                          {forceQcForPackagingRejection && (
+                            <div>
+                              <Label className="text-sm font-medium text-gray-700 mb-2 block">
+                                {t('barcode.rejectionReason')}
+                              </Label>
+                              <input
+                                type="text"
+                                readOnly
+                                value="QC fail"
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-900 min-h-12 text-base"
+                              />
+                              <input
+                                type="number"
+                                min="1"
+                                step="1"
+                                value={quantityDecrementQcFailNumber}
+                                onChange={(e) => setQuantityDecrementQcFailNumber(e.target.value)}
+                                placeholder="Enter QC fail number"
+                                className="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                              />
                             </div>
                           )}
                           {showPhaseNameRejectionReason && selectedPhase && (

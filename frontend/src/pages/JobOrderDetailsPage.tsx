@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { jobOrderApi } from '../services/api';
 import { Button } from '../components/ui/button';
-import { Edit, CheckCircle, Package, X } from 'lucide-react';
+import { Edit, X, ChevronRight, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Textarea } from '../components/ui/textarea';
 import { Input } from '../components/ui/input';
@@ -136,7 +136,65 @@ const JobOrderDetailsPage: React.FC = () => {
   const [materials, setMaterials] = useState<any[]>([]);
   const [compensations, setCompensations] = useState<any[]>([]);
   const [compensationPhaseSummary, setCompensationPhaseSummary] = useState<Array<{phase_id: number; phase_name: string; count: number}>>([]);
-  const [compensationColorSummary, setCompensationColorSummary] = useState<Array<{color_name: string; count: number}>>([]);
+  const [qcSummary, setQcSummary] = useState<{
+    total_rejected_pieces: number;
+    today_rejected_pieces: number;
+    phases: Array<{
+      phase_id: number;
+      phase_name: string;
+      phase_type?: string | null;
+      reject: number;
+      final_stage_production_all_time?: number;
+      final_stage_production_today?: number;
+      reject_ratio_pct_all_time?: number | null;
+      reject_ratio_pct_today?: number | null;
+      active_rework_batches: number;
+      active_rework_problem_stages: Array<{ problem_stage_name: string; count: number }>;
+      rejection_reason_counts: Array<{
+        problem_stage_name: string;
+        total_count: number;
+        workers: Array<{
+          worker_name: string;
+          total_count: number;
+          reasons: Array<{ reason: string; count: number }>;
+        }>;
+      }>;
+      rejection_reason_totals?: Array<{ reason: string; count: number }>;
+    }>;
+    today_phases: Array<{
+      phase_id: number;
+      phase_name: string;
+      phase_type?: string | null;
+      reject: number;
+      final_stage_production_all_time?: number;
+      final_stage_production_today?: number;
+      reject_ratio_pct_all_time?: number | null;
+      reject_ratio_pct_today?: number | null;
+      active_rework_batches: number;
+      active_rework_problem_stages: Array<{ problem_stage_name: string; count: number }>;
+      rejection_reason_counts: Array<{
+        problem_stage_name: string;
+        total_count: number;
+        workers: Array<{
+          worker_name: string;
+          total_count: number;
+          reasons: Array<{ reason: string; count: number }>;
+        }>;
+      }>;
+      rejection_reason_totals?: Array<{ reason: string; count: number }>;
+    }>;
+  }>({
+    total_rejected_pieces: 0,
+    today_rejected_pieces: 0,
+    phases: [],
+    today_phases: [],
+  });
+  const [expandedQcPhaseIds, setExpandedQcPhaseIds] = useState<Record<number, boolean>>({});
+  const [showProblemNotifications, setShowProblemNotifications] = useState(false);
+  const [topImageVisible, setTopImageVisible] = useState(true);
+  const [expandedCompensationDates, setExpandedCompensationDates] = useState<Record<string, boolean>>({});
+  const [expandedRejectionStages, setExpandedRejectionStages] = useState<Record<string, boolean>>({});
+  const [expandedRejectionWorkers, setExpandedRejectionWorkers] = useState<Record<string, boolean>>({});
   const [viewLoading, setViewLoading] = useState(true);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editItems, setEditItems] = useState<Array<{item_id: number, quantity: number, color_name: string, size_value: string}>>([]);
@@ -173,6 +231,49 @@ const JobOrderDetailsPage: React.FC = () => {
   const viewPrintColorBreakdown = parsedViewPrints?.colorBreakdown || {};
   const viewPlacementLabels = parsedViewPrints?.placementLabels || {};
   const viewColorBreakdownEntries = Object.entries(viewPrintColorBreakdown);
+  const compensationPhaseTotals = useMemo(() => {
+    const phaseMap = new Map<string, { phaseName: string; count: number; quantity: number }>();
+    compensations.forEach((comp) => {
+      const phaseName = comp.phase_name || 'Unknown Phase';
+      const existing = phaseMap.get(phaseName) || { phaseName, count: 0, quantity: 0 };
+      existing.count += 1;
+      existing.quantity += Number(comp.quantity || 0);
+      phaseMap.set(phaseName, existing);
+    });
+    return Array.from(phaseMap.values()).sort((a, b) => a.phaseName.localeCompare(b.phaseName));
+  }, [compensations]);
+
+  useEffect(() => {
+    setTopImageVisible(true);
+  }, [viewJobOrder?.image_url]);
+
+  const compensationPhaseDaily = useMemo(() => {
+    const dateMap = new Map<string, Map<string, { phaseName: string; count: number; quantity: number }>>();
+    compensations.forEach((comp) => {
+      if (!comp.created_at) return;
+      const parsedDate = new Date(comp.created_at);
+      if (Number.isNaN(parsedDate.getTime())) return;
+      const dateKey = format(parsedDate, 'yyyy-MM-dd');
+      const phaseName = comp.phase_name || 'Unknown Phase';
+      if (!dateMap.has(dateKey)) {
+        dateMap.set(dateKey, new Map());
+      }
+      const phaseMap = dateMap.get(dateKey)!;
+      const existing = phaseMap.get(phaseName) || { phaseName, count: 0, quantity: 0 };
+      existing.count += 1;
+      existing.quantity += Number(comp.quantity || 0);
+      phaseMap.set(phaseName, existing);
+    });
+
+    return Array.from(dateMap.entries())
+      .sort(([dateA], [dateB]) => dateB.localeCompare(dateA))
+      .flatMap(([date, phaseMap]) =>
+        Array.from(phaseMap.values())
+          .sort((a, b) => a.phaseName.localeCompare(b.phaseName))
+          .map((entry) => ({ date, ...entry }))
+      );
+  }, [compensations]);
+
   const viewPlacementOrder = useMemo(() => {
     const entries = Object.entries(viewPlacementLabels);
     if (entries.length > 0) {
@@ -588,7 +689,31 @@ const JobOrderDetailsPage: React.FC = () => {
         const compsData = await jobOrderApi.getCompensations(Number(jobOrderId));
         setCompensations(Array.isArray(compsData?.compensations) ? compsData.compensations : []);
         setCompensationPhaseSummary(Array.isArray(compsData?.phase_summary) ? compsData.phase_summary : []);
-        setCompensationColorSummary(Array.isArray(compsData?.color_summary) ? compsData.color_summary : []);
+
+        const qcData = await jobOrderApi.getQcSummary(Number(jobOrderId));
+        setQcSummary({
+          total_rejected_pieces: Number(qcData?.total_rejected_pieces || 0),
+          today_rejected_pieces: Number((qcData as any)?.today_rejected_pieces || 0),
+          phases: Array.isArray(qcData?.phases)
+            ? qcData.phases.map((phase) => ({
+                ...phase,
+                active_rework_problem_stages: Array.isArray(phase.active_rework_problem_stages) ? phase.active_rework_problem_stages : [],
+                rejection_reason_counts: Array.isArray(phase.rejection_reason_counts) ? phase.rejection_reason_counts : [],
+                rejection_reason_totals: Array.isArray((phase as any).rejection_reason_totals) ? (phase as any).rejection_reason_totals : [],
+              }))
+            : [],
+          today_phases: Array.isArray((qcData as any)?.today_phases)
+            ? (qcData as any).today_phases.map((phase: any) => ({
+                ...phase,
+                active_rework_problem_stages: Array.isArray(phase.active_rework_problem_stages) ? phase.active_rework_problem_stages : [],
+                rejection_reason_counts: Array.isArray(phase.rejection_reason_counts) ? phase.rejection_reason_counts : [],
+                rejection_reason_totals: Array.isArray(phase.rejection_reason_totals) ? phase.rejection_reason_totals : [],
+              }))
+            : [],
+        });
+        setExpandedQcPhaseIds({});
+        setExpandedRejectionStages({});
+        setExpandedRejectionWorkers({});
         
         // --- Populate edit dialog state for materials/consumption ---
         if (editDialogOpen) {
@@ -621,6 +746,13 @@ const JobOrderDetailsPage: React.FC = () => {
         setMaterials([]);
         setCompensations([]);
         setCompensationPhaseSummary([]);
+        setQcSummary({
+          total_rejected_pieces: 0,
+          today_rejected_pieces: 0,
+          phases: [],
+          today_phases: [],
+        });
+        setExpandedQcPhaseIds({});
         toast({
           title: t('common.error'),
           description: 'Failed to load job order details',
@@ -1020,19 +1152,55 @@ const JobOrderDetailsPage: React.FC = () => {
     return issues;
   };
 
+  const getIssueGroupLabel = (type: string) => {
+    if (type === 'overproduction') return t('jobOrderDetails.overproductionIssues');
+    if (type === 'high_second_degree') return t('jobOrderDetails.highSecondDegreeIssues');
+    if (type === 'notes') return t('jobOrderDetails.productionIssues');
+    if (type === 'lost_quantity') return t('jobOrderDetails.lostQuantityIssues');
+    return `${type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())} Issues`;
+  };
+
+  const toggleQcPhaseExpanded = (phaseId: number) => {
+    setExpandedQcPhaseIds(prev => ({
+      ...prev,
+      [phaseId]: !prev[phaseId],
+    }));
+  };
+
+  const toggleCompensationDateExpanded = (date: string) => {
+    setExpandedCompensationDates(prev => ({
+      ...prev,
+      [date]: !prev[date],
+    }));
+  };
+
+  const toggleRejectionStageExpanded = (key: string) => {
+    setExpandedRejectionStages(prev => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  const toggleRejectionWorkerExpanded = (key: string) => {
+    setExpandedRejectionWorkers(prev => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
   return (
     <Layout>
-      <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 rounded-2xl border border-slate-200/80 bg-gradient-to-r from-white to-slate-50 px-4 py-4 shadow-sm">
         <div>
-          <h1 className="text-xl md:text-2xl font-bold mb-2 text-gray-800">
+          <h1 className="text-xl md:text-3xl font-bold mb-1 text-slate-900 tracking-tight">
             {viewJobOrder
               ? t('jobOrderDetails.productionDetailsWithNumber', { jobOrderNumber: viewJobOrder.job_order_number })
               : t('jobOrders.title')}
           </h1>
-          <p className="text-gray-600 text-sm md:text-base">{t('jobOrderDetails.subtitle')}</p>
+          <p className="text-slate-600 text-sm md:text-base">{t('jobOrderDetails.subtitle')}</p>
           {/* Date Created Display */}
           {viewJobOrder?.date_created && (
-            <p className="text-gray-500 text-xs md:text-sm mt-1">
+            <p className="text-slate-500 text-xs md:text-sm mt-1">
               {t('jobOrderDetails.dateCreated')}: {format(new Date(viewJobOrder.date_created), 'yyyy-MM-dd HH:mm')}
             </p>
           )}
@@ -1101,25 +1269,26 @@ const JobOrderDetailsPage: React.FC = () => {
       </div>
       {/* Brand and Model Information */}
       {viewJobOrder && (
-        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <div className="mb-6 p-5 rounded-2xl border border-blue-200/70 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-sm">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <h3 className="text-lg font-semibold text-blue-800 mb-2">{t('jobOrders.clientName')}</h3>
-              <p className="text-blue-900">{viewJobOrder.client_name || '-'}</p>
+              <h3 className="text-sm uppercase tracking-wide font-semibold text-blue-700 mb-1">{t('jobOrders.clientName')}</h3>
+              <p className="text-blue-950 text-lg font-semibold">{viewJobOrder.client_name || '-'}</p>
             </div>
             <div>
-              <h3 className="text-lg font-semibold text-blue-800 mb-2">{t('jobOrders.modelName')}</h3>
-              <p className="text-blue-900">{viewJobOrder.model_name || '-'}</p>
+              <h3 className="text-sm uppercase tracking-wide font-semibold text-blue-700 mb-1">{t('jobOrders.modelName')}</h3>
+              <p className="text-blue-950 text-lg font-semibold">{viewJobOrder.model_name || '-'}</p>
             </div>
           </div>
         </div>
       )}
-      {viewJobOrder?.image_url && (
+  {viewJobOrder?.image_url && topImageVisible && (
         <div className="mb-6 flex justify-center">
           <img
             src={getPublicImageUrl(viewJobOrder.image_url)}
-            alt="Job Order"
-            className="max-h-64 rounded shadow border object-contain bg-white"
+            alt=""
+            onError={() => setTopImageVisible(false)}
+            className="max-h-64 rounded-2xl shadow-md border border-slate-200 object-contain bg-white"
             style={{ maxWidth: '100%' }}
           />
         </div>
@@ -1132,29 +1301,35 @@ const JobOrderDetailsPage: React.FC = () => {
       ) : viewJobOrder ? (
         <>
           {viewJobOrder.notes && (
-            <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded text-gray-800">
+            <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 shadow-sm">
               <strong>{t('jobOrderDetails.notes')}:</strong> {viewJobOrder.notes}
             </div>
           )}
         <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="mb-4 flex w-full rounded-xl bg-white p-1 shadow-sm border border-gray-200">
+          <TabsList className="mb-5 flex w-full rounded-2xl bg-white/95 p-1.5 shadow-sm border border-slate-200 backdrop-blur">
             <TabsTrigger
               value="overview"
-              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-lg transition-all duration-200 data-[state=active]:bg-green data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-gray-600 data-[state=inactive]:hover:bg-lime data-[state=inactive]:hover:text-gray-800"
+              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-xl transition-all duration-200 data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
             >
               {t('jobOrderDetails.overview')}
             </TabsTrigger>
             <TabsTrigger
               value="phases"
-              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-lg transition-all duration-200 data-[state=active]:bg-green data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-gray-600 data-[state=inactive]:hover:bg-lime data-[state=inactive]:hover:text-gray-800"
+              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-xl transition-all duration-200 data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
             >
               {t('jobOrderDetails.phaseDetails')}
             </TabsTrigger>
             <TabsTrigger
               value="batch_compensation"
-              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-lg transition-all duration-200 data-[state=active]:bg-green data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-gray-600 data-[state=inactive]:hover:bg-lime data-[state=inactive]:hover:text-gray-800"
+              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-xl transition-all duration-200 data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
             >
               {t('batchGeneration.tabCompensation')}
+            </TabsTrigger>
+            <TabsTrigger
+              value="qc"
+              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-xl transition-all duration-200 data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
+            >
+              QC
             </TabsTrigger>
           </TabsList>
           
@@ -1162,47 +1337,47 @@ const JobOrderDetailsPage: React.FC = () => {
             <div>
               {/* Summary Section */}
               {viewTrackingData.length > 0 && (
-                <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
-              <h3 className="text-lg font-semibold mb-3 text-gray-800">{t('jobOrderDetails.productionSummary')}</h3>
-              <div className="grid grid-cols-2 md:grid-cols-7 gap-4 text-sm">
+                <div className="mb-6 p-5 bg-white border border-slate-200 rounded-2xl shadow-sm">
+              <h3 className="text-lg font-semibold mb-4 text-slate-900">{t('jobOrderDetails.productionSummary')}</h3>
+              <div className="grid grid-cols-2 md:grid-cols-8 gap-4 text-sm">
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">{t('jobOrderDetails.expected')}</div>
+                  <div className="font-medium text-slate-500">{t('jobOrderDetails.expected')}</div>
                   <div className="text-xl font-bold text-gray-800">
                     {viewTrackingData.reduce((sum, item) => sum + item.expected_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">{t('jobOrderDetails.cutQuantity')}</div>
+                  <div className="font-medium text-slate-500">{t('jobOrderDetails.cutQuantity')}</div>
                   <div className="text-xl font-bold text-purple-600">
                     {viewTrackingData.reduce((sum, item) => sum + item.cut_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">{t('jobOrderDetails.secondDegree')}</div>
+                  <div className="font-medium text-slate-500">{t('jobOrderDetails.secondDegree')}</div>
                   <div className="text-xl font-bold text-orange-600">
                     {viewTrackingData.reduce((sum, item) => sum + item.second_degree_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">{t('jobOrderDetails.completed')}</div>
+                  <div className="font-medium text-slate-500">{t('jobOrderDetails.completed')}</div>
                   <div className="text-xl font-bold text-green-600">
                     {viewTrackingData.reduce((sum, item) => sum + item.completed_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">{t('jobOrderDetails.remaining')}</div>
+                  <div className="font-medium text-slate-500">{t('jobOrderDetails.remaining')}</div>
                   <div className="text-xl font-bold text-blue-700">
                     {viewTrackingData.reduce((sum, item) => sum + item.remaining_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">{t('jobOrderDetails.workingQty')}</div>
+                  <div className="font-medium text-slate-500">{t('jobOrderDetails.workingQty')}</div>
                   <div className="text-xl font-bold text-blue-700">
                     {viewTrackingData.reduce((sum, item) => sum + item.working_quantity, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
-                  <div className="font-medium text-gray-600">{t('jobOrderDetails.consumptionAverage')}</div>
+                  <div className="font-medium text-slate-500">Consumption (KG)</div>
                   <div className="text-xl font-bold text-purple-700">
                     {(() => {
                       const { sum, count } = viewTrackingData.reduce(
@@ -1220,79 +1395,99 @@ const JobOrderDetailsPage: React.FC = () => {
                     })()}
                   </div>
                 </div>
+                <div className="text-center">
+                  <div className="font-medium text-slate-500">Consumption (M)</div>
+                  <div className="text-xl font-bold text-indigo-700">
+                    {(() => {
+                      const { sum, count } = viewTrackingData.reduce(
+                        (acc, item) => {
+                          if (item.true_consumption_m !== null && item.true_consumption_m !== undefined) {
+                            acc.sum += item.true_consumption_m;
+                            acc.count += 1;
+                          }
+                          return acc;
+                        },
+                        { sum: 0, count: 0 }
+                      );
+                      const avg = count > 0 ? sum / count : null;
+                      return avg !== null ? avg.toFixed(4) : '—';
+                    })()}
+                  </div>
+                </div>
               </div>
                 </div>
               )}
 
-              {/* Issue Indicators */}
-          {(() => {
-            const allIssues = viewTrackingData.flatMap(item => {
-              const issues = detectIssues(item);
-              return issues.map(issue => ({
-                ...issue,
-                item: `${item.color_name} - ${item.size_value}`
-              }));
-            });
-            
-            if (allIssues.length === 0) return null;
-            
-            // Group issues by type
-            const issuesByType = allIssues.reduce((acc, issue) => {
-              if (!acc[issue.type]) acc[issue.type] = [];
-              acc[issue.type].push(issue);
-              return acc;
-            }, {} as Record<string, any[]>);
-            
-            return (
-              <div className="mb-4 space-y-2">
-                                {Object.entries(issuesByType).map(([type, issues]) => {
-                  const bgColor = 'bg-red-100';
-                  const borderColor = 'border-red-300';
-                  const textColor = 'text-red-700';
-                  const iconColor = 'text-red-600';
-                  
-                  return (
-                    <div key={type} className={`flex items-start p-3 ${bgColor} border ${borderColor} rounded ${textColor}`}>
-                      <svg className={`w-5 h-5 mr-2 ${iconColor} mt-0.5 flex-shrink-0`} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <div className="flex-1">
-                        <div className="font-semibold mb-1">
-                          {type === 'overproduction' ? t('jobOrderDetails.overproductionIssues') : 
-                           type === 'high_second_degree' ? t('jobOrderDetails.highSecondDegreeIssues') : 
-                           type === 'notes' ? t('jobOrderDetails.productionIssues') :
-                           type === 'lost_quantity' ? t('jobOrderDetails.lostQuantityIssues') :
-                           t('jobOrderDetails.productionIssues')}
-                        </div>
-                        <div className="text-sm space-y-1">
-                          {(issues as any[]).map((issue, idx) => (
-                            <div key={idx} className={textColor}>
-                              <span className="font-medium">{issue.item}:</span> {issue.message}
-                            </div>
-                          ))}
-                        </div>
+              {/* Unified Problem Notifications */}
+              {(() => {
+                const allIssues = viewTrackingData.flatMap(item => {
+                  const issues = detectIssues(item);
+                  return issues.map(issue => ({
+                    ...issue,
+                    item: `${item.color_name} - ${item.size_value}`
+                  }));
+                });
+
+                const hasIssues = allIssues.length > 0;
+                const issuesByType = allIssues.reduce((acc, issue) => {
+                  if (!acc[issue.type]) acc[issue.type] = [];
+                  acc[issue.type].push(issue);
+                  return acc;
+                }, {} as Record<string, any[]>);
+
+                return (
+                  <div className="mb-4">
+                    <button
+                      type="button"
+                      onClick={() => setShowProblemNotifications(prev => !prev)}
+                      className={`inline-flex items-center gap-2 px-3 py-2 rounded-full text-xs font-semibold border shadow-sm transition-all ${
+                        hasIssues
+                          ? 'bg-red-100 text-red-700 border-red-300 hover:bg-red-200'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>Problem Notifications {hasIssues ? `(${allIssues.length})` : '(0)'}</span>
+                      {showProblemNotifications ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    </button>
+
+                    {showProblemNotifications && (
+                      <div className={`mt-2 p-3 rounded-xl border shadow-sm ${hasIssues ? 'bg-red-50 border-red-200 text-red-700' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                        {hasIssues ? (
+                          <div className="space-y-2 text-sm">
+                            {Object.entries(issuesByType).map(([type, issues]) => (
+                              <div key={type}>
+                                <div className="font-semibold mb-1">{getIssueGroupLabel(type)} ({(issues as any[]).length})</div>
+                                {(issues as any[]).map((issue, idx) => (
+                                  <div key={idx}>
+                                    <span className="font-medium">{issue.item}:</span> {issue.message}
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-sm">No issues found.</div>
+                        )}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            );
+                    )}
+                  </div>
+                );
               })()}
               {/* Summary Table */}
-              <div className="overflow-x-auto mb-6">
-            <table className="min-w-full border rounded-lg overflow-hidden shadow-sm">
-              <thead className="bg-gray-100 text-gray-800">
+              <div className="overflow-x-auto mb-6 rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <table className="min-w-full overflow-hidden">
+              <thead className="bg-slate-100 text-slate-800">
                 <tr>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.color')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.size')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.expected')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Order</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.cutQuantity')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.workingQty')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.cuttingDifference')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.remainingQuantity')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.completed')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.remainingQuantity')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.secondDegree')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.lostQuantity')}</th>
-                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.consumption')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Consumption (KG)</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Consumption (M)</th>
                   {user?.role === 'admin' && (
                     <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">Actions</th>
                   )}
@@ -1318,10 +1513,6 @@ const JobOrderDetailsPage: React.FC = () => {
                         rowBackgroundClass = 'bg-red-100 hover:bg-red-200 border-l-4 border-l-red-600 shadow-sm';
                       }
                       
-                      const enhancedCuttingDiffColor = hasIssues 
-                        ? 'text-red-700 font-bold'
-                        : remainingColor;
-                      
                       rowIndex++;
                       
                       return (
@@ -1335,15 +1526,19 @@ const JobOrderDetailsPage: React.FC = () => {
                           </td>
                           <td className="px-4 py-2 border-b border-gray-200">{item.size_value}</td>
                           <td className="px-4 py-2 border-b border-gray-200 text-right font-medium">{item.expected_quantity}</td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right font-medium text-purple-700">{item.cut_quantity || 0}</td>
                           <td className="px-4 py-2 border-b border-gray-200 text-right font-medium text-blue-600">{item.working_quantity || 0}</td>
-                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${enhancedCuttingDiffColor}`}>{item.cut_quantity - item.expected_quantity > 0 ? '+' : ''}{item.cut_quantity - item.expected_quantity}</td>
-                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${remainingColor}`}>{item.remaining_quantity}</td>
                           <td className={`px-4 py-2 border-b border-gray-200 text-right ${completedColor}`}>{item.completed_quantity}</td>
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${remainingColor}`}>{item.remaining_quantity}</td>
                           <td className={`px-4 py-2 border-b border-gray-200 text-right ${secondDegreeColor}`}>{item.second_degree_quantity}</td>
-                          <td className="px-4 py-2 border-b border-gray-200 text-right font-semibold text-orange-700">{item.lost_qty || 0}</td>
                           <td className="px-4 py-2 border-b border-gray-200 text-right font-medium text-purple-700">
-                            {item.true_consumption !== null && item.true_consumption !== undefined 
-                              ? item.true_consumption.toFixed(4) 
+                            {item.true_consumption !== null && item.true_consumption !== undefined
+                              ? item.true_consumption.toFixed(4)
+                              : '—'}
+                          </td>
+                          <td className="px-4 py-2 border-b border-gray-200 text-right font-medium text-indigo-700">
+                            {item.true_consumption_m !== null && item.true_consumption_m !== undefined
+                              ? item.true_consumption_m.toFixed(4)
                               : '—'}
                           </td>
                           {user?.role === 'admin' && (
@@ -1527,58 +1722,282 @@ const JobOrderDetailsPage: React.FC = () => {
           <TabsContent value="batch_compensation">
             <div className="overflow-x-auto">
               <h3 className="text-lg font-semibold mb-3 text-gray-800">{t('batchGeneration.tabCompensation')}</h3>
-              
-              {compensationColorSummary.length > 0 && (
+
+              {compensationPhaseTotals.length > 0 && (
                 <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
-                  <h4 className="text-md font-semibold mb-3 text-gray-800">Compensation Summary by Color</h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {compensationColorSummary.map((item) => (
-                      <div key={item.color_name} className="text-center p-3 bg-white border border-gray-200 rounded">
-                        <div className="font-medium text-gray-600 text-sm">{item.color_name || 'Unknown'}</div>
-                        <div className="text-2xl font-bold text-gray-800 mt-1">{item.count ?? 0}</div>
-                        <div className="text-xs text-gray-500 mt-1">batches</div>
+                  <h4 className="text-md font-semibold mb-3 text-gray-800">Total Aggregate by Compensation Phase</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {compensationPhaseTotals.map((item) => (
+                      <div key={item.phaseName} className="p-3 bg-white border border-gray-200 rounded">
+                        <div className="font-medium text-gray-700 text-sm">{item.phaseName}</div>
+                        <div className="mt-2 flex items-baseline justify-between">
+                          <span className="text-xs text-gray-500">Records</span>
+                          <span className="text-xl font-bold text-gray-800">{item.count}</span>
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
+
+              {compensationPhaseDaily.length > 0 && (
+                <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                  <h4 className="text-md font-semibold mb-3 text-gray-800">Daily Aggregate by Compensation Phase</h4>
+                  <div className="space-y-2">
+                    {Object.entries(
+                      compensationPhaseDaily.reduce((acc, item) => {
+                        if (!acc[item.date]) acc[item.date] = [];
+                        acc[item.date].push(item);
+                        return acc;
+                      }, {} as Record<string, typeof compensationPhaseDaily>)
+                    )
+                      .sort(([dateA], [dateB]) => dateB.localeCompare(dateA))
+                      .map(([date, items]) => {
+                      const isExpanded = expandedCompensationDates[date] ?? false;
+                      return (
+                        <div key={date} className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                          <button
+                            type="button"
+                            onClick={() => toggleCompensationDateExpanded(date)}
+                            className="w-full px-4 py-2 flex items-center justify-between text-left hover:bg-gray-50"
+                          >
+                            <span className="font-semibold text-gray-800">{date}</span>
+                            {isExpanded ? <ChevronDown className="w-4 h-4 text-gray-600" /> : <ChevronRight className="w-4 h-4 text-gray-600" />}
+                          </button>
+                          {isExpanded && (
+                            <table className="w-full">
+                              <thead className="bg-gray-100 text-gray-800">
+                                <tr>
+                                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('batchGeneration.compensationPhase')}</th>
+                                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">Records</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(items as any[]).map((item, idx) => (
+                                  <tr key={`${item.date}-${item.phaseName}`} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                                    <td className="px-4 py-2 border-b border-gray-200">{item.phaseName}</td>
+                                    <td className="px-4 py-2 border-b border-gray-200 text-center font-medium">{item.count}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               
-              {compensations.length > 0 ? (
-                <table className="w-full border rounded-lg overflow-hidden shadow-sm">
-                  <thead className="bg-gray-100 text-gray-800">
-                    <tr>
-                      <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.color')}</th>
-                      <th className="px-4 py-2 border-b border-gray-200 font-semibold text-left">{t('barcode.size')}</th>
-                      <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">{t('batchGeneration.compensationPhase')}</th>
-                      <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">{t('batchGeneration.compensationQty')}</th>
-                      <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">{t('barcode.barcode')}</th>
-                      <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">{t('barcode.quantity')}</th>
-                      <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">Created By</th>
-                      <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">{t('jobOrderDetails.dateCreated')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {compensations.map((comp, idx) => (
-                      <tr key={comp.compensation_id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-4 py-2 border-b border-gray-200">{comp.color_name}</td>
-                        <td className="px-4 py-2 border-b border-gray-200">{comp.size_value}</td>
-                        <td className="px-4 py-2 border-b border-gray-200 text-center">{comp.phase_name}</td>
-                        <td className="px-4 py-2 border-b border-gray-200 text-center font-semibold">{comp.quantity}</td>
-                        <td className="px-4 py-2 border-b border-gray-200 text-center font-mono text-sm">{comp.barcode}</td>
-                        <td className="px-4 py-2 border-b border-gray-200 text-center">{comp.batch_quantity}</td>
-                        <td className="px-4 py-2 border-b border-gray-200 text-center">{comp.created_by_username || '-'}</td>
-                        <td className="px-4 py-2 border-b border-gray-200 text-center">
-                          {comp.created_at ? format(new Date(comp.created_at), 'yyyy-MM-dd HH:mm') : '-'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
+              {compensations.length === 0 && (
                 <div className="text-center py-10 text-gray-500">
                   {t('common.none')}
                 </div>
               )}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="qc">
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-gray-800">QC</h3>
+              <Tabs defaultValue="total" className="w-full">
+                <TabsList className="mb-4 flex w-fit rounded-xl bg-white p-1 shadow-sm border border-gray-200">
+                  <TabsTrigger value="total" className="px-4 py-2 rounded-lg data-[state=active]:bg-emerald-600 data-[state=active]:text-white">
+                    Total
+                  </TabsTrigger>
+                  <TabsTrigger value="today" className="px-4 py-2 rounded-lg data-[state=active]:bg-emerald-600 data-[state=active]:text-white">
+                    Today
+                  </TabsTrigger>
+                </TabsList>
+
+                {(['total', 'today'] as const).map((scope) => {
+                  const scopedPhases = scope === 'today' ? qcSummary.today_phases : qcSummary.phases;
+                  const scopedRejectedPieces = scope === 'today' ? qcSummary.today_rejected_pieces : qcSummary.total_rejected_pieces;
+
+                  return (
+                    <TabsContent key={scope} value={scope}>
+                      <div className="mb-4 max-w-md">
+                        <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                          <div className="text-sm text-gray-600 mb-1">
+                            {t('jobOrderDetails.qcTotalRejectedPieces')}
+                          </div>
+                          <div className="text-2xl font-bold text-gray-800">{scopedRejectedPieces}</div>
+                        </div>
+                      </div>
+
+                      <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <div className="px-4 py-3 border-b border-slate-200 bg-slate-50 font-semibold text-slate-800">
+                          {t('jobOrderDetails.qcByPhase')}
+                        </div>
+                        <table className="w-full overflow-hidden text-sm md:text-base">
+                  <thead className="bg-slate-100 text-slate-800">
+                    <tr>
+                      <th className="px-4 py-3 border-b border-slate-200 font-semibold text-left">
+                        {t('jobOrderDetails.qcReturnToPhase')}
+                      </th>
+                      <th className="px-4 py-3 border-b border-slate-200 font-semibold text-center">
+                        {t('jobOrderDetails.qcRejectedPieces')}
+                      </th>
+                      <th className="px-4 py-3 border-b border-slate-200 font-semibold text-center">
+                        {t('jobOrderDetails.qcRejectRatio')}
+                      </th>
+                      <th className="px-4 py-3 border-b border-slate-200 font-semibold text-center">
+                        {t('jobOrderDetails.qcActiveReworkBatches')}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scopedPhases.length > 0 ? (
+                      scopedPhases.flatMap((phase, idx) => {
+                        const isExpanded = Boolean(expandedQcPhaseIds[phase.phase_id]);
+                        const showActiveReworkStages = phase.phase_type === 'sewing';
+                        const scopedRejectPct =
+                          scope === 'today'
+                            ? phase.reject_ratio_pct_today
+                            : phase.reject_ratio_pct_all_time;
+                        return [
+                          <tr key={`qc-row-${phase.phase_id}`} className={`${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/70'} hover:bg-emerald-50/40 transition-colors`}>
+                            <td className="px-4 py-3 border-b border-slate-200">
+                              <button
+                                type="button"
+                                onClick={() => toggleQcPhaseExpanded(phase.phase_id)}
+                                className="inline-flex items-center gap-2 text-left font-medium text-slate-800 hover:text-emerald-700"
+                              >
+                                {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                <span>{phase.phase_name}</span>
+                              </button>
+                            </td>
+                            <td className="px-4 py-3 border-b border-slate-200 text-center font-semibold text-slate-800">{phase.reject}</td>
+                            <td className="px-4 py-3 border-b border-slate-200 text-center font-semibold text-slate-800">
+                              {['sewing', 'cutting', 'qc'].includes(phase.phase_type || '') &&
+                              scopedRejectPct != null
+                                ? `${scopedRejectPct}%`
+                                : '—'}
+                            </td>
+                            <td className="px-4 py-3 border-b border-slate-200 text-center font-semibold text-slate-800">
+                              {phase.phase_type === 'sewing' ? phase.active_rework_batches : '-'}
+                            </td>
+                          </tr>,
+                          ...(isExpanded
+                            ? [(
+                                <tr key={`qc-expand-${phase.phase_id}`} className="bg-slate-50">
+                                  <td colSpan={4} className="px-4 py-4 border-b border-slate-200">
+                                    <div className="grid grid-cols-1 gap-4">
+                                      {showActiveReworkStages && (
+                                        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                                          <div className="text-base font-semibold text-slate-800 mb-3">Active Rework Problem Stages</div>
+                                          {phase.active_rework_problem_stages.length > 0 ? (
+                                            <div className="divide-y divide-slate-200">
+                                              {phase.active_rework_problem_stages.map((entry, entryIdx) => (
+                                                <div key={`${phase.phase_id}-stage-${entry.problem_stage_name}-${entryIdx}`} className={`flex justify-between py-2 ${entryIdx % 2 === 1 ? 'bg-slate-50/60' : ''}`}>
+                                                  <span className="text-slate-700 text-sm md:text-base">{entry.problem_stage_name}</span>
+                                                  <span className="font-semibold text-slate-900 text-sm md:text-base">{entry.count}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          ) : (
+                                            <div className="text-sm md:text-base text-slate-500">{t('common.none')}</div>
+                                          )}
+                                        </div>
+                                      )}
+                                      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                                        <div className="text-base font-semibold text-slate-800 mb-3">Rejection Reasons</div>
+                                        {phase.phase_type !== 'sewing' ? (
+                                          (phase.rejection_reason_totals && phase.rejection_reason_totals.length > 0) ? (
+                                            <div className="divide-y divide-slate-200">
+                                              {phase.rejection_reason_totals.map((entry, entryIdx) => (
+                                                <div key={`${phase.phase_id}-reason-total-${entry.reason}-${entryIdx}`} className={`flex justify-between py-2 ${entryIdx % 2 === 1 ? 'bg-slate-50/60' : ''}`}>
+                                                  <span className="text-slate-700 text-sm md:text-base">{entry.reason}</span>
+                                                  <span className="font-semibold text-slate-900 text-sm md:text-base">{entry.count}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          ) : (
+                                            <div className="text-sm md:text-base text-slate-500">{t('common.none')}</div>
+                                          )
+                                        ) : phase.rejection_reason_counts.length > 0 ? (
+                                          <div className="space-y-3">
+                                            {phase.rejection_reason_counts.map((stageEntry, stageIdx) => {
+                                              const stageKey = `${phase.phase_id}-stage-${stageEntry.problem_stage_name}-${stageIdx}`;
+                                              const isStageExpanded = Boolean(expandedRejectionStages[stageKey]);
+                                              return (
+                                                <div key={`${phase.phase_id}-reason-stage-${stageEntry.problem_stage_name}-${stageIdx}`} className="rounded-lg border border-slate-200 bg-slate-50/60 p-2">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => toggleRejectionStageExpanded(stageKey)}
+                                                    className="w-full flex items-center justify-between text-sm font-semibold text-gray-800 mb-2 text-left"
+                                                  >
+                                                    <span className="inline-flex items-center gap-2">
+                                                      {isStageExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                                      {stageEntry.problem_stage_name}
+                                                    </span>
+                                                    <span>{stageEntry.total_count}</span>
+                                                  </button>
+                                                  {isStageExpanded && (
+                                                    <div className="space-y-2">
+                                                      {stageEntry.workers.map((workerEntry, workerIdx) => {
+                                                        const workerKey = `${stageKey}-worker-${workerEntry.worker_name}-${workerIdx}`;
+                                                        const isWorkerExpanded = Boolean(expandedRejectionWorkers[workerKey]);
+                                                        return (
+                                                          <div key={`${phase.phase_id}-worker-${workerEntry.worker_name}-${workerIdx}`} className="pl-2 border-l-2 border-emerald-200">
+                                                            <button
+                                                              type="button"
+                                                              onClick={() => toggleRejectionWorkerExpanded(workerKey)}
+                                                              className="w-full flex items-center justify-between text-sm font-medium text-gray-700 mb-1 text-left"
+                                                            >
+                                                              <span className="inline-flex items-center gap-2">
+                                                                {isWorkerExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                                                                {workerEntry.worker_name}
+                                                              </span>
+                                                              <span>{workerEntry.total_count}</span>
+                                                            </button>
+                                                            {isWorkerExpanded && (
+                                                              <div className="pl-2 rounded-md border border-slate-200 bg-white divide-y divide-slate-200 overflow-hidden">
+                                                                {workerEntry.reasons.map((reasonEntry, reasonIdx) => (
+                                                                  <div
+                                                                    key={`${phase.phase_id}-worker-reason-${reasonEntry.reason}-${reasonIdx}`}
+                                                                    className={`flex justify-between items-center px-3 py-2 text-sm md:text-base ${reasonIdx % 2 === 1 ? 'bg-slate-50' : 'bg-white'} hover:bg-amber-50/70 transition-colors`}
+                                                                  >
+                                                                    <span className="text-slate-700 font-medium">{reasonEntry.reason}</span>
+                                                                    <span className="font-semibold text-slate-900">{reasonEntry.count}</span>
+                                                                  </div>
+                                                                ))}
+                                                              </div>
+                                                            )}
+                                                          </div>
+                                                        );
+                                                      })}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        ) : (
+                                          <div className="text-sm text-gray-500">{t('common.none')}</div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </td>
+                                </tr>
+                              )]
+                            : []),
+                        ];
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                          {t('common.none')}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                        </table>
+                      </div>
+                    </TabsContent>
+                  );
+                })}
+              </Tabs>
             </div>
           </TabsContent>
 

@@ -1071,7 +1071,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
             </TabsContent>
             
             <TabsContent value="second-degree" className="space-y-6">
-              <div className="text-[120%]">
+              <div className="w-full text-[120%]">
                 <h3 className="text-lg font-semibold mb-2">{t('batchGeneration.createSecondDegree', 'Create Second Degree Batches')}</h3>
                 <p className="text-base text-gray-600 mb-6">{t('batchGeneration.secondDegreeDescription', 'Create second degree batches for job order items. These batches are initialized with quantity 0.')}</p>
                 
@@ -1147,8 +1147,8 @@ const BulkBarcodeCreatePage: React.FC = () => {
                       )}
                     </div>
 
-                    <div className="border rounded-md overflow-hidden mb-6">
-                      <div className="max-h-[400px] overflow-y-auto">
+                    <div className="w-full border rounded-md overflow-hidden mb-6">
+                      <div className="w-full max-h-[55vh] overflow-auto">
                         <Table>
                           <TableHeader className="sticky top-0 bg-gray-50 z-10">
                             <TableRow>
@@ -1171,7 +1171,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                                       ...prev,
                                       [item.item_id]: Math.max(0, parseInt(e.target.value) || 0)
                                     }))}
-                                    className="w-full max-w-xs text-base h-11"
+                                    className="w-full text-base h-11"
                                     placeholder="0"
                                   />
                                 </TableCell>
@@ -1191,7 +1191,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
             </TabsContent>
             
             <TabsContent value="compensation" className="space-y-6">
-              <div className="text-[120%]">
+              <div className="w-full text-[120%]">
                 <h3 className="text-lg font-semibold mb-2">{t('batchGeneration.createCompensation', 'Create Compensation Batches')}</h3>
                 <p className="text-base text-gray-600 mb-6">{t('batchGeneration.compensationDescription', 'Create compensation batches for lost physical barcodes. These batches are not included in cut qty or phase_in_qty calculations.')}</p>
                 
@@ -1275,8 +1275,8 @@ const BulkBarcodeCreatePage: React.FC = () => {
                         )}
                       </div>
 
-                      <div className="border rounded-md overflow-hidden mb-6">
-                        <div className="max-h-[400px] overflow-y-auto">
+                      <div className="w-full border rounded-md overflow-hidden mb-6">
+                        <div className="w-full max-h-[55vh] overflow-auto">
                           <Table>
                             <TableHeader className="sticky top-0 bg-gray-50 z-10">
                               <TableRow>
@@ -1305,7 +1305,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                                           }
                                         }))}
                                       >
-                                        <SelectTrigger className="w-full max-w-xs text-base h-11">
+                                      <SelectTrigger className="w-full text-base h-11">
                                           <SelectValue placeholder={t('batchGeneration.selectPhase', 'Select Phase')} />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -1330,7 +1330,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                                             quantity: Math.max(0, parseInt(e.target.value) || 0)
                                           }
                                         }))}
-                                        className="w-full max-w-xs text-base h-11"
+                                        className="w-full text-base h-11"
                                         placeholder="0"
                                       />
                                     </TableCell>

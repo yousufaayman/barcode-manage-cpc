@@ -712,7 +712,16 @@
     "qcOut": "QC Out",
     "packagingIn": "Packaging In",
     "packagingOut": "Packaging Out",
-    "consumption": "Consumption"
+    "consumption": "Consumption",
+    "qcTotalRejectedPieces": "Total rejected pieces",
+    "qcFinalStageProduction": "Final-stage production (sewing)",
+    "qcFinalStageProductionHint": "Sum of sewing production_history at the last stage of each line for this job order (all time or today).",
+    "qcRejectRatio": "Reject ratio",
+    "qcRatioHint": "Reject % vs throughput: sewing — that line’s final-stage output; cutting — job total cut inspection; QC — job total QC out (lower is better).",
+    "qcByPhase": "By phase (return to phase)",
+    "qcReturnToPhase": "Phase",
+    "qcRejectedPieces": "Rejected pieces",
+    "qcActiveReworkBatches": "Active rework batches"
   },
   "batchGeneration": {
     "title": "Batch Generation",

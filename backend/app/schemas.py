@@ -1000,6 +1000,7 @@ class JobOrderItemSummary(BaseModel):
     production_status: str
     notes: Optional[str] = None
     true_consumption: Optional[float] = None
+    true_consumption_m: Optional[float] = None
     last_calculated_at: Optional[datetime] = None
     last_quantity_change: Optional[datetime] = None
     last_completion_change: Optional[datetime] = None

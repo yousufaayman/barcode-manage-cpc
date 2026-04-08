@@ -709,7 +709,16 @@
     "qcOut": "الجودة الخارجة",
     "packagingIn": "التعبئة الداخلة",
     "packagingOut": "التعبئة الخارجة",
-    "consumption": "الاستهلاك"
+    "consumption": "الاستهلاك",
+    "qcTotalRejectedPieces": "إجمالي القطع المرفوضة",
+    "qcFinalStageProduction": "إنتاج المرحلة الأخيرة (خياطة)",
+    "qcFinalStageProductionHint": "مجموع production_history للخياطة عند آخر مرحلة لكل خط لهذا أمر العمل (كل الأوقات أو اليوم).",
+    "qcRejectRatio": "نسبة الرفض",
+    "qcRatioHint": "نسبة الرفض مقابل الحجم: الخياطة — إنتاج المرحلة الأخيرة لذلك الخط؛ القص — إجمالي فحص القص للأمر؛ الجودة — إجمالي خروج الجودة (كلما انخفضت كان أفضل).",
+    "qcByPhase": "حسب المرحلة (المرحلة المعاد الإرسال إليها)",
+    "qcReturnToPhase": "المرحلة",
+    "qcRejectedPieces": "القطع المرفوضة",
+    "qcActiveReworkBatches": "دفعات إعادة العمل النشطة"
   },
   "batchGeneration": {
     "title": "إنشاء الدفعات",

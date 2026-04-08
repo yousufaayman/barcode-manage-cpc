@@ -669,6 +669,71 @@ def get_phase_daily_production_total(
     return total, first_ts, last_ts
 
 
+def get_job_order_sewing_phase_final_stage_production_total(
+    db: Session,
+    job_order_id: int,
+    phase_id: int,
+    work_date: Optional[date] = None,
+) -> int:
+    """
+    Like :func:`get_phase_daily_production_total` (last stage only per schematic in
+    ``phase_id``), but restricted to batches on ``job_order_id``. Non-sewing phases
+    typically yield 0 (no schematics for that phase).
+    """
+    last_stage_subq = (
+        db.query(
+            models.SewingLineStage.schematic_id.label("schematic_id"),
+            func.max(models.SewingLineStage.stage_order).label("max_order"),
+        )
+        .join(
+            models.SewingLineSchematic,
+            models.SewingLineStage.schematic_id == models.SewingLineSchematic.schematic_id,
+        )
+        .filter(models.SewingLineSchematic.production_phase_id == phase_id)
+        .group_by(models.SewingLineStage.schematic_id)
+        .subquery()
+    )
+
+    q = (
+        db.query(
+            func.coalesce(func.sum(models.ProductionHistory.quantity_produced), 0).label(
+                "total"
+            )
+        )
+        .join(models.Batch, models.ProductionHistory.batch_id == models.Batch.batch_id)
+        .join(
+            models.WorkerDailyStageAssignment,
+            models.ProductionHistory.daily_assignment_id
+            == models.WorkerDailyStageAssignment.daily_assignment_id,
+        )
+        .join(
+            models.SewingLineStage,
+            models.WorkerDailyStageAssignment.stage_id == models.SewingLineStage.stage_id,
+        )
+        .join(
+            models.SewingLineSchematic,
+            models.SewingLineStage.schematic_id == models.SewingLineSchematic.schematic_id,
+        )
+        .join(
+            last_stage_subq,
+            and_(
+                models.SewingLineStage.schematic_id == last_stage_subq.c.schematic_id,
+                models.SewingLineStage.stage_order == last_stage_subq.c.max_order,
+            ),
+        )
+        .filter(
+            models.Batch.job_order_id == job_order_id,
+            models.SewingLineSchematic.production_phase_id == phase_id,
+        )
+    )
+    if work_date is not None:
+        q = q.filter(
+            models.WorkerDailyStageAssignment.assignment_date == work_date
+        )
+    row = q.first()
+    return int(row.total) if row and row.total is not None else 0
+
+
 def get_phase_expected_work_for_range(
     db: Session,
     phase_id: int,
