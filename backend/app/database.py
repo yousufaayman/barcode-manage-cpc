@@ -1448,6 +1448,25 @@ def create_summary_refresh_functions():
                     WHERE b.job_order_id = v_job_order_id
                     GROUP BY b.job_order_id, b.color_id, b.size_id
                 ),
+
+                item_second_degree_cut AS (
+                    SELECT
+                        b.job_order_id,
+                        b.color_id,
+                        b.size_id,
+                        COALESCE(SUM(
+                            CASE
+                                WHEN b.is_second_degree = TRUE
+                                     AND pp.type = 'cutting'
+                                THEN b.quantity
+                                ELSE 0
+                            END
+                        ), 0) AS qty
+                    FROM ops.batches b
+                    LEFT JOIN core.production_phases pp ON b.current_phase = pp.phase_id
+                    WHERE b.job_order_id = v_job_order_id
+                    GROUP BY b.job_order_id, b.color_id, b.size_id
+                ),
                 
                 item_batch_counts AS (
                     SELECT 
@@ -1594,7 +1613,7 @@ def create_summary_refresh_functions():
                     
                     COALESCE(cqd.cut_qty, 0) + COALESCE(ti.qty, 0) - COALESCE(tout.qty, 0) AS cut_qty,
                     COALESCE(bpha.cut_inspection_qty, 0) AS cut_inspection_qty,
-                    0 AS second_degree_cut_qty,
+                    COALESCE(isdc.qty, 0) AS second_degree_cut_qty,
                     
                     COALESCE(bpha.sewing_in_qty, 0) AS sewing_in_qty,
                     COALESCE(bpha.sewing_out_qty, 0) AS sewing_out_qty,
@@ -1645,6 +1664,8 @@ def create_summary_refresh_functions():
                     AND joi.color_id = bpha.color_id AND joi.size_id = bpha.size_id
                 LEFT JOIN item_second_degree isd ON joi.job_order_id = isd.job_order_id 
                     AND joi.color_id = isd.color_id AND joi.size_id = isd.size_id
+                LEFT JOIN item_second_degree_cut isdc ON joi.job_order_id = isdc.job_order_id
+                    AND joi.color_id = isdc.color_id AND joi.size_id = isdc.size_id
                 LEFT JOIN item_batch_counts ibc ON joi.job_order_id = ibc.job_order_id 
                     AND joi.color_id = ibc.color_id AND joi.size_id = ibc.size_id
                 LEFT JOIN lost_qty lq ON joi.item_id = lq.item_id

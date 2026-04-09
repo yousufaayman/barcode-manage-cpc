@@ -1338,6 +1338,26 @@ const JobOrderDetailsPage: React.FC = () => {
               {/* Summary Section */}
               {viewTrackingData.length > 0 && (
                 <div className="mb-6 p-5 bg-white border border-slate-200 rounded-2xl shadow-sm">
+              {(() => {
+                const colorGroups = groupItemsByColor(viewTrackingData);
+                const perColorLossSummary = Object.entries(colorGroups).map(([color, items]) => {
+                  const workingTotal = items.reduce((sum, item) => sum + (item.working_quantity || 0), 0);
+                  const secondDegreeTotal = items.reduce((sum, item) => sum + (item.second_degree_quantity || 0), 0);
+                  const cutTotal = items.reduce((sum, item) => sum + (item.cut_quantity || 0), 0);
+                  const lostQtyTotal = Math.max(0, cutTotal - workingTotal);
+                  const secondDegreePct = workingTotal > 0 ? (secondDegreeTotal / workingTotal) * 100 : 0;
+                  const lostQtyPct = workingTotal > 0 ? (lostQtyTotal / workingTotal) * 100 : 0;
+
+                  return {
+                    color,
+                    secondDegreePct,
+                    lostQtyPct,
+                    totalLossPct: secondDegreePct + lostQtyPct
+                  };
+                });
+
+                return (
+                  <>
               <h3 className="text-lg font-semibold mb-4 text-slate-900">{t('jobOrderDetails.productionSummary')}</h3>
               <div className="grid grid-cols-2 md:grid-cols-8 gap-4 text-sm">
                 <div className="text-center">
@@ -1415,6 +1435,44 @@ const JobOrderDetailsPage: React.FC = () => {
                   </div>
                 </div>
               </div>
+              <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <div className="font-semibold text-amber-800 mb-2">Second Degree % (Per Color)</div>
+                  <div className="space-y-1">
+                    {perColorLossSummary.map(({ color, secondDegreePct }) => (
+                      <div key={`second-${color}`} className="flex items-center justify-between text-amber-900">
+                        <span className="truncate pr-3">{color}</span>
+                        <span className="font-semibold">{secondDegreePct.toFixed(2)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-rose-200 bg-rose-50 p-3">
+                  <div className="font-semibold text-rose-800 mb-2">Lost Qty % (Per Color)</div>
+                  <div className="space-y-1">
+                    {perColorLossSummary.map(({ color, lostQtyPct }) => (
+                      <div key={`lost-${color}`} className="flex items-center justify-between text-rose-900">
+                        <span className="truncate pr-3">{color}</span>
+                        <span className="font-semibold">{lostQtyPct.toFixed(2)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-xl border border-red-200 bg-red-50 p-3">
+                  <div className="font-semibold text-red-800 mb-2">Total Loss % (Per Color)</div>
+                  <div className="space-y-1">
+                    {perColorLossSummary.map(({ color, totalLossPct }) => (
+                      <div key={`total-${color}`} className="flex items-center justify-between text-red-900">
+                        <span className="truncate pr-3">{color}</span>
+                        <span className="font-semibold">{totalLossPct.toFixed(2)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+                  </>
+                );
+              })()}
                 </div>
               )}
 
