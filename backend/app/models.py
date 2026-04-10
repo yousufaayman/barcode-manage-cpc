@@ -43,7 +43,7 @@ class Color(Base):
     # Relationships
     batches = relationship("Batch", back_populates="color")
     job_order_items = relationship("JobOrderItem", back_populates="color")
-    job_order_materials = relationship("JobOrderMaterial", back_populates="color")
+    job_order_material_requests = relationship("JobOrderMaterialRequest", back_populates="color")
 
 class Size(Base):
     """Core.sizes - Reference data for sizes"""
@@ -77,7 +77,7 @@ class Material(Base):
     material_name = Column(String(100), unique=True, index=True, nullable=False)
 
     # Relationships
-    job_order_materials = relationship("JobOrderMaterial", back_populates="material")
+    job_order_material_requests = relationship("JobOrderMaterialRequest", back_populates="material")
 
 class System(Base):
     """Core.systems - System definitions for role-based access"""
@@ -234,7 +234,7 @@ class JobOrder(Base):
     client = relationship("Client", back_populates="job_orders")
     items = relationship("JobOrderItem", back_populates="job_order", cascade="all, delete-orphan")
     batches = relationship("Batch", back_populates="job_order")
-    materials = relationship("JobOrderMaterial", back_populates="job_order", cascade="all, delete-orphan")
+    material_requests = relationship("JobOrderMaterialRequest", back_populates="job_order", cascade="all, delete-orphan")
     item_summaries = relationship("JobOrderItemSummary", back_populates="job_order", cascade="all, delete-orphan")
 
     def __repr__(self):
@@ -265,28 +265,34 @@ class JobOrderItem(Base):
     def __repr__(self):
         return f"<JobOrderItem {self.job_order_id}:{self.color_id}:{self.size_id} x{self.quantity} w{self.weight}>"
 
-class JobOrderMaterial(Base):
-    """Core.job_order_materials - Direct mapping from MySQL"""
-    __tablename__ = "job_order_materials"
+class JobOrderMaterialRequest(Base):
+    """Core.job_order_material_requests - Material consumption requirements per JO/color/panel"""
+    __tablename__ = "job_order_material_requests"
     __table_args__ = (
-        UniqueConstraint('job_order_id', 'material_id', 'color_id', name='uq_job_material'),
+        UniqueConstraint('job_order_id', 'material_id', 'panel_type', 'color_id', name='uq_job_material_request'),
+        CheckConstraint("measurement_scale IN ('KG','M')", name='ck_job_material_request_measurement_scale'),
         {'schema': 'core'}
     )
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     job_order_id = Column(Integer, ForeignKey("core.job_orders.job_order_id", ondelete="CASCADE"), nullable=False)
     material_id = Column(Integer, ForeignKey("core.materials.material_id", ondelete="RESTRICT"), nullable=False)
+    panel_type = Column(String(100), nullable=False)
     color_id = Column(Integer, ForeignKey("core.colors.color_id", ondelete="RESTRICT"), nullable=True)
-    quantity = Column(DECIMAL(10, 3), nullable=False)
-    consumption = Column(DECIMAL(10, 3), nullable=True)
+    consumption = Column(DECIMAL(10, 3), nullable=False)
+    quantity = Column(DECIMAL(10, 3), nullable=True)
+    measurement_scale = Column(String(10), nullable=False, default='KG', server_default='KG')
 
     # Relationships
-    job_order = relationship("JobOrder", back_populates="materials")
-    material = relationship("Material", back_populates="job_order_materials")
-    color = relationship("Color", back_populates="job_order_materials")
+    job_order = relationship("JobOrder", back_populates="material_requests")
+    material = relationship("Material", back_populates="job_order_material_requests")
+    color = relationship("Color", back_populates="job_order_material_requests")
 
     def __repr__(self):
-        return f"<JobOrderMaterial JO:{self.job_order_id} Mat:{self.material_id} Qty:{self.quantity}>"
+        return (
+            f"<JobOrderMaterialRequest JO:{self.job_order_id} Mat:{self.material_id} "
+            f"Panel:{self.panel_type} Color:{self.color_id} Cons:{self.consumption}>"
+        )
 
 # ============================================================================
 # OPERATIONS SCHEMA MODELS
@@ -682,19 +688,6 @@ class ArchivedJobOrderItem(Base):
     quantity = Column(Integer, nullable=False)
     weight = Column(DECIMAL(10,2), nullable=True)
     notes = Column(Text, nullable=True)
-    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
-
-class ArchivedJobOrderMaterial(Base):
-    """Archive.job_order_materials - New table for archived material data"""
-    __tablename__ = "job_order_materials"
-    __table_args__ = {'schema': 'archive'}
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    job_order_id = Column(Integer, nullable=False)  # No foreign key for archived data
-    material_id = Column(Integer, nullable=False)  # No foreign key for archived data
-    color_id = Column(Integer, nullable=True)  # No foreign key for archived data
-    quantity = Column(DECIMAL(10, 3), nullable=False)
-    consumption = Column(DECIMAL(10, 3), nullable=True)
     archived_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 class ArchivedBarcodeScanEvent(Base):

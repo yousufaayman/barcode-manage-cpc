@@ -6,10 +6,73 @@ type SizeOrderJson = {
   numeric_end: number;
 };
 
-const { precedence } = sizeOrder as SizeOrderJson;
+const { precedence, numeric_start, numeric_end } = sizeOrder as SizeOrderJson;
+
 const precedenceMap = new Map<string, number>(
   precedence.map((size, index) => [size.toUpperCase(), index])
 );
+
+/** Full sort order: named sizes from JSON, then integer string sizes numeric_start…numeric_end. */
+const unifiedSizeOrder: string[] = (() => {
+  const nums: string[] = [];
+  for (let n = numeric_start; n <= numeric_end; n++) {
+    nums.push(String(n));
+  }
+  return [...precedence, ...nums];
+})();
+
+const findUnifiedIndex = (raw: string): number | null => {
+  const s = raw.trim();
+  if (!s) return null;
+  const upper = s.toUpperCase();
+  if (precedenceMap.has(upper)) {
+    return precedenceMap.get(upper) ?? null;
+  }
+  if (/^\d+$/.test(s)) {
+    const n = Number.parseInt(s, 10);
+    if (n >= numeric_start && n <= numeric_end) {
+      return precedence.length + (n - numeric_start);
+    }
+  }
+  return null;
+};
+
+export type ExpandSizeRangeResult =
+  | { ok: true; sizes: string[] }
+  | { ok: false; reason: "unknown_endpoint" | "too_large"; unknownValue?: string; maxSpan?: number };
+
+const DEFAULT_MAX_SPAN = 200;
+
+/**
+ * Inclusive range along unified order (precedence letters then numeric sizes per size_order.json).
+ * Endpoints are case-insensitive for letter sizes; numeric endpoints must be whole numbers in range.
+ */
+export const expandSizeRange = (
+  fromRaw: string,
+  toRaw: string,
+  maxSpan: number = DEFAULT_MAX_SPAN
+): ExpandSizeRangeResult => {
+  const i = findUnifiedIndex(fromRaw);
+  if (i === null) {
+    return { ok: false, reason: "unknown_endpoint", unknownValue: fromRaw.trim() };
+  }
+  const j = findUnifiedIndex(toRaw);
+  if (j === null) {
+    return { ok: false, reason: "unknown_endpoint", unknownValue: toRaw.trim() };
+  }
+  const lo = Math.min(i, j);
+  const hi = Math.max(i, j);
+  if (hi - lo > maxSpan) {
+    return { ok: false, reason: "too_large", maxSpan };
+  }
+  return { ok: true, sizes: unifiedSizeOrder.slice(lo, hi + 1) };
+};
+
+export const getSizeOrderBounds = () => ({
+  numeric_start,
+  numeric_end,
+  letterExamples: precedence.slice(0, 5).join(", ")
+});
 
 export const getSizeSortKey = (value?: string | null) => {
   if (!value) {
@@ -23,7 +86,7 @@ export const getSizeSortKey = (value?: string | null) => {
   }
 
   if (/^\d+(\.\d+)?$/.test(normalized)) {
-    return [1, parseFloat(normalized), normalized] as const;
+    return [1, Number.parseFloat(normalized), normalized] as const;
   }
 
   return [2, Number.POSITIVE_INFINITY, normalized] as const;

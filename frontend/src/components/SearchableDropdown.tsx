@@ -1,15 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ChevronDown, X, Check, ChevronsUpDown, Plus } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useCallback, useId } from 'react';
+import { ChevronDown, X, ChevronsUpDown, Plus } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { Button } from './ui/button';
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from './ui/command';
 import {
   Popover,
   PopoverContent,
@@ -27,6 +18,8 @@ interface SearchableDropdownProps {
   disabled?: boolean;
 }
 
+const normalize = (s: string) => s.trim().toLowerCase();
+
 const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
   value,
   onChange,
@@ -38,105 +31,141 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
 
-  // Filter options based on search term
-  const filteredOptions = options.filter(option =>
-    option && 
-    option.toLowerCase() !== 'none' && 
-    option.toLowerCase() !== 'null' && 
-    option.trim() !== '' &&
-    option.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredOptions = useMemo(() => {
+    const q = normalize(searchTerm);
+    return options.filter(option => {
+      if (!option || option.trim() === '') return false;
+      const o = normalize(option);
+      if (o === 'none' || o === 'null') return false;
+      return o.includes(q);
+    });
+  }, [options, searchTerm]);
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-        setSearchTerm('');
-      }
-    };
+  const handleOpenChange = useCallback((open: boolean) => {
+    setIsOpen(open);
+    if (open) {
+      setSearchTerm(value);
+    } else {
+      setSearchTerm('');
+    }
+  }, [value]);
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
-
-  // Handle option selection
   const handleOptionSelect = (option: string) => {
     onChange(option);
-    setIsOpen(false);
-    setSearchTerm('');
+    handleOpenChange(false);
   };
 
-  // Handle clear selection
   const handleClear = () => {
     onChange('');
     setSearchTerm('');
   };
 
   return (
-    <div className={cn(className, "w-full h-10")} ref={dropdownRef}>
-      {label && <label className="text-sm font-medium text-gray-700">{label}</label>}
-      <div className="relative">
-        <div className="relative">
-          <input
-            type="text"
-            value={isOpen ? searchTerm : value}
-            onChange={(e) => {
-              if (isOpen) {
-                setSearchTerm(e.target.value);
-              }
-            }}
-            onFocus={() => {
-              setIsOpen(true);
-              setSearchTerm(value);
-            }}
-            placeholder={placeholder}
-            disabled={disabled}
-            className="input-field pr-10 h-10 w-full"
-          />
-          <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex items-center space-x-1">
-            {value && !isOpen && (
-              <button
-                type="button"
-                onClick={handleClear}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-                disabled={disabled}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-            <ChevronDown 
+    <div className={cn('w-full', className)}>
+      {label ? (
+        <label className="mb-1.5 block text-sm font-medium text-foreground">{label}</label>
+      ) : null}
+      <Popover open={isOpen} onOpenChange={handleOpenChange} modal={false}>
+        <PopoverTrigger asChild>
+          <div className="relative w-full">
+            <input
+              type="text"
+              role="combobox"
+              aria-controls={listboxId}
+              aria-expanded={isOpen}
+              value={isOpen ? searchTerm : value}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (isOpen) {
+                  setSearchTerm(next);
+                } else {
+                  setIsOpen(true);
+                  setSearchTerm(next);
+                }
+              }}
+              onFocus={() => handleOpenChange(true)}
+              placeholder={placeholder}
+              disabled={disabled}
               className={cn(
-                "h-4 w-4 text-gray-400 transition-transform",
-                isOpen && "rotate-180"
-              )} 
+                'input-field h-10 w-full rounded-lg border border-input bg-background pr-10 text-sm shadow-sm',
+                'transition-[box-shadow,border-color] placeholder:text-muted-foreground',
+                'focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+                disabled && 'cursor-not-allowed opacity-50'
+              )}
             />
+            <div className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+              {value && !isOpen ? (
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleClear();
+                  }}
+                  className="pointer-events-auto rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  disabled={disabled}
+                  aria-label="Clear"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              ) : null}
+              <ChevronDown
+                className={cn(
+                  'h-4 w-4 text-muted-foreground transition-transform',
+                  isOpen && 'rotate-180'
+                )}
+              />
+            </div>
           </div>
-        </div>
-        
-        {/* Dropdown */}
-        {isOpen && (
-          <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
+        </PopoverTrigger>
+        <PopoverContent
+          id={listboxId}
+          role="listbox"
+          align="start"
+          sideOffset={6}
+          collisionPadding={8}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          className={cn(
+            'z-50 p-0',
+            'w-[var(--radix-popover-trigger-width)] max-w-[min(100vw-1rem,28rem)]',
+            'min-w-[max(var(--radix-popover-trigger-width),14rem)]',
+            'rounded-lg border bg-popover text-popover-foreground shadow-lg outline-none',
+            'data-[state=open]:animate-in data-[state=closed]:animate-out',
+            'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+            'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95'
+          )}
+        >
+          <div className="max-h-[min(50vh,320px)] overflow-y-auto overscroll-contain py-1">
             {filteredOptions.length > 0 ? (
               filteredOptions.map((option) => (
-                <div
+                <button
                   key={option}
-                  className="px-4 py-2 hover:bg-gray-100 cursor-pointer transition-colors"
+                  type="button"
+                  role="option"
+                  className={cn(
+                    'flex w-full items-center px-3 py-2.5 text-left text-sm',
+                    'hover:bg-accent hover:text-accent-foreground',
+                    'focus:bg-accent focus:text-accent-foreground focus:outline-none'
+                  )}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => handleOptionSelect(option)}
+                  aria-selected={value === option}
                 >
                   {option}
-                </div>
+                </button>
               ))
             ) : (
-              <div className="px-4 py-2 text-gray-500">No options found</div>
+              <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+                No options found
+              </div>
             )}
           </div>
-        )}
-      </div>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 };
@@ -148,121 +177,142 @@ interface EditableDropdownProps {
   placeholder?: string;
   disabled?: boolean;
   className?: string;
+  /** When false, hides the “+ Add …” row. Typing still updates the value (free text). */
+  showAddNewOption?: boolean;
 }
 
 export const EditableDropdown: React.FC<EditableDropdownProps> = ({
   value,
   onValueChange,
   options,
-  placeholder = "Select or type...",
+  placeholder = 'Select or type...',
   disabled = false,
-  className
+  className,
+  showAddNewOption = true,
 }) => {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [inputValue, setInputValue] = useState(value);
-  const [isTyping, setIsTyping] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const listboxId = useId();
 
   useEffect(() => {
     setInputValue(value);
   }, [value]);
 
+  const filteredOptions = useMemo(() => {
+    const q = normalize(inputValue);
+    if (!q) return options;
+    return options.filter((option) => normalize(option).includes(q));
+  }, [options, inputValue]);
+
+  const showAddNew =
+    showAddNewOption &&
+    inputValue.trim() &&
+    !options.some((o) => normalize(o) === normalize(inputValue));
+
   const handleInputChange = (newValue: string) => {
     setInputValue(newValue);
-    setIsTyping(true);
     onValueChange(newValue);
   };
 
   const handleSelect = (selectedValue: string) => {
     setInputValue(selectedValue);
-    setIsTyping(false);
     onValueChange(selectedValue);
     setOpen(false);
   };
 
-  const handleInputFocus = () => {
-    setIsTyping(true);
-    setOpen(true);
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
   };
-
-  const handleInputBlur = () => {
-    // Only close if not clicking on dropdown items
-    setTimeout(() => {
-      if (!containerRef.current?.contains(document.activeElement)) {
-        setIsTyping(false);
-        setOpen(false);
-      }
-    }, 150);
-  };
-
-  const filteredOptions = options.filter(option =>
-    option.toLowerCase().includes(inputValue.toLowerCase())
-  );
-
-  const showAddNew = inputValue && !options.includes(inputValue) && isTyping;
 
   return (
-    <div className="relative" ref={containerRef}>
-      <input
-        value={inputValue}
-        onChange={(e) => handleInputChange(e.target.value)}
-        onFocus={handleInputFocus}
-        onBlur={handleInputBlur}
-        placeholder={placeholder}
-        disabled={disabled}
+    <Popover open={open} onOpenChange={handleOpenChange} modal={false}>
+      <PopoverTrigger asChild>
+        <div className={cn('relative w-full', className)}>
+          <input
+            value={inputValue}
+            onChange={(e) => handleInputChange(e.target.value)}
+            onFocus={() => setOpen(true)}
+            placeholder={placeholder}
+            disabled={disabled}
+            role="combobox"
+            aria-controls={listboxId}
+            aria-expanded={open}
+            className={cn(
+              'flex h-10 w-full rounded-lg border border-input bg-background py-2 pl-3 pr-9 text-sm shadow-sm',
+              'transition-[box-shadow,border-color] ring-offset-background',
+              'placeholder:text-muted-foreground',
+              'focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+              'disabled:cursor-not-allowed disabled:opacity-50'
+            )}
+          />
+          <ChevronsUpDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground opacity-60" />
+        </div>
+      </PopoverTrigger>
+      <PopoverContent
+        id={listboxId}
+        role="listbox"
+        align="start"
+        sideOffset={6}
+        collisionPadding={8}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onCloseAutoFocus={(e) => e.preventDefault()}
         className={cn(
-          "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
-          className
+          'z-50 p-0',
+          'w-[var(--radix-popover-trigger-width)] max-w-[min(100vw-1rem,28rem)]',
+          'min-w-[max(var(--radix-popover-trigger-width),14rem)]',
+          'rounded-lg border bg-popover text-popover-foreground shadow-lg outline-none',
+          'data-[state=open]:animate-in data-[state=closed]:animate-out',
+          'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+          'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95'
         )}
-      />
-      <ChevronsUpDown className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 opacity-50 pointer-events-none" />
-      
-      {open && (
-        <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
-          <div className="p-2">
-            <input
-              placeholder={placeholder}
-              value={inputValue}
-              onChange={(e) => handleInputChange(e.target.value)}
-              className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-              autoFocus
-            />
+      >
+        {showAddNew ? (
+          <div className="border-b border-border">
+            <button
+              type="button"
+              role="option"
+              className={cn(
+                'flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium text-primary',
+                'hover:bg-accent focus:bg-accent focus:outline-none'
+              )}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => handleSelect(inputValue.trim())}
+              aria-selected={false}
+            >
+              <Plus className="h-4 w-4 shrink-0" />
+              {t('jobOrders.dropdown.addNew', { value: inputValue.trim() })}
+            </button>
           </div>
-          
-          {showAddNew && (
-            <div className="border-t">
-              <div
-                className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-blue-600 text-sm"
-                onClick={() => handleSelect(inputValue)}
+        ) : null}
+        <div className="max-h-[min(50vh,320px)] overflow-y-auto overscroll-contain py-1">
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((option) => (
+              <button
+                key={option}
+                type="button"
+                role="option"
+                className={cn(
+                  'flex w-full items-center px-3 py-2.5 text-left text-sm',
+                  'hover:bg-accent hover:text-accent-foreground',
+                  'focus:bg-accent focus:text-accent-foreground focus:outline-none'
+                )}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => handleSelect(option)}
+                aria-selected={value === option}
               >
-                <Plus className="inline mr-2 h-4 w-4" />
-                {t('jobOrders.dropdown.addNew', { value: inputValue })}
-              </div>
+                {option}
+              </button>
+            ))
+          ) : (
+            <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+              {t('jobOrders.dropdown.noOptionsFound')}
             </div>
           )}
-          
-          <div className="border-t">
-            {filteredOptions.length > 0 ? (
-              filteredOptions.map((option) => (
-                <div
-                  key={option}
-                  className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm"
-                  onClick={() => handleSelect(option)}
-                >
-                  {option}
-                </div>
-              ))
-            ) : (
-              <div className="px-4 py-2 text-gray-500 text-sm">
-                {t('jobOrders.dropdown.noOptionsFound')}
-              </div>
-            )}
-          </div>
         </div>
-      )}
-    </div>
+      </PopoverContent>
+    </Popover>
   );
 };
 
-export default SearchableDropdown; 
+export default SearchableDropdown;

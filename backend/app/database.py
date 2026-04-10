@@ -41,7 +41,7 @@ def create_indexes():
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_core_materials_name ON core.materials (name);",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_core_production_phases_name ON core.production_phases (name);",
         "CREATE INDEX IF NOT EXISTS idx_core_job_order_items_composite ON core.job_order_items (job_order_id, color_id, size_id);",
-        "CREATE INDEX IF NOT EXISTS idx_core_job_order_materials_composite ON core.job_order_materials (job_order_id, material_id, color_id);",
+        "CREATE INDEX IF NOT EXISTS idx_core_job_order_material_requests_composite ON core.job_order_material_requests (job_order_id, material_id, panel_type, color_id);",
         "CREATE INDEX IF NOT EXISTS idx_core_production_phases_type ON core.production_phases (type);",
         "CREATE INDEX IF NOT EXISTS idx_core_production_phases_sequence ON core.production_phases (sequence_order);",
         "CREATE INDEX IF NOT EXISTS idx_core_job_orders_print_config ON core.job_orders USING GIN (print_config);",

@@ -439,9 +439,22 @@ class JobOrderPrintConfig(BaseModel):
             return value
 
         if isinstance(value, dict):
-            type_value = value.get("type") or value.get("method") or value.get("mode")
+            type_value = (
+                value.get("type")
+                or value.get("Type")
+                or value.get("method")
+                or value.get("mode")
+            )
             if not type_value:
-                return None
+                # Do not drop valid printing data when legacy rows omit `type`
+                cb = value.get("color_breakdown") or value.get("colorBreakdown")
+                pl = value.get("placement_labels") or value.get("placementLabels")
+                has_cb = isinstance(cb, dict) and bool(cb)
+                has_pl = isinstance(pl, dict) and bool(pl)
+                if has_cb or has_pl:
+                    type_value = "Printing"
+                else:
+                    return None
 
             merged_fields: Dict[str, str] = {}
             placement_labels: Dict[str, str] = {}
@@ -463,14 +476,14 @@ class JobOrderPrintConfig(BaseModel):
                         continue
                     merged_fields[key] = str(entry_value)
 
-            labels = value.get("placement_labels")
+            labels = value.get("placement_labels") or value.get("placementLabels")
             if isinstance(labels, dict):
                 for key, label in labels.items():
                     if not key or label is None:
                         continue
                     placement_labels[key] = str(label)
 
-            breakdown = value.get("color_breakdown")
+            breakdown = value.get("color_breakdown") or value.get("colorBreakdown")
             if isinstance(breakdown, dict):
                 for color, placements in breakdown.items():
                     if not isinstance(placements, dict):
@@ -485,7 +498,18 @@ class JobOrderPrintConfig(BaseModel):
 
             # Any additional root-level entries become key/value pairs
             for key, entry_value in value.items():
-                if key in {"type", "method", "mode", "details", "fields", "placement_labels", "color_breakdown"}:
+                if key in {
+                    "type",
+                    "Type",
+                    "method",
+                    "mode",
+                    "details",
+                    "fields",
+                    "placement_labels",
+                    "placementLabels",
+                    "color_breakdown",
+                    "colorBreakdown",
+                }:
                     continue
                 if entry_value is None:
                     continue
@@ -611,27 +635,23 @@ class JobOrder(JobOrderBase):
     class Config:
         from_attributes = True
 
-# Job Order Material schemas
-class JobOrderMaterialCreateWithName(BaseModel):
-    material_name: str
-    quantity: float
+class JobOrderMaterialRequestCreateWithName(BaseModel):
+    type: str
+    panel_type: str
+    consumption: float
+    quantity: Optional[float] = None
+    measurement_scale: Literal["KG", "M"] = "KG"
     color_name: Optional[str] = None
-    notes: Optional[str] = None
-    consumption: Optional[float] = None
 
-class JobOrderMaterialBase(BaseModel):
-    material_id: int
-    color_id: Optional[int] = None
-    quantity: float
-    consumption: Optional[float] = None
 
-class JobOrderMaterialCreate(JobOrderMaterialBase):
-    pass
-
-class JobOrderMaterial(JobOrderMaterialBase):
+class JobOrderMaterialRequest(BaseModel):
     id: int
     job_order_id: int
-    material_name: Optional[str] = None
+    type: str
+    panel_type: str
+    consumption: float
+    quantity: Optional[float] = None
+    measurement_scale: Literal["KG", "M"] = "KG"
     color_name: Optional[str] = None
 
     class Config:

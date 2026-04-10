@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { jobOrderApi } from '../services/api';
+import api from '../services/api';
 import { Button } from '../components/ui/button';
 import { Edit, X, ChevronRight, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -25,8 +26,22 @@ type PrintConfigState = {
 
 const normalizePrintConfig = (config: any): PrintConfigState | null => {
   if (!config) return null;
+  if (typeof config === 'string') {
+    try {
+      config = JSON.parse(config);
+    } catch {
+      return null;
+    }
+  }
 
-  const typeValue = config.type || config.method || config.mode;
+  let typeValue = config.type || config.Type || config.method || config.mode;
+  if (!typeValue) {
+    const cb = config.color_breakdown || config.colorBreakdown;
+    const pl = config.placement_labels || config.placementLabels;
+    const hasCb = cb && typeof cb === 'object' && Object.keys(cb).length > 0;
+    const hasPl = pl && typeof pl === 'object' && Object.keys(pl).length > 0;
+    if (hasCb || hasPl) typeValue = 'Printing';
+  }
   if (!typeValue) return null;
 
   const mergedFields: Record<string, string> = {};
@@ -119,10 +134,22 @@ const getPublicImageUrl = (path: string): string => {
   if (!path) return '';
   // If backend already returns a web-accessible URL, use it directly
   if (path.startsWith('http') || path.startsWith('/')) return path;
-  // Otherwise, extract filename and serve from /static/<filename>
+  // Otherwise, extract filename and serve from backend /static/<filename>
   const parts = path.split(/\\|\//); // split on both backslash and slash
   const filename = parts[parts.length - 1];
-  return `/static/${encodeURIComponent(filename)}`;
+  const baseApiUrl = String(api.defaults.baseURL || '').replace(/\/api\/v1\/?$/, '');
+  if (!baseApiUrl) {
+    return `/static/${encodeURIComponent(filename)}`;
+  }
+  return `${baseApiUrl}/static/${encodeURIComponent(filename)}`;
+};
+
+/** Localized heading for print_config.type (API stores English enum values). */
+const translatePrintTechnique = (type: string | undefined | null, t: (key: string) => string): string => {
+  const n = String(type ?? '').trim().toLowerCase();
+  if (n === 'embroidery') return t('jobOrderDetails.techniqueEmbroidery');
+  if (n === 'printing') return t('jobOrderDetails.techniquePrinting');
+  return String(type ?? '').trim();
 };
 
 const JobOrderDetailsPage: React.FC = () => {
@@ -226,8 +253,10 @@ const JobOrderDetailsPage: React.FC = () => {
   // Track if this is the initial page load
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-  const parsedViewPrints = normalizePrintConfig(viewJobOrder?.prints);
-  const viewPrintEntries = parsedViewPrints ? Object.entries(parsedViewPrints.fields) : [];
+  const parsedViewPrints = normalizePrintConfig(
+    viewJobOrder?.prints ?? viewJobOrder?.print_config ?? (viewJobOrder as any)?.printConfig
+  );
+  const viewPrintFieldEntries = parsedViewPrints ? Object.entries(parsedViewPrints.fields) : [];
   const viewPrintColorBreakdown = parsedViewPrints?.colorBreakdown || {};
   const viewPlacementLabels = parsedViewPrints?.placementLabels || {};
   const viewColorBreakdownEntries = Object.entries(viewPrintColorBreakdown);
@@ -532,23 +561,35 @@ const JobOrderDetailsPage: React.FC = () => {
     const rows = colors.map((color: string) => {
       const colorItems = sortedItems.filter((it: any) => it.color_name === color);
       const cells = sizes.map((sz: string) => {
-        const item = colorItems.find((it: any) => it.size_value === sz);
+        const item: any = colorItems.find((it: any) => it.size_value === sz);
         return `<td style="border:1px solid #000;padding:4px;text-align:center;">${item ? item.quantity : ''}</td>`;
       }).join('');
       const totalColor = viewJobOrder.items.filter((it: any) => it.color_name === color).reduce((sum: number, it: any) => sum + it.quantity, 0);
       return `<tr><td style="border:1px solid #000;padding:4px;min-width:22mm;">${color}</td>${cells}<td style="border:1px solid #000;padding:4px;text-align:center;font-weight:bold;">${totalColor}</td></tr>`;
     }).join('');
 
+    const totalPerSizeCells = sizes.map((sz: string) => {
+      const totalForSize = sortedItems
+        .filter((it: any) => it.size_value === sz)
+        .reduce((sum: number, it: any) => sum + (Number(it.quantity) || 0), 0);
+      return `<td style="border:1px solid #000;padding:4px;text-align:center;font-weight:bold;">${totalForSize}</td>`;
+    }).join('');
+
     const totalJobOrder = viewJobOrder.items.reduce((sum: number, it: any) => sum + it.quantity, 0);
 
     // Materials section
-    const matsHTML = materials.map((m: any) => `<tr><td style="border:1px solid #000;padding:4px;">${m.material_name}</td><td style="border:1px solid #000;padding:4px;">${m.color_name || '-'}</td><td style="border:1px solid #000;padding:4px;text-align:center;font-weight:bold;">${m.quantity}</td></tr>`).join('');
+    const matsHTML = materials.map((m: any) => `<tr><td style="border:1px solid #000;padding:4px;">${m.material_name}</td><td style="border:1px solid #000;padding:4px;">${m.panel_type || '-'}</td><td style="border:1px solid #000;padding:4px;">${m.color_name || '-'}</td><td style="border:1px solid #000;padding:4px;text-align:center;">${m.consumption ?? '-'}${m.measurement_scale ? ` ${m.measurement_scale}` : ''}</td><td style="border:1px solid #000;padding:4px;text-align:center;font-weight:bold;">${m.quantity}${m.measurement_scale ? ` ${m.measurement_scale}` : ''}</td></tr>`).join('');
 
     // Printing sections
     let printConfigHTML = '';
-    const currentPrintConfig = normalizePrintConfig(viewJobOrder.prints);
+    const currentPrintConfig = normalizePrintConfig(
+      viewJobOrder.prints ?? viewJobOrder.print_config ?? (viewJobOrder as any).printConfig
+    );
     if (currentPrintConfig) {
       const fieldEntries = Object.entries(currentPrintConfig.fields);
+      const detailEntries: Array<[string, string]> = fieldEntries.map(
+        ([key, value]) => [key, String(value)] as [string, string]
+      );
       const colorBreakdownEntries = Object.entries(currentPrintConfig.colorBreakdown || {});
       const placementEntries = Object.entries(currentPrintConfig.placementLabels || {});
       const derivedPlacementEntries = placementEntries.length > 0 ? placementEntries : Array.from(
@@ -566,11 +607,11 @@ const JobOrderDetailsPage: React.FC = () => {
           .join(' ') || key
       ]);
 
-      const generalDetailsHTML = fieldEntries.length > 0
+      const generalDetailsHTML = detailEntries.length > 0
         ? `
         <table style="width:100%;border-collapse:collapse;font-size:10pt;">
-          <thead><tr><th style="border:1px solid #000;padding:4px;">${t('common.key')}</th><th style="border:1px solid #000;padding:4px;">${t('common.value')}</th></tr></thead>
-          <tbody>${fieldEntries.map(([key, value]) => `<tr><td style="border:1px solid #000;padding:4px;">${key}</td><td style="border:1px solid #000;padding:4px;">${value}</td></tr>`).join('')}</tbody>
+          <thead><tr><th style="border:1px solid #000;padding:4px;text-align:center;">${t('common.key')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('common.value')}</th></tr></thead>
+          <tbody>${detailEntries.map(([key, value]) => `<tr><td style="border:1px solid #000;padding:4px;">${key}</td><td style="border:1px solid #000;padding:4px;">${value}</td></tr>`).join('')}</tbody>
         </table>`
         : '';
 
@@ -579,8 +620,8 @@ const JobOrderDetailsPage: React.FC = () => {
         <table style="width:100%;border-collapse:collapse;font-size:10pt;margin-top:4px;">
           <thead>
             <tr>
-              <th style="border:1px solid #000;padding:4px;">${t('barcode.color')}</th>
-              ${derivedPlacementEntries.map(([, label]) => `<th style="border:1px solid #000;padding:4px;">${label}</th>`).join('')}
+              <th style="border:1px solid #000;padding:4px;text-align:center;">${t('barcode.color')}</th>
+              ${derivedPlacementEntries.map(([, label]) => `<th style="border:1px solid #000;padding:4px;text-align:center;">${label}</th>`).join('')}
             </tr>
           </thead>
           <tbody>
@@ -596,52 +637,62 @@ const JobOrderDetailsPage: React.FC = () => {
 
       if (generalDetailsHTML || colorTableHTML) {
         printConfigHTML = `
-        <h4 style="margin:6px 0 2px 0;">${t('jobOrderDetails.printingDetails')} (${currentPrintConfig.type})</h4>
+        <h4 style="margin:6px 0 2px 0;text-align:center;">${translatePrintTechnique(currentPrintConfig.type, t)}</h4>
         ${generalDetailsHTML}
         ${colorTableHTML}`;
       }
     }
 
+    const companyLogoSrc = `${window.location.origin}/company-logo.png`;
+
     return `
-      <div class="print-job-order" style="width:100%;border:1px solid #000;margin-bottom:2mm;padding:3mm;box-sizing:border-box;">
-        <p style="margin:0 0 2px 0;font-weight:bold;">${t('jobOrders.clientName')}: ${viewJobOrder.client_name || '-'}</p>
-        <p style="margin:0 0 2px 0;">${t('jobOrders.modelName')}: ${viewJobOrder.model_name || '-'}</p>
-        <p style="margin:0 0 4px 0;font-size:10pt;">${t('jobOrders.jobOrderNumber')}: ${viewJobOrder.job_order_number}</p>
-        ${viewJobOrder.date_created ? `<p style="margin:0 0 4px 0;font-size:10pt;">${t('jobOrderDetails.dateCreated')}: ${format(new Date(viewJobOrder.date_created), 'yyyy-MM-dd HH:mm')}</p>` : ''}
+      <div class="print-job-order" style="position:relative;width:100%;border:1px solid #000;margin-bottom:2mm;padding:3mm;box-sizing:border-box;">
+        <img src="${companyLogoSrc}" alt="Company Logo" style="position:absolute;top:2mm;left:2mm;width:14mm;height:14mm;object-fit:contain;" />
+        <p style="margin:0 0 4px 0;text-align:center;font-size:13pt;font-weight:700;">${t('jobOrders.jobOrderNumber')}: ${viewJobOrder.job_order_number}</p>
+        <p style="margin:0 0 2px 0;font-size:10pt;text-align:center;">
+          ${t('jobOrders.clientName')}: ${viewJobOrder.client_name || '-'}
+          &nbsp;&nbsp;|&nbsp;&nbsp;
+          ${t('jobOrders.modelName')}: ${viewJobOrder.model_name || '-'}
+        </p>
+        ${viewJobOrder.date_created ? `<p style="margin:0 0 4px 0;font-size:10pt;text-align:center;">${t('jobOrderDetails.dateCreated')}: ${format(new Date(viewJobOrder.date_created), 'yyyy-MM-dd')}</p>` : ''}
 
         <table style="width:100%;border-collapse:collapse;table-layout:fixed;margin-top:2px;font-size:9pt;">
           <thead>
             <tr>
-              <th style="border:1px solid #000;padding:4px;">${t('barcode.color')}</th>
+              <th style="border:1px solid #000;padding:4px;text-align:center;">${t('barcode.color')}</th>
               ${sizeHeader}
-              <th style="border:1px solid #000;padding:4px;">${t('common.total')}</th>
+              <th style="border:1px solid #000;padding:4px;text-align:center;">${t('common.total')}</th>
             </tr>
           </thead>
           <tbody>
             ${rows}
-            <tr>
+            <tr class="print-total-row">
               <td style="border:1px solid #000;padding:4px;font-weight:bold;">${t('common.total')}</td>
-              <td colspan="${sizes.length}" style="border:2px solid #000;padding:4px;text-align:center;font-weight:bold;">${totalJobOrder}</td>
+              ${totalPerSizeCells}
+              <td style="border:2px solid #000;padding:4px;text-align:center;font-weight:bold;">${totalJobOrder}</td>
             </tr>
           </tbody>
         </table>
 
-        ${materials.length > 0 ? `
-        <h4 style="margin:6px 0 2px 0;">${t('jobOrderDetails.requiredMaterials')}</h4>
-        <table style="width:100%;border-collapse:collapse;font-size:10pt;">
-          <thead><tr><th style="border:1px solid #000;padding:4px;">${t('jobOrderDetails.material')}</th><th style="border:1px solid #000;padding:4px;">${t('barcode.color')}</th><th style="border:1px solid #000;padding:4px;">${t('barcode.quantity')}</th></tr></thead>
-          <tbody>${matsHTML}</tbody>
-        </table>` : ''}
+        ${(materials.length > 0 || viewJobOrder.image_url) ? `
+        <div style="display:flex;align-items:flex-start;gap:4mm;margin-top:3px;">
+          ${viewJobOrder.image_url ? `<img src="${getPublicImageUrl(viewJobOrder.image_url)}" alt="img" style="width:55mm;height:45mm;object-fit:fill;border:1px solid #000;flex:0 0 55mm;"/>` : ''}
+          ${materials.length > 0 ? `
+          <div style="flex:1;min-width:0;">
+            <h4 style="margin:0 0 2px 0;text-align:center;">${t('jobOrderDetails.requiredMaterials')}</h4>
+            <table style="width:100%;border-collapse:collapse;font-size:10pt;">
+              <thead><tr><th style="border:1px solid #000;padding:4px;text-align:center;">${t('jobOrderDetails.material')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('jobOrderDetails.panelType')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('barcode.color')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('jobOrderDetails.consumption')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('barcode.quantity')}</th></tr></thead>
+              <tbody>${matsHTML}</tbody>
+            </table>
+          </div>` : ''}
+        </div>` : ''}
 
         ${printConfigHTML}
 
-        <div style="display:flex;align-items:flex-start;gap:4mm;margin-top:3px;">
-          ${viewJobOrder.image_url ? `<img src="${getPublicImageUrl(viewJobOrder.image_url)}" alt="img" style="width:55mm;height:45mm;object-fit:fill;border:1px solid #000;"/>` : ''}
-          ${viewJobOrder.notes ? `
-          <div style="border:1px solid #000;padding:3px;font-size:9pt;flex:1;">
-            <p style="margin:0;"><strong>${t('jobOrderDetails.notes')}</strong> ${viewJobOrder.notes}</p>
-          </div>` : ''}
-        </div>
+        ${viewJobOrder.notes ? `
+        <div style="border:1px solid #000;padding:3px;font-size:9pt;margin-top:3px;">
+          <p style="margin:0;"><strong>${t('jobOrderDetails.notes')}</strong> ${viewJobOrder.notes}</p>
+        </div>` : ''}
       </div>`;
   };
 
@@ -654,8 +705,28 @@ const JobOrderDetailsPage: React.FC = () => {
       @page { size: A4 portrait; margin: 5mm; }
       body { font-family: Arial, sans-serif; direction: ${dirAttr}; margin:0; }
       .print-job-order { page-break-inside: avoid; break-inside: avoid; min-height: 75mm; }
-      table { border-collapse: collapse; width:100%; }
-      th, td { border:1px solid #000; padding:4px; }
+      .print-job-order table { border-collapse: collapse; width:100%; }
+      .print-job-order th, .print-job-order td { border:1px solid #000; padding:4px; }
+      .print-job-order thead th {
+        background: #e8e8e8 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .print-job-order tbody tr:nth-child(odd) {
+        background-color: #f5f5f5 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .print-job-order tbody tr:nth-child(even) {
+        background-color: #ffffff !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .print-job-order tbody tr.print-total-row {
+        background-color: #dddddd !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
     </style></head><body>`);
     for (let i = 0; i < printCopies; i++) {
       printWindow.document.write(generatePrintHTML());
@@ -771,86 +842,9 @@ const JobOrderDetailsPage: React.FC = () => {
   }, [jobOrderId, editDialogOpen, t, toast, isInitialLoad]);
 
   // Edit logic
-  const handleEditJobOrder = async () => {
+  const handleEditJobOrder = () => {
     if (!viewJobOrder) return;
-    try {
-      setEditLoading(true);
-      // Fetch the full job order details
-      const fullJobOrder = await jobOrderApi.getById(viewJobOrder.job_order_id);
-      setEditingJobOrder(fullJobOrder);
-      // Initialize edit items with current quantities
-      const items = fullJobOrder.items.map(item => ({
-        item_id: item.item_id,
-        quantity: item.quantity,
-        color_name: item.color_name || '',
-        size_value: item.size_value || ''
-      }));
-      setEditItems(items);
-      // Load notes for editing
-      setEditNotes(fullJobOrder.notes || '');
-      // Fetch and initialize materials
-      const materials = await jobOrderApi.getMaterials(fullJobOrder.job_order_id);
-      // Map materials to the expected format
-      const mappedMats = materials.map(mat => ({
-        material_name: mat.material_name,
-        color_name: mat.color_name || '',
-        quantity: mat.quantity,
-        notes: mat.notes
-      }));
-      setEditMaterials(mappedMats);
-      setEditMaterialName(materials.length > 0 ? materials[0].material_name : '');
-      
-      // Initialize consumption values from existing materials
-      const newConsumptionValues: Record<string, number> = {};
-      const newBulkConsumption: Record<string, number> = {};
-      
-      if (materials.length > 0) {
-        // Group materials by color to calculate consumption per unit
-        const colorGroups: Record<string, { material_name: string; quantity: number; consumption: number }[]> = {};
-        
-        materials.forEach(mat => {
-          if (mat.color_name && mat.consumption !== null && mat.consumption !== undefined) {
-            if (!colorGroups[mat.color_name]) {
-              colorGroups[mat.color_name] = [];
-            }
-            colorGroups[mat.color_name].push({
-              material_name: mat.material_name,
-              quantity: mat.quantity,
-              consumption: mat.consumption
-            });
-          }
-        });
-        
-        // Use per-unit consumption directly from backend
-        Object.entries(colorGroups).forEach(([colorName, colorMats]) => {
-          colorMats.forEach(colorMat => {
-            if (colorMat.consumption !== undefined && colorMat.consumption !== null) {
-              const cellKey = getConsumptionCellKey(colorMat.material_name, colorName, 'body');
-              newConsumptionValues[cellKey] = colorMat.consumption;
-              newBulkConsumption['body'] = colorMat.consumption;
-            }
-          });
-        });
-      }
-      
-      setEditConsumptionValues(newConsumptionValues);
-      setEditBulkConsumption(newBulkConsumption);
-      
-      // Initialize print config
-      const normalizedPrints = normalizePrintConfig(fullJobOrder.prints);
-      setEditPrints(normalizedPrints);
-      
-      setEditDialogOpen(true);
-    } catch (error) {
-      console.error('Error fetching job order details:', error);
-      toast({
-        title: t('common.error'),
-        description: 'Failed to load job order details for editing',
-        variant: 'destructive'
-      });
-    } finally {
-      setEditLoading(false);
-    }
+    navigate(`/add-job-order?editJobOrderId=${viewJobOrder.job_order_id}`);
   };
   const handleQuantityChange = (itemId: number, newQuantity: number) => {
     setEditItems(prev =>
@@ -889,7 +883,9 @@ const JobOrderDetailsPage: React.FC = () => {
         notes: editNotes,
       };
       // Include print config if provided or if it was removed
-      const originalPrints = normalizePrintConfig(editingJobOrder.prints);
+      const originalPrints = normalizePrintConfig(
+        editingJobOrder.prints ?? editingJobOrder.print_config ?? (editingJobOrder as any).printConfig
+      );
       const currentPrintPayload = serializePrintConfig(editPrints);
       const originalPrintPayload = serializePrintConfig(originalPrints);
       if (JSON.stringify(currentPrintPayload) !== JSON.stringify(originalPrintPayload)) {
@@ -1305,33 +1301,35 @@ const JobOrderDetailsPage: React.FC = () => {
               <strong>{t('jobOrderDetails.notes')}:</strong> {viewJobOrder.notes}
             </div>
           )}
-        <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="mb-5 flex w-full rounded-2xl bg-white/95 p-1.5 shadow-sm border border-slate-200 backdrop-blur">
+        <Tabs defaultValue="overview" className="w-full min-w-0">
+          <div className="mb-5 w-full min-w-0 overflow-x-auto overflow-y-hidden overscroll-x-contain scroll-smooth pb-1 [scrollbar-width:thin] [-webkit-overflow-scrolling:touch]">
+            <TabsList className="inline-flex h-auto min-h-[2.75rem] w-max max-w-none flex-nowrap items-stretch gap-1 rounded-2xl border border-slate-200 bg-white/95 p-1 shadow-sm backdrop-blur sm:gap-1.5 sm:p-1.5 md:flex md:w-full md:gap-0 md:p-1.5">
             <TabsTrigger
               value="overview"
-              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-xl transition-all duration-200 data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
+              className="shrink-0 rounded-xl px-2.5 py-2 text-xs font-medium transition-all duration-200 sm:px-3 sm:text-sm md:flex-1 md:px-4 md:py-2.5 md:text-base data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
             >
               {t('jobOrderDetails.overview')}
             </TabsTrigger>
             <TabsTrigger
               value="phases"
-              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-xl transition-all duration-200 data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
+              className="shrink-0 rounded-xl px-2.5 py-2 text-xs font-medium transition-all duration-200 sm:px-3 sm:text-sm md:flex-1 md:px-4 md:py-2.5 md:text-base data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
             >
               {t('jobOrderDetails.phaseDetails')}
             </TabsTrigger>
             <TabsTrigger
               value="batch_compensation"
-              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-xl transition-all duration-200 data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
+              className="shrink-0 rounded-xl px-2.5 py-2 text-xs font-medium transition-all duration-200 sm:px-3 sm:text-sm md:flex-1 md:px-4 md:py-2.5 md:text-base data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
             >
               {t('batchGeneration.tabCompensation')}
             </TabsTrigger>
             <TabsTrigger
               value="qc"
-              className="flex-1 px-4 py-2.5 text-sm md:text-base font-medium rounded-xl transition-all duration-200 data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
+              className="shrink-0 rounded-xl px-2.5 py-2 text-xs font-medium transition-all duration-200 sm:px-3 sm:text-sm md:flex-1 md:px-4 md:py-2.5 md:text-base data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-md data-[state=inactive]:text-slate-600 data-[state=inactive]:hover:bg-slate-100 data-[state=inactive]:hover:text-slate-900"
             >
               QC
             </TabsTrigger>
           </TabsList>
+          </div>
           
           <TabsContent value="overview">
             <div>
@@ -1623,78 +1621,176 @@ const JobOrderDetailsPage: React.FC = () => {
               </div>
 
                   {materials.length > 0 && (
-                <div className="mt-8">
-                  <h3 className="text-lg font-semibold mb-2">{t('jobOrderDetails.requiredMaterials')}</h3>
-              <table className="min-w-full border rounded-lg overflow-hidden text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="px-4 py-2 border-b text-left">{t('jobOrderDetails.material')}</th>
-                    <th className="px-4 py-2 border-b text-left">{t('barcode.color')}</th>
-                    <th className="px-4 py-2 border-b text-right">{t('barcode.quantity')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {materials.map((m, idx) => (
-                    <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                      <td className="px-4 py-2 border-b">{m.material_name}</td>
-                      <td className="px-4 py-2 border-b">{m.color_name || '-'}</td>
-                      <td className="px-4 py-2 border-b text-right">{m.quantity}</td>
-                    </tr>
-                  ))}
-                  </tbody>
-                </table>
+                <div className="mt-8 min-w-0">
+                  <h3 className="text-lg font-semibold mb-3">{t('jobOrderDetails.requiredMaterials')}</h3>
+                  <div className="space-y-3 sm:hidden">
+                    {materials.map((m, idx) => (
+                      <div
+                        key={idx}
+                        className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+                      >
+                        <dl className="space-y-2.5 text-sm">
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="text-xs font-medium text-slate-500">{t('jobOrderDetails.material')}</dt>
+                            <dd className="font-medium text-slate-900 break-words">{m.material_name}</dd>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="text-xs font-medium text-slate-500">{t('jobOrderDetails.panelType')}</dt>
+                            <dd className="text-slate-800 break-words">{m.panel_type || '-'}</dd>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="text-xs font-medium text-slate-500">{t('barcode.color')}</dt>
+                            <dd className="text-slate-800 break-words">{m.color_name || '-'}</dd>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="text-xs font-medium text-slate-500">{t('jobOrderDetails.consumption')}</dt>
+                            <dd className="text-slate-800">
+                              {m.consumption ?? '-'}
+                              {m.measurement_scale ? ` ${m.measurement_scale}` : ''}
+                            </dd>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="text-xs font-medium text-slate-500">{t('barcode.quantity')}</dt>
+                            <dd className="font-semibold tabular-nums text-slate-900">
+                              {m.quantity}
+                              {m.measurement_scale ? ` ${m.measurement_scale}` : ''}
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="hidden sm:block overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-lg border border-slate-200 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+                    <table className="min-w-[36rem] w-full text-sm">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="px-3 py-2 border-b text-left md:px-4">{t('jobOrderDetails.material')}</th>
+                          <th className="px-3 py-2 border-b text-left md:px-4">{t('jobOrderDetails.panelType')}</th>
+                          <th className="px-3 py-2 border-b text-left md:px-4">{t('barcode.color')}</th>
+                          <th className="px-3 py-2 border-b text-right md:px-4">{t('jobOrderDetails.consumption')}</th>
+                          <th className="px-3 py-2 border-b text-right md:px-4">{t('barcode.quantity')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {materials.map((m, idx) => (
+                          <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                            <td className="px-3 py-2 border-b md:px-4">{m.material_name}</td>
+                            <td className="px-3 py-2 border-b md:px-4">{m.panel_type || '-'}</td>
+                            <td className="px-3 py-2 border-b md:px-4">{m.color_name || '-'}</td>
+                            <td className="px-3 py-2 border-b text-right md:px-4">
+                              {m.consumption ?? '-'}
+                              {m.measurement_scale ? ` ${m.measurement_scale}` : ''}
+                            </td>
+                            <td className="px-3 py-2 border-b text-right tabular-nums md:px-4">
+                              {m.quantity}
+                              {m.measurement_scale ? ` ${m.measurement_scale}` : ''}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
 
-              {/* Printing Details */}
-              {parsedViewPrints && (viewPrintEntries.length > 0 || viewColorBreakdownEntries.length > 0) && (
-                <div className="mt-8 space-y-4">
-          <h3 className="text-lg font-semibold">{t('jobOrderDetails.printingDetails')} ({parsedViewPrints.type})</h3>
-          {viewPrintEntries.length > 0 && (
-            <div className="overflow-x-auto">
-              <table className="min-w-full border rounded-lg overflow-hidden text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="px-4 py-2 border-b text-left">{t('common.key')}</th>
-                    <th className="px-4 py-2 border-b text-left">{t('common.value')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {viewPrintEntries.map(([key, value], idx) => (
-                    <tr key={key} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                      <td className="px-4 py-2 border-b">{key}</td>
-                      <td className="px-4 py-2 border-b">{value}</td>
+              {/* Printing Details — section title is the configured type (Printing / Embroidery, etc.) */}
+              {parsedViewPrints && (viewPrintFieldEntries.length > 0 || viewColorBreakdownEntries.length > 0) && (
+                <div className="mt-8 space-y-4 min-w-0">
+          <h3 className="text-lg font-semibold">{translatePrintTechnique(parsedViewPrints.type, t)}</h3>
+          {viewPrintFieldEntries.length > 0 && (
+            <>
+              <div className="space-y-2 sm:hidden">
+                {viewPrintFieldEntries.map(([key, value]) => (
+                  <div
+                    key={key}
+                    className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+                  >
+                    <p className="text-xs font-medium uppercase tracking-wide text-slate-500 break-words">{key}</p>
+                    <p className="mt-1.5 text-sm text-slate-900 break-words">{value}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden sm:block overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-lg border border-slate-200 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="px-3 py-2 border-b text-left md:px-4">{t('common.key')}</th>
+                      <th className="px-3 py-2 border-b text-left md:px-4">{t('common.value')}</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {viewPrintFieldEntries.map(([key, value], idx) => (
+                      <tr key={key} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="px-3 py-2 border-b align-top md:px-4">{key}</td>
+                        <td className="px-3 py-2 border-b break-words md:px-4">{value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
           {viewColorBreakdownEntries.length > 0 && viewPlacementOrder.length > 0 && (
-            <div className="overflow-x-auto border rounded-lg">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="px-4 py-2 border-b text-left">{t('barcode.color')}</th>
-                    {viewPlacementOrder.map(placement => (
-                      <th key={placement.key} className="px-4 py-2 border-b text-left">{placement.label}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {viewColorBreakdownEntries.map(([color, placements], idx) => (
-                    <tr key={color} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                      <td className="px-4 py-2 border-b font-medium">{color}</td>
+            <>
+              <div className="space-y-4 sm:hidden">
+                {viewColorBreakdownEntries.map(([color, placements]) => (
+                  <div
+                    key={color}
+                    className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+                  >
+                    <p className="mb-3 font-semibold text-slate-900 break-words">{color}</p>
+                    <dl className="space-y-2.5">
                       {viewPlacementOrder.map(placement => (
-                        <td key={placement.key} className="px-4 py-2 border-b">
-                          {placements[placement.key] || '-'}
-                        </td>
+                        <div
+                          key={placement.key}
+                          className="border-b border-slate-100 pb-2 last:border-0 last:pb-0"
+                        >
+                          <dt className="text-xs font-medium text-slate-500">{placement.label}</dt>
+                          <dd className="mt-0.5 text-sm font-medium text-slate-800 break-words">
+                            {placements[placement.key] || '-'}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden sm:block overflow-x-auto overflow-y-hidden overscroll-x-contain rounded-lg border border-slate-200 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+                <table className="w-full min-w-max text-sm">
+                  <thead className="bg-gray-100">
+                    <tr>
+                      <th className="sticky left-0 z-10 min-w-[6rem] border-b border-r border-slate-200 bg-gray-100 px-3 py-2 text-left shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] md:px-4">
+                        {t('barcode.color')}
+                      </th>
+                      {viewPlacementOrder.map(placement => (
+                        <th key={placement.key} className="min-w-[5rem] px-3 py-2 border-b text-left md:min-w-[6rem] md:px-4">
+                          {placement.label}
+                        </th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-                </div>
+                  </thead>
+                  <tbody>
+                    {viewColorBreakdownEntries.map(([color, placements], idx) => {
+                      const rowBg = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                      return (
+                      <tr key={color} className={rowBg}>
+                        <td
+                          className={`sticky left-0 z-[1] min-w-[6rem] border-b border-r border-slate-200 px-3 py-2 font-medium shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)] md:px-4 ${rowBg}`}
+                        >
+                          {color}
+                        </td>
+                        {viewPlacementOrder.map(placement => (
+                          <td key={placement.key} className="min-w-[5rem] px-3 py-2 border-b break-words md:min-w-[6rem] md:px-4">
+                            {placements[placement.key] || '-'}
+                          </td>
+                        ))}
+                      </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
               )}
                 </div>
               )}
@@ -1858,15 +1954,23 @@ const JobOrderDetailsPage: React.FC = () => {
           <TabsContent value="qc">
             <div className="space-y-4">
               <h3 className="text-lg font-semibold text-gray-800">QC</h3>
-              <Tabs defaultValue="total" className="w-full">
-                <TabsList className="mb-4 flex w-fit rounded-xl bg-white p-1 shadow-sm border border-gray-200">
-                  <TabsTrigger value="total" className="px-4 py-2 rounded-lg data-[state=active]:bg-emerald-600 data-[state=active]:text-white">
-                    Total
-                  </TabsTrigger>
-                  <TabsTrigger value="today" className="px-4 py-2 rounded-lg data-[state=active]:bg-emerald-600 data-[state=active]:text-white">
-                    Today
-                  </TabsTrigger>
-                </TabsList>
+              <Tabs defaultValue="total" className="w-full min-w-0">
+                <div className="mb-4 w-full min-w-0 overflow-x-auto overflow-y-hidden overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+                  <TabsList className="inline-flex w-max flex-nowrap gap-1 rounded-xl border border-gray-200 bg-white p-1 shadow-sm md:w-fit">
+                    <TabsTrigger
+                      value="total"
+                      className="shrink-0 rounded-lg px-3 py-2 text-sm data-[state=active]:bg-emerald-600 data-[state=active]:text-white sm:px-4"
+                    >
+                      Total
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="today"
+                      className="shrink-0 rounded-lg px-3 py-2 text-sm data-[state=active]:bg-emerald-600 data-[state=active]:text-white sm:px-4"
+                    >
+                      Today
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
 
                 {(['total', 'today'] as const).map((scope) => {
                   const scopedPhases = scope === 'today' ? qcSummary.today_phases : qcSummary.phases;
@@ -2110,7 +2214,9 @@ const JobOrderDetailsPage: React.FC = () => {
               {/* Printing Details Section */}
               <div>
                 <div className="flex justify-between items-center mb-2">
-                  <h3 className="text-lg font-semibold">{t('jobOrderDetails.printingDetails')}</h3>
+                  <h3 className="text-lg font-semibold">
+                    {editPrints ? translatePrintTechnique(editPrints.type, t) : t('jobOrderDetails.printingDetails')}
+                  </h3>
                   <div className="flex gap-2">
                     <Button
                       type="button"
@@ -2141,8 +2247,8 @@ const JobOrderDetailsPage: React.FC = () => {
                         disabled={editLoading}
                         className="w-full border rounded px-3 py-2 mt-1"
                       >
-                        <option value="Printing">Printing</option>
-                        <option value="Embroidery">Embroidery</option>
+                        <option value="Printing">{t('jobOrderDetails.techniquePrinting')}</option>
+                        <option value="Embroidery">{t('jobOrderDetails.techniqueEmbroidery')}</option>
                       </select>
                     </div>
                     <div>

@@ -13,6 +13,112 @@ from .size import get_size_by_value, create_size
 
 # --- Job Order CRUD and helpers ---
 
+
+def _normalize_material_request_payload(raw_material: Any) -> Dict[str, Any]:
+    """
+    Normalize both legacy and new material payloads.
+    New payload shape:
+      { type, panel_type, consumption, color_name? }
+    Legacy payloads are also accepted to avoid breaking edit screens:
+      { material_name, quantity/consumption, color_name? }
+    """
+    if hasattr(raw_material, "model_dump"):
+        data = raw_material.model_dump()
+    elif isinstance(raw_material, dict):
+        data = raw_material
+    else:
+        data = {
+            "type": getattr(raw_material, "type", None) or getattr(raw_material, "material_name", None),
+            "panel_type": getattr(raw_material, "panel_type", None),
+            "consumption": getattr(raw_material, "consumption", None),
+            "quantity": getattr(raw_material, "quantity", None),
+            "color_name": getattr(raw_material, "color_name", None),
+        }
+
+    material_type = (data.get("type") or data.get("material_name") or "").strip()
+    panel_type = (data.get("panel_type") or "default").strip()
+    color_name_raw = data.get("color_name")
+    color_name = color_name_raw.strip() if isinstance(color_name_raw, str) and color_name_raw.strip() else None
+    consumption_value = data.get("consumption")
+    if consumption_value is None:
+        consumption_value = data.get("quantity")
+    if consumption_value is None:
+        consumption_value = 0
+    return {
+        "type": material_type,
+        "panel_type": panel_type,
+        "color_name": color_name,
+        "consumption": float(consumption_value),
+        "quantity": float(data.get("quantity")) if data.get("quantity") is not None else None,
+        "measurement_scale": (str(data.get("measurement_scale") or "KG").upper()),
+    }
+
+
+def _replace_job_order_material_requests(db: Session, job_order_id: int, materials_payload: Optional[List[Any]]) -> None:
+    if materials_payload is None:
+        return
+
+    db.query(models.JobOrderMaterialRequest).filter(
+        models.JobOrderMaterialRequest.job_order_id == job_order_id
+    ).delete()
+
+    allowed_color_names = {
+        row[0]
+        for row in db.query(models.Color.color_name)
+        .join(models.JobOrderItem, models.JobOrderItem.color_id == models.Color.color_id)
+        .filter(models.JobOrderItem.job_order_id == job_order_id)
+        .all()
+        if row[0]
+    }
+    color_total_quantities = {
+        row[0]: int(row[1] or 0)
+        for row in db.query(
+            models.Color.color_name,
+            func.sum(models.JobOrderItem.quantity)
+        )
+        .join(models.JobOrderItem, models.JobOrderItem.color_id == models.Color.color_id)
+        .filter(models.JobOrderItem.job_order_id == job_order_id)
+        .group_by(models.Color.color_name)
+        .all()
+        if row[0]
+    }
+
+    for raw_material in materials_payload:
+        normalized = _normalize_material_request_payload(raw_material)
+        if not normalized["type"] or not normalized["panel_type"] or normalized["consumption"] <= 0:
+            continue
+        if normalized["measurement_scale"] not in {"KG", "M"}:
+            normalized["measurement_scale"] = "KG"
+        if normalized["color_name"] and normalized["color_name"] not in allowed_color_names:
+            continue
+
+        material = db.query(models.Material).filter(
+            models.Material.material_name == normalized["type"]
+        ).first()
+        if not material:
+            material = models.Material(material_name=normalized["type"])
+            db.add(material)
+            db.flush()
+
+        color_id = None
+        computed_quantity = None
+        if normalized["color_name"]:
+            clr = get_color_by_name(db, normalized["color_name"])
+            if clr:
+                color_id = clr.color_id
+            color_total = float(color_total_quantities.get(normalized["color_name"], 0))
+            computed_quantity = color_total * float(normalized["consumption"])
+
+        db.add(models.JobOrderMaterialRequest(
+            job_order_id=job_order_id,
+            material_id=material.material_id,
+            panel_type=normalized["panel_type"],
+            color_id=color_id,
+            consumption=normalized["consumption"],
+            quantity=computed_quantity,
+            measurement_scale=normalized["measurement_scale"],
+        ))
+
 def create_job_order(db: Session, job_order: schemas.JobOrderCreate) -> models.JobOrder:
     db_job_order = models.JobOrder(
         model_id=job_order.model_id,
@@ -90,27 +196,12 @@ def create_job_order_with_names(db: Session, job_order: schemas.JobOrderCreateWi
         )
         db.add(db_item)
 
-    # handle materials consumption
-    if job_order.materials:
-        for mat in job_order.materials:
-            material = db.query(models.Material).filter(models.Material.material_name == mat.material_name).first()
-            if not material:
-                material = models.Material(material_name=mat.material_name)
-                db.add(material)
-                db.flush()
-            color_id = None
-            if getattr(mat, 'color_name', None):
-                clr = get_color_by_name(db, mat.color_name)
-                if clr:
-                    color_id = clr.color_id
-            db_mat = models.JobOrderMaterial(
-                job_order_id=db_job_order.job_order_id,
-                material_id=material.material_id,
-                color_id=color_id,
-                quantity=mat.quantity,
-                consumption=getattr(mat, 'consumption', mat.quantity)
-            )
-            db.add(db_mat)
+    # SessionLocal is configured with autoflush=False, so flush explicitly before
+    # material-request derivation (which queries JO items/colors for this job order).
+    db.flush()
+
+    # Replace deprecated materials implementation with request table rows
+    _replace_job_order_material_requests(db, db_job_order.job_order_id, job_order.materials)
 
     db.commit()
     db.refresh(db_job_order)
@@ -172,38 +263,8 @@ def update_job_order(db: Session, job_order_id: int, job_order_update: schemas.J
     # Handle print_config update
     if job_order_update.print_config is not None:
         db_job_order.print_config = job_order_update.print_config.model_dump() if job_order_update.print_config else None
-    # Handle materials update
-    if job_order_update.materials is not None:
-        # Delete existing materials for this job order
-        db.query(models.JobOrderMaterial).filter(
-            models.JobOrderMaterial.job_order_id == job_order_id
-        ).delete()
-        # Insert new materials
-        for m in job_order_update.materials:
-            # Ensure material exists
-            material = db.query(models.Material).filter(
-                models.Material.material_name == m.material_name
-            ).first()
-            if not material:
-                material = models.Material(material_name=m.material_name)
-                db.add(material)
-                db.flush()
-            # Determine color_id
-            color_id = None
-            if m.color_name:
-                clr = db.query(models.Color).filter(
-                    models.Color.color_name == m.color_name
-                ).first()
-                if clr:
-                    color_id = clr.color_id
-            db_mat = models.JobOrderMaterial(
-                job_order_id=job_order_id,
-                material_id=material.material_id,
-                color_id=color_id,
-                quantity=m.quantity,
-                consumption=getattr(m, 'consumption', m.quantity)
-            )
-            db.add(db_mat)
+    # Handle new material request update shape (and tolerate legacy payloads)
+    _replace_job_order_material_requests(db, job_order_id, job_order_update.materials)
 
     db.commit()
     db.refresh(db_job_order)
@@ -408,19 +469,22 @@ def get_job_order_overall_status(db: Session, job_order_id: int) -> Optional[Dic
 
 def get_job_order_materials(db: Session, job_order_id: int):
     materials = db.query(
-        models.JobOrderMaterial,
+        models.JobOrderMaterialRequest,
         models.Material.material_name,
         models.Color.color_name
-    ).join(models.Material, models.JobOrderMaterial.material_id == models.Material.material_id)
-    materials = materials.join(models.Color, models.JobOrderMaterial.color_id == models.Color.color_id, isouter=True)
-    materials = materials.filter(models.JobOrderMaterial.job_order_id == job_order_id).all()
+    ).join(models.Material, models.JobOrderMaterialRequest.material_id == models.Material.material_id)
+    materials = materials.join(models.Color, models.JobOrderMaterialRequest.color_id == models.Color.color_id, isouter=True)
+    materials = materials.filter(models.JobOrderMaterialRequest.job_order_id == job_order_id).all()
     return [
         {
-            "id": m.JobOrderMaterial.id,
-            "material_id": m.JobOrderMaterial.material_id,
+            "id": m.JobOrderMaterialRequest.id,
+            "material_id": m.JobOrderMaterialRequest.material_id,
+            "type": m.material_name,
             "material_name": m.material_name,
-            "quantity": float(m.JobOrderMaterial.quantity),
-            "consumption": float(m.JobOrderMaterial.consumption) if m.JobOrderMaterial.consumption is not None else None,
+            "panel_type": m.JobOrderMaterialRequest.panel_type,
+            "consumption": float(m.JobOrderMaterialRequest.consumption) if m.JobOrderMaterialRequest.consumption is not None else None,
+            "quantity": float(m.JobOrderMaterialRequest.quantity) if m.JobOrderMaterialRequest.quantity is not None else None,
+            "measurement_scale": m.JobOrderMaterialRequest.measurement_scale,
             "color_name": m.color_name
         } for m in materials]
 
@@ -754,27 +818,7 @@ def archive_job_order(db: Session, job_order_id: int):
             )
             db.add(archived_item)
     
-    materials = db.query(models.JobOrderMaterial).filter(
-        models.JobOrderMaterial.job_order_id == job_order_id
-    ).all()
-    
-    for material in materials:
-        existing_archived_material = db.query(models.ArchivedJobOrderMaterial).filter(
-            models.ArchivedJobOrderMaterial.job_order_id == material.job_order_id,
-            models.ArchivedJobOrderMaterial.material_id == material.material_id,
-            models.ArchivedJobOrderMaterial.color_id == material.color_id
-        ).first()
-        
-        if not existing_archived_material:
-            archived_material = models.ArchivedJobOrderMaterial(
-                job_order_id=material.job_order_id,
-                material_id=material.material_id,
-                color_id=material.color_id,
-                quantity=material.quantity,
-                consumption=material.consumption,
-                archived_at=func.now()
-            )
-            db.add(archived_material)
+    # Legacy job_order_materials archival removed.
     
     archived_job_order = models.ArchivedJobOrder(
         job_order_id=job_order.job_order_id,
@@ -794,8 +838,8 @@ def archive_job_order(db: Session, job_order_id: int):
         models.JobOrderItem.job_order_id == job_order_id
     ).delete(synchronize_session=False)
     
-    db.query(models.JobOrderMaterial).filter(
-        models.JobOrderMaterial.job_order_id == job_order_id
+    db.query(models.JobOrderMaterialRequest).filter(
+        models.JobOrderMaterialRequest.job_order_id == job_order_id
     ).delete(synchronize_session=False)
     
     db.delete(job_order)
@@ -1278,31 +1322,6 @@ def restore_job_order(db: Session, job_order_id: int):
             )
             db.add(restored_batch)
         
-        # Get all archived materials for this job order and restore them
-        archived_materials = db.query(models.ArchivedJobOrderMaterial).filter(
-            models.ArchivedJobOrderMaterial.job_order_id == job_order_id
-        ).all()
-        
-        for archived_material in archived_materials:
-            existing_material = db.query(models.JobOrderMaterial).filter(
-                models.JobOrderMaterial.job_order_id == archived_material.job_order_id,
-                models.JobOrderMaterial.material_id == archived_material.material_id,
-                models.JobOrderMaterial.color_id == archived_material.color_id
-            ).first()
-            
-            if existing_material:
-                print(f"Material (JO:{archived_material.job_order_id}, Mat:{archived_material.material_id}, Color:{archived_material.color_id}) already exists, skipping restoration")
-                continue
-            
-            restored_material = models.JobOrderMaterial(
-                job_order_id=archived_material.job_order_id,
-                material_id=archived_material.material_id,
-                color_id=archived_material.color_id,
-                quantity=archived_material.quantity,
-                consumption=archived_material.consumption
-            )
-            db.add(restored_material)
-        
         db.query(models.ArchivedJobOrderItem).filter(
             models.ArchivedJobOrderItem.job_order_id == job_order_id
         ).delete()
@@ -1310,10 +1329,6 @@ def restore_job_order(db: Session, job_order_id: int):
         db.query(models.ArchivedBatch).filter(
             models.ArchivedBatch.job_order_id == job_order_id
         ).delete()
-        
-        db.query(models.ArchivedJobOrderMaterial).filter(
-            models.ArchivedJobOrderMaterial.job_order_id == job_order_id
-        ).delete(synchronize_session=False)
         
         db.delete(archived_job_order)
         db.commit()
@@ -1343,11 +1358,6 @@ def delete_archived_job_order(db: Session, job_order_id: int):
         # Delete all archived items for this job order
         deleted_items = db.query(models.ArchivedJobOrderItem).filter(
             models.ArchivedJobOrderItem.job_order_id == job_order_id
-        ).delete()
-        
-        # Delete all archived materials for this job order
-        deleted_materials = db.query(models.ArchivedJobOrderMaterial).filter(
-            models.ArchivedJobOrderMaterial.job_order_id == job_order_id
         ).delete()
         
         # Delete all archived batches for this job order

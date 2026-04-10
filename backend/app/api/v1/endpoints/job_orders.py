@@ -110,7 +110,7 @@ def _build_job_order_list_item(db: Session, job_order: models.JobOrder) -> Dict:
         "total_working_quantity": total_working_quantity,
         "batches": batches_min,
         "image_url": job_order.image_url,
-        "prints": job_order.print_config,
+        "print_config": job_order.print_config,
         "priority": job_order.priority or 0,
     }
 
@@ -486,7 +486,7 @@ def read_job_order(
         "items": items_with_details,
         "image_url": job_order.image_url,
         "notes": job_order.notes,
-        "prints": job_order.print_config,
+        "print_config": job_order.print_config,
         "date_created": job_order.date_created,
         "priority": job_order.priority or 0
     }
@@ -534,7 +534,7 @@ def read_job_order_by_number(
         "items": items_with_details,
         "image_url": job_order.image_url,
         "notes": job_order.notes,
-        "prints": job_order.print_config,
+        "print_config": job_order.print_config,
         "date_created": job_order.date_created,
         "priority": job_order.priority or 0
     }
@@ -598,7 +598,7 @@ def create_job_order(
         "job_order_number": job_order.job_order_number,
         "model_name": model.model_name if model else None,
         "items": items_with_details,
-        "prints": job_order.print_config,
+        "print_config": job_order.print_config,
         "notes": job_order.notes
     }
 
@@ -677,7 +677,7 @@ async def create_job_order_with_names(
         "model_name": model.model_name if model else None,
         "items": items_with_details,
         "notes": job_order.notes,
-        "prints": job_order.print_config,
+        "print_config": job_order.print_config,
         "image_url": job_order.image_url
     }
 
@@ -711,7 +711,7 @@ def update_job_order(
         "job_order_number": job_order.job_order_number,
         "model_name": model.model_name if model else None,
         "items": items_with_details,
-        "prints": job_order.print_config,
+        "print_config": job_order.print_config,
         "image_url": job_order.image_url if hasattr(job_order, 'image_url') else None
     }
 
@@ -771,7 +771,7 @@ def read_job_orders_by_model(
             "model_name": model.model_name,
             "items": items_with_details,
             "image_url": job_order.image_url,
-            "prints": job_order.print_config
+            "print_config": job_order.print_config
         })
     
     return result_items

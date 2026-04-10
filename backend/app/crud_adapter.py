@@ -14,36 +14,7 @@ class CRUDAdapter:
         """Get the PostgreSQL models"""
         from .models import (
             User, Client, Color, Size, Model, Material, ProductionPhase,
-            JobOrder, JobOrderItem, JobOrderMaterial, Batch, BarcodeScanEvent,
-            ArchivedBatch, ArchivedJobOrder, ArchivedJobOrderItem, ArchivedJobOrderMaterial,
-            JobOrderItemSummary, JobOrderSummary
-        )
-        return {
-            'User': User,
-            'Client': Client,
-            'Color': Color,
-            'Size': Size,
-            'Model': Model,
-            'Material': Material,
-            'ProductionPhase': ProductionPhase,
-            'JobOrder': JobOrder,
-            'JobOrderItem': JobOrderItem,
-            'JobOrderMaterial': JobOrderMaterial,
-            'Batch': Batch,
-            'BarcodeScanEvent': BarcodeScanEvent,
-            'ArchivedBatch': ArchivedBatch,
-            'ArchivedJobOrder': ArchivedJobOrder,
-            'ArchivedJobOrderItem': ArchivedJobOrderItem,
-            'ArchivedJobOrderMaterial': ArchivedJobOrderMaterial,
-            'JobOrderItemSummary': JobOrderItemSummary,
-            'JobOrderSummary': JobOrderSummary
-        }
-    
-    def get_schemas(self):
-        """Get the PostgreSQL schemas"""
-        from .schemas import (
-            User, Client, Color, Size, Model, Material, ProductionPhase,
-            JobOrder, JobOrderItem, JobOrderMaterial, Batch, BarcodeScanEvent,
+            JobOrder, JobOrderItem, JobOrderMaterialRequest, Batch, BarcodeScanEvent,
             ArchivedBatch, ArchivedJobOrder, ArchivedJobOrderItem,
             JobOrderItemSummary, JobOrderSummary
         )
@@ -57,7 +28,35 @@ class CRUDAdapter:
             'ProductionPhase': ProductionPhase,
             'JobOrder': JobOrder,
             'JobOrderItem': JobOrderItem,
-            'JobOrderMaterial': JobOrderMaterial,
+            'JobOrderMaterialRequest': JobOrderMaterialRequest,
+            'Batch': Batch,
+            'BarcodeScanEvent': BarcodeScanEvent,
+            'ArchivedBatch': ArchivedBatch,
+            'ArchivedJobOrder': ArchivedJobOrder,
+            'ArchivedJobOrderItem': ArchivedJobOrderItem,
+            'JobOrderItemSummary': JobOrderItemSummary,
+            'JobOrderSummary': JobOrderSummary
+        }
+    
+    def get_schemas(self):
+        """Get the PostgreSQL schemas"""
+        from .schemas import (
+            User, Client, Color, Size, Model, Material, ProductionPhase,
+            JobOrder, JobOrderItem, JobOrderMaterialRequest, Batch, BarcodeScanEvent,
+            ArchivedBatch, ArchivedJobOrder, ArchivedJobOrderItem,
+            JobOrderItemSummary, JobOrderSummary
+        )
+        return {
+            'User': User,
+            'Client': Client,
+            'Color': Color,
+            'Size': Size,
+            'Model': Model,
+            'Material': Material,
+            'ProductionPhase': ProductionPhase,
+            'JobOrder': JobOrder,
+            'JobOrderItem': JobOrderItem,
+            'JobOrderMaterialRequest': JobOrderMaterialRequest,
             'Batch': Batch,
             'BarcodeScanEvent': BarcodeScanEvent,
             'ArchivedBatch': ArchivedBatch,
@@ -86,13 +85,12 @@ class CRUDAdapter:
             'ProductionPhase': 'core.production_phases',
             'JobOrder': 'core.job_orders',
             'JobOrderItem': 'core.job_order_items',
-            'JobOrderMaterial': 'core.job_order_materials',
+            'JobOrderMaterialRequest': 'core.job_order_material_requests',
             'Batch': 'ops.batches',
             'BarcodeScanEvent': 'ops.barcode_scan_events',
             'ArchivedBatch': 'archive.batches',
             'ArchivedJobOrder': 'archive.job_orders',
             'ArchivedJobOrderItem': 'archive.job_order_items',
-            'ArchivedJobOrderMaterial': 'archive.job_order_materials',
             'JobOrderItemSummary': 'reporting.job_order_items_summary',
             'JobOrderSummary': 'reporting.job_orders_summary'
         }
