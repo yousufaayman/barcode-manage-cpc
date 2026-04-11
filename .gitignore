@@ -175,3 +175,4 @@ backend/fix_compensation_phase_quantities_logic.sql
 backend/fix_all_batch_phase_history_functions_with_compensation.sql
 /barcode-samples
 /scripts
+/backend/storage
