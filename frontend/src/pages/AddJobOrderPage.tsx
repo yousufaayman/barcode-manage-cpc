@@ -731,49 +731,6 @@ const AddJobOrderPage: React.FC = () => {
 
     try {
       setAddLoading(true);
-      // Build FormData for multipart/form-data
-      const formData = new FormData();
-      formData.append('job_order_number', newJobOrder.job_order_number);
-      formData.append('model_name', newJobOrder.model_name);
-      formData.append('client_name', newJobOrder.client_name);
-      formData.append('items', JSON.stringify(generatedItems));
-      formData.append('materials', JSON.stringify(normalizedMaterials));
-      formData.append('notes', jobOrderNotes);
-      if (newJobOrderImage) {
-        formData.append('image', newJobOrderImage);
-      }
-      if (enablePrintDetails) {
-        const placementLabels = printPlacements.reduce<Record<string, string>>((acc, placement) => {
-          acc[placement.key] = placement.label;
-          return acc;
-        }, {});
-        const colorBreakdown: Record<string, Record<string, string>> = {};
-        tableColors.forEach((colorValue, rowIndex) => {
-          const colorName = colorValue.trim();
-          if (!colorName) return;
-          const rowKey = colorRowKeys[rowIndex];
-          if (!rowKey) return;
-          const rowEntries = colorPrintDetails[rowKey];
-          if (!rowEntries) return;
-          const cleaned: Record<string, string> = {};
-          Object.entries(rowEntries).forEach(([placementKey, placementValue]) => {
-            if (!placementValue || !placementValue.trim()) return;
-            cleaned[placementKey] = placementValue.trim();
-          });
-          if (Object.keys(cleaned).length > 0) {
-            colorBreakdown[colorName] = cleaned;
-          }
-        });
-        if (Object.keys(colorBreakdown).length > 0) {
-          const printPayload: Record<string, any> = {
-            type: printType,
-            fields: {},
-            placement_labels: placementLabels,
-            color_breakdown: colorBreakdown
-          };
-          formData.append('prints', JSON.stringify(printPayload));
-        }
-      }
       if (isEditMode) {
         const unknownCombinations = generatedItems.filter(
           item => !itemIdByColorSize[`${item.color_name}::${item.size_value}`]
@@ -825,8 +782,50 @@ const AddJobOrderPage: React.FC = () => {
           };
         }
 
-        await jobOrderApi.update(editJobOrderId, updatePayload);
+        await jobOrderApi.updateWithForm(editJobOrderId, updatePayload, newJobOrderImage);
       } else {
+        const formData = new FormData();
+        formData.append('job_order_number', newJobOrder.job_order_number);
+        formData.append('model_name', newJobOrder.model_name);
+        formData.append('client_name', newJobOrder.client_name);
+        formData.append('items', JSON.stringify(generatedItems));
+        formData.append('materials', JSON.stringify(normalizedMaterials));
+        formData.append('notes', jobOrderNotes);
+        if (newJobOrderImage) {
+          formData.append('image', newJobOrderImage);
+        }
+        if (enablePrintDetails) {
+          const placementLabels = printPlacements.reduce<Record<string, string>>((acc, placement) => {
+            acc[placement.key] = placement.label;
+            return acc;
+          }, {});
+          const colorBreakdown: Record<string, Record<string, string>> = {};
+          tableColors.forEach((colorValue, rowIndex) => {
+            const colorName = colorValue.trim();
+            if (!colorName) return;
+            const rowKey = colorRowKeys[rowIndex];
+            if (!rowKey) return;
+            const rowEntries = colorPrintDetails[rowKey];
+            if (!rowEntries) return;
+            const cleaned: Record<string, string> = {};
+            Object.entries(rowEntries).forEach(([placementKey, placementValue]) => {
+              if (!placementValue || !placementValue.trim()) return;
+              cleaned[placementKey] = placementValue.trim();
+            });
+            if (Object.keys(cleaned).length > 0) {
+              colorBreakdown[colorName] = cleaned;
+            }
+          });
+          if (Object.keys(colorBreakdown).length > 0) {
+            const printPayload: Record<string, any> = {
+              type: printType,
+              fields: {},
+              placement_labels: placementLabels,
+              color_breakdown: colorBreakdown
+            };
+            formData.append('prints', JSON.stringify(printPayload));
+          }
+        }
         await api.post('/job-orders/with-names/', formData, {
           headers: {
             'Content-Type': 'multipart/form-data'

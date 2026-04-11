@@ -928,6 +928,24 @@ export const jobOrderApi = {
     const response = await api.put(`/job-orders/${id}`, jobOrder);
     return response.data;
   },
+  /** Multipart update: same fields as JSON update plus optional image file */
+  updateWithForm: async (
+    id: number,
+    payload: Record<string, unknown>,
+    image?: File | null
+  ): Promise<JobOrder> => {
+    const formData = new FormData();
+    formData.append('payload', JSON.stringify(payload));
+    if (image) {
+      formData.append('image', image);
+    }
+    const response = await api.put(`/job-orders/${id}/form`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return response.data;
+  },
 
   updateItemNotes: async (itemId: number, notes: string): Promise<JobOrderItem> => {
     const response = await api.put(`/job-orders/items/${itemId}/notes`, { notes });

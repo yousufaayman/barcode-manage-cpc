@@ -93,12 +93,14 @@ const ProductionOvertimeTab: React.FC<ProductionOvertimeTabProps> = ({ isActive 
   }, [isActive, todayStr]);
 
   useEffect(() => {
-    // Load phases once (filter to sewing phases, consistent with other production UI).
+    // Load phases once: sewing-type phases only, excluding the phase named "Sewing".
     const load = async () => {
       setLoadingPhases(true);
       try {
         const all = await barcodeApi.getPhases();
-        const sewing = (all || []).filter((p) => (p.type || '').toLowerCase() === 'sewing');
+        const sewing = (all || [])
+          .filter((p) => (p.type || '').toLowerCase() === 'sewing')
+          .filter((p) => (p.phase_name || '').trim().toLowerCase() !== 'sewing');
         setPhases(sewing);
         if (sewing.length > 0) setSelectedPhaseId((prev) => prev ?? sewing[0].phase_id);
       } catch {

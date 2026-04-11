@@ -631,6 +631,9 @@ async def create_job_order_with_names(
     items_data = json.loads(items)
     materials_data = json.loads(materials) if materials else []
     prints_data = json.loads(prints) if prints else {}
+    print_config = None
+    if isinstance(prints_data, dict) and prints_data:
+        print_config = schemas.JobOrderPrintConfig.model_validate(prints_data)
     if not items_data:
         raise HTTPException(
             status_code=400,
@@ -661,7 +664,7 @@ async def create_job_order_with_names(
         client_name=client_name,
         items=items_data,
         materials=materials_data,
-        prints=prints_data or None,
+        print_config=print_config,
         notes=notes,
         image_url=image_url
     )
@@ -714,6 +717,67 @@ def update_job_order(
         "print_config": job_order.print_config,
         "image_url": job_order.image_url if hasattr(job_order, 'image_url') else None
     }
+
+
+@router.put(
+    "/{job_order_id}/form",
+    response_model=schemas.JobOrder,
+    responses=_OPENAPI_404_400,
+)
+async def update_job_order_form(
+    job_order_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
+    payload: Annotated[str, Form(description="JSON body matching JobOrderUpdate (items, notes, materials, print_config, etc.)")],
+    image: Annotated[Optional[UploadFile], File()] = None,
+):
+    """Update a job order with optional image file (multipart). Use when replacing the job order image."""
+    existing_job_order = get_job_order(db, job_order_id=job_order_id)
+    if not existing_job_order:
+        raise HTTPException(status_code=404, detail=MSG_JOB_ORDER_NOT_FOUND)
+
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in payload")
+
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+    job_order_in = schemas.JobOrderUpdate.model_validate(data)
+
+    if image and image.filename:
+        original_ext = os.path.splitext(image.filename)[1] or ".png"
+        safe_order_number = re.sub(r"[^A-Za-z0-9_.-]", "_", existing_job_order.job_order_number)
+        filename = f"{safe_order_number}{original_ext}"
+        image_url = os.path.join(image_upload_dir, filename)
+        try:
+            content = await image.read()
+            await asyncio.to_thread(_write_bytes_to_path, image_url, content)
+        except (IOError, OSError) as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save image: {str(e)}",
+            )
+        job_order_in = job_order_in.model_copy(update={"image_url": image_url})
+
+    _validate_job_order_update(db, job_order_id, existing_job_order, job_order_in)
+
+    job_order = crud_update_job_order(db, job_order_id=job_order_id, job_order_update=job_order_in)
+
+    model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first()
+    items_with_details = get_job_order_items_with_details(db, job_order.job_order_id)
+
+    return {
+        "job_order_id": job_order.job_order_id,
+        "model_id": job_order.model_id,
+        "job_order_number": job_order.job_order_number,
+        "model_name": model.model_name if model else None,
+        "items": items_with_details,
+        "print_config": job_order.print_config,
+        "image_url": job_order.image_url if hasattr(job_order, "image_url") else None,
+    }
+
 
 @router.delete("/{job_order_id}", responses=_OPENAPI_404)
 def delete_job_order(
