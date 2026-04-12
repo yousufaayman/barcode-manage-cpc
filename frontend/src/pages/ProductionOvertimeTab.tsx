@@ -52,12 +52,12 @@ const ProductionOvertimeTab: React.FC<ProductionOvertimeTabProps> = ({ isActive 
 
   const [todayAssignments, setTodayAssignments] = useState<DailyAssignmentResponse[]>([]);
   const [todayAssignmentsLoaded, setTodayAssignmentsLoaded] = useState(false);
-  const [loadingTodayAssignments, setLoadingTodayAssignments] = useState(false);
 
   const [isScanningWorker, setIsScanningWorker] = useState(false);
   const overtimeBarcodeInputRef = useRef<HTMLInputElement>(null);
   const overtimeScanBufferRef = useRef('');
   const overtimeScanTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const assignmentsLoadPromiseRef = useRef<Promise<DailyAssignmentResponse[]> | null>(null);
 
   const workersSet = useMemo(() => {
     const s = new Set<number>();
@@ -70,27 +70,50 @@ const ProductionOvertimeTab: React.FC<ProductionOvertimeTabProps> = ({ isActive 
     overtimeBarcodeInputRef.current?.focus();
   }, [isActive]);
 
-  const ensureTodayAssignmentsLoaded = async () => {
-    if (todayAssignmentsLoaded || loadingTodayAssignments) return;
-    setLoadingTodayAssignments(true);
-    try {
-      const rows = await productionApi.getAssignments(todayStr);
-      setTodayAssignments(rows);
-      setTodayAssignmentsLoaded(true);
-    } catch {
-      // If assignments cannot be loaded, fail closed (no worker should be added).
-      setTodayAssignments([]);
-      setTodayAssignmentsLoaded(true);
-    } finally {
-      setLoadingTodayAssignments(false);
-    }
+  const ensureTodayAssignmentsLoaded = async (): Promise<DailyAssignmentResponse[]> => {
+    if (todayAssignmentsLoaded) return todayAssignments;
+    if (assignmentsLoadPromiseRef.current != null) return assignmentsLoadPromiseRef.current;
+
+    const p = (async () => {
+      try {
+        const rows = await productionApi.getAssignments(todayStr);
+        setTodayAssignments(rows);
+        setTodayAssignmentsLoaded(true);
+        return rows;
+      } catch {
+        setTodayAssignments([]);
+        setTodayAssignmentsLoaded(true);
+        return [];
+      } finally {
+        assignmentsLoadPromiseRef.current = null;
+      }
+    })();
+    assignmentsLoadPromiseRef.current = p;
+    return p;
   };
 
   useEffect(() => {
     if (!isActive) return;
-    ensureTodayAssignmentsLoaded();
+    void ensureTodayAssignmentsLoaded();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, todayStr]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    const focusOvertimeScanInput = () => {
+      const active = document.activeElement;
+      if (active && active !== overtimeBarcodeInputRef.current) {
+        if (active.tagName === 'SELECT' || active.tagName === 'TEXTAREA') return;
+        if (active.tagName === 'INPUT' && (active as HTMLInputElement).type === 'date') return;
+        if ((active as HTMLElement).closest?.('[role="combobox"]') || (active as HTMLElement).closest?.('[role="listbox"]'))
+          return;
+        if ((active as HTMLElement).closest?.('input') && (active as HTMLInputElement).type === 'number') return;
+      }
+      overtimeBarcodeInputRef.current?.focus();
+    };
+    const interval = setInterval(focusOvertimeScanInput, 150);
+    return () => clearInterval(interval);
+  }, [isActive]);
 
   useEffect(() => {
     // Load phases once: sewing-type phases only, excluding the phase named "Sewing".
@@ -141,10 +164,18 @@ const ProductionOvertimeTab: React.FC<ProductionOvertimeTabProps> = ({ isActive 
       return;
     }
 
-    await ensureTodayAssignmentsLoaded();
-    const hasTodayAssignment = todayAssignments.some((a) => Number(a.worker_id) === workerId);
+    const assignmentRows = await ensureTodayAssignmentsLoaded();
+    const hasTodayAssignment = assignmentRows.some((a) => Number(a.worker_id) === workerId);
     if (!hasTodayAssignment) {
-      setRequestError(t('productionTracking.overtime.workerNotAssignedToday', { workerId }));
+      setRequestError(null);
+      toast({
+        title: t('productionTracking.overtime.toastNotAssignedTitle'),
+        description: t('productionTracking.overtime.toastNotAssignedDescription', {
+          workerId,
+          tabName: t('productionTracking.tabWorkerAssignment'),
+        }),
+        variant: 'destructive',
+      });
       return;
     }
 
@@ -216,18 +247,23 @@ const ProductionOvertimeTab: React.FC<ProductionOvertimeTabProps> = ({ isActive 
         'PageUp',
         'PageDown',
       ];
-      if (skipKeys.includes(e.key) || e.ctrlKey || e.altKey || e.metaKey || e.key.length !== 1) return;
+      if (skipKeys.includes(e.key) || e.ctrlKey || e.altKey || e.metaKey) return;
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (overtimeScanTimeoutRef.current) clearTimeout(overtimeScanTimeoutRef.current);
+        const scanned = overtimeScanBufferRef.current;
+        overtimeScanBufferRef.current = '';
+        if (scanned) resolveWorkerFromBarcode(scanned);
+        setIsScanningWorker(false);
+        return;
+      }
+
+      if (e.key.length !== 1) return;
 
       e.preventDefault();
       e.stopPropagation();
-
-      if (e.key === 'Enter') {
-        const scanned = overtimeScanBufferRef.current;
-        if (!scanned) return;
-        overtimeScanBufferRef.current = '';
-        resolveWorkerFromBarcode(scanned);
-        return;
-      }
 
       overtimeScanBufferRef.current += e.key;
       setIsScanningWorker(true);

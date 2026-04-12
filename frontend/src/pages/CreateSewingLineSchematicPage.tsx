@@ -204,6 +204,7 @@ const CreateSewingLineSchematicPage: React.FC = () => {
     name: '',
     active: true,
     working_hours: '' as string,
+    start_time: '' as string,
   });
   const [stages, setStages] = useState<StageRow[]>([]);
 
@@ -338,6 +339,7 @@ const CreateSewingLineSchematicPage: React.FC = () => {
           name: '',
           active: detail.active,
           working_hours: detail.working_hours != null ? String(detail.working_hours) : '',
+          start_time: detail.start_time ? detail.start_time.slice(0, 8) : '',
         }));
         setStages(schematicStagesToCreateRows(detail.stages ?? []));
       } catch {
@@ -392,12 +394,18 @@ const CreateSewingLineSchematicPage: React.FC = () => {
     setSubmitting(true);
     try {
       const workingHoursNum = form.working_hours.trim() ? Number(form.working_hours) : undefined;
+      const st = form.start_time.trim();
+      let startTimeForApi: string | undefined;
+      if (st.length > 0) {
+        startTimeForApi = /^\d{2}:\d{2}$/.test(st) ? `${st}:00` : st;
+      }
       await productionApi.createSchematic({
         production_phase_id: form.production_phase_id,
         name: form.name.trim(),
         active: form.active,
         working_hours: workingHoursNum != null && !Number.isNaN(workingHoursNum) ? workingHoursNum : undefined,
         hourly_production: hourlyProductionTotal,
+        start_time: startTimeForApi,
         stages: stagesPayload.length > 0 ? stagesPayload : undefined,
       });
       toast({
@@ -527,6 +535,17 @@ const CreateSewingLineSchematicPage: React.FC = () => {
                     placeholder={t('productionManagement.create.workingHoursPlaceholder')}
                     value={form.working_hours}
                     onChange={(e) => setForm((f) => ({ ...f, working_hours: e.target.value }))}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="start_time">{t('productionManagement.create.startTime')}</Label>
+                  <Input
+                    id="start_time"
+                    type="time"
+                    step={60}
+                    value={form.start_time}
+                    onChange={(e) => setForm((f) => ({ ...f, start_time: e.target.value }))}
                   />
                 </div>
 

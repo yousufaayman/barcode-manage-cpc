@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any, Literal
 # Shared status literals
 CutPrintStatus = Literal['pending', 'in_progress', 'completed']
 
-from datetime import datetime, date
+from datetime import datetime, date, time
 from enum import Enum
 
 # ============================================================================
@@ -190,6 +190,7 @@ class SewingLineSchematicBase(BaseModel):
     active: bool = True
     working_hours: Optional[float] = None
     hourly_production: Optional[int] = None
+    start_time: Optional[time] = None
 
 
 class SewingLineStageCreate(BaseModel):
@@ -212,6 +213,7 @@ class SewingLineSchematicUpdate(BaseModel):
     active: Optional[bool] = None
     working_hours: Optional[float] = None
     hourly_production: Optional[int] = None
+    start_time: Optional[time] = None
     stages: Optional[List[SewingLineStageCreate]] = None
 
 
@@ -1376,6 +1378,13 @@ class WorkerProductionRecord(BaseModel):
     true_output: int
     working_hours: float
     overtime_hours: float
+    # At most one assignment slot per worker/schematic/work day (active or inactive) *
+    #   COALESCE(worker_group.working_hours, schematic.working_hours) + overtime_hours
+    capacity_working_hours: float
+    # Rework pcs for this row: single_rejections for worker/day allocated by true_output share (see endpoint).
+    rework_pcs: float
+    # 100 * produced / (produced + rework) for this row when denominator > 0; 100% when rework is 0 and produced > 0.
+    quality_pct: Optional[float] = None
     efficiency_pct: Optional[float] = None
 
 
@@ -1387,6 +1396,10 @@ class WorkerProductionAggregate(BaseModel):
     total_true_output: int
     total_working_hours: float
     total_overtime_hours: float
+    total_capacity_working_hours: float
+    worker_utilization_pct: Optional[float] = None
+    total_rework_pcs: int
+    quality_pct: Optional[float] = None
     efficiency_pct: Optional[float] = None
 
 

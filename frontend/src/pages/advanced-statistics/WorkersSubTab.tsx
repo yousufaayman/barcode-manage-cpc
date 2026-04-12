@@ -4,7 +4,99 @@ import {
   AllWorkersProductionBreakdownResponse,
 } from '@/services/api';
 import { Loader2, Download } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
+
+/** Highlight efficiency, quality, and utilization when strictly below this threshold. */
+const LOW_PCT_THRESHOLD = 90;
+
+const XLSX_LOW_PCT_FILL = { patternType: 'solid' as const, fgColor: { rgb: 'FFFEF3C7' } };
+const XLSX_LOW_PCT_FONT = { bold: true, color: { rgb: 'FF92400E' } };
+
+function isLowMetricPct(pct: number | null | undefined): boolean {
+  return pct != null && pct < LOW_PCT_THRESHOLD;
+}
+
+function lowPctHighlightClass(pct: number | null | undefined): string {
+  return isLowMetricPct(pct) ? 'bg-amber-50 font-semibold text-amber-900' : '';
+}
+
+function parsePctStringFromCell(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const s = String(v).trim();
+  if (!s.endsWith('%')) return null;
+  const n = parseFloat(s.replace(/%/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Resolve 0-based column indices by matching header text in row 0. */
+function columnIndicesByHeaders(ws: XLSX.WorkSheet, headerNames: string[]): number[] {
+  const ref = ws['!ref'];
+  if (!ref) return [];
+  const range = XLSX.utils.decode_range(ref);
+  const R = range.s.r;
+  const indexByHeader = new Map<string, number>();
+  for (let C = range.s.c; C <= range.e.c; C++) {
+    const addr = XLSX.utils.encode_cell({ r: R, c: C });
+    const v = ws[addr]?.v;
+    if (v != null) indexByHeader.set(String(v).trim(), C);
+  }
+  return headerNames.map((name) => indexByHeader.get(name.trim())).filter((i): i is number => i != null);
+}
+
+/** Style Total Efficiency, Quality, Worker utilization cells when value is a percent below threshold. */
+function applyLowPctHighlightsToWorksheet(ws: XLSX.WorkSheet, colIndices: number[], firstDataRow = 1) {
+  const ref = ws['!ref'];
+  if (!ref) return;
+  const range = XLSX.utils.decode_range(ref);
+  for (let R = firstDataRow; R <= range.e.r; R++) {
+    for (const C of colIndices) {
+      const addr = XLSX.utils.encode_cell({ r: R, c: C });
+      const cell = ws[addr];
+      if (!cell || cell.v == null || cell.v === '') continue;
+      const pct = parsePctStringFromCell(cell.v);
+      if (pct != null && pct < LOW_PCT_THRESHOLD) {
+        cell.s = {
+          fill: XLSX_LOW_PCT_FILL,
+          font: XLSX_LOW_PCT_FONT,
+          alignment: { horizontal: 'right' },
+        };
+      }
+    }
+  }
+}
+
+/** Set column widths from max content length per column (fits headers and values). */
+function autoFitWorksheetColumns(ws: XLSX.WorkSheet, maxWch = 48) {
+  const ref = ws['!ref'];
+  if (!ref) return;
+  const range = XLSX.utils.decode_range(ref);
+  const cols: { wch: number }[] = [];
+  for (let C = range.s.c; C <= range.e.c; C++) {
+    let maxLen = 8;
+    for (let R = range.s.r; R <= range.e.r; R++) {
+      const addr = XLSX.utils.encode_cell({ r: R, c: C });
+      const cell = ws[addr];
+      const raw = cell?.v != null ? String(cell.v) : '';
+      if (raw.length > maxLen) maxLen = raw.length;
+    }
+    cols.push({ wch: Math.min(maxLen + 2, maxWch) });
+  }
+  ws['!cols'] = cols;
+}
+
+function aggregateQualityPct(totalTrue: number, totalRework: number): number | null {
+  if (totalTrue < 0 || totalRework < 0) return null;
+  if (totalRework <= 0) return totalTrue > 0 ? 100 : null;
+  const d = totalTrue + totalRework;
+  if (d <= 0) return null;
+  return (totalTrue / d) * 100;
+}
+
+function rowQualityPct(trueOut: number, rework: number): number | null {
+  if (trueOut < 0 || rework < 0) return null;
+  if (rework <= 0) return trueOut > 0 ? 100 : null;
+  return (trueOut / (trueOut + rework)) * 100;
+}
 
 type GroupedWorker = {
   workerId: number;
@@ -14,6 +106,10 @@ type GroupedWorker = {
     totalTrue: number;
     totalWorkingHours: number;
     totalOvertimeHours: number;
+    totalCapacityWorkingHours: number;
+    totalReworkPcs: number;
+    workerUtilizationPct: number | null;
+    qualityPct: number | null;
     efficiencyPct: number | null;
   };
   rows: {
@@ -24,6 +120,10 @@ type GroupedWorker = {
     trueOutput: number;
     workingHours: number;
     overtimeHours: number;
+    capacityWorkingHours: number;
+    reworkPcs: number;
+    workerUtilizationPct: number | null;
+    qualityPct: number | null;
     efficiencyPct: number | null;
   }[];
 };
@@ -34,7 +134,7 @@ const WorkersSubTab: React.FC = () => {
   const [data, setData] = useState<AllWorkersProductionBreakdownResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [compactView, setCompactView] = useState(false);
+  const [compactView, setCompactView] = useState(true);
   const [appliedRange, setAppliedRange] = useState<{ from: string; to: string } | null>(null);
 
   const fetchBreakdown = useCallback(() => {
@@ -69,11 +169,13 @@ const WorkersSubTab: React.FC = () => {
         totalTrue: number;
         totalWorkingHours: number;
         totalOvertimeHours: number;
+        totalCapacityWorkingHours: number;
+        totalReworkPcs: number;
         // Merge potential duplicate records coming from stage switching.
         // Key: phase|schematic|date
         rowsMap: Map<
           string,
-          Omit<GroupedWorker['rows'][number], 'efficiencyPct'>
+          Omit<GroupedWorker['rows'][number], 'efficiencyPct' | 'workerUtilizationPct' | 'qualityPct'>
         >;
       }
     >();
@@ -87,16 +189,22 @@ const WorkersSubTab: React.FC = () => {
           totalTrue: 0,
           totalWorkingHours: 0,
           totalOvertimeHours: 0,
+          totalCapacityWorkingHours: 0,
+          totalReworkPcs: 0,
           rowsMap: new Map(),
         });
       }
 
       const next = byWorker.get(r.worker_id);
       if (!next) continue;
+      const cap = r.capacity_working_hours ?? 0;
+      const rework = r.rework_pcs ?? 0;
       next.totalExpected += r.expected_output;
       next.totalTrue += r.true_output;
       next.totalWorkingHours += r.working_hours ?? 0;
       next.totalOvertimeHours += r.overtime_hours ?? 0;
+      next.totalCapacityWorkingHours += cap;
+      next.totalReworkPcs += rework;
 
       const key = `${r.phase_name}|${r.schematic_name}|${r.work_date}`;
       const existingRow = next.rowsMap.get(key);
@@ -105,6 +213,8 @@ const WorkersSubTab: React.FC = () => {
         existingRow.trueOutput += r.true_output;
         existingRow.workingHours += r.working_hours ?? 0;
         existingRow.overtimeHours += r.overtime_hours ?? 0;
+        existingRow.capacityWorkingHours += cap;
+        existingRow.reworkPcs += rework;
       } else {
         next.rowsMap.set(key, {
           phaseName: r.phase_name,
@@ -114,6 +224,8 @@ const WorkersSubTab: React.FC = () => {
           trueOutput: r.true_output,
           workingHours: r.working_hours ?? 0,
           overtimeHours: r.overtime_hours ?? 0,
+          capacityWorkingHours: cap,
+          reworkPcs: rework,
         });
       }
     }
@@ -127,12 +239,24 @@ const WorkersSubTab: React.FC = () => {
           totalTrue: v.totalTrue,
           totalWorkingHours: v.totalWorkingHours,
           totalOvertimeHours: v.totalOvertimeHours,
+          totalCapacityWorkingHours: v.totalCapacityWorkingHours,
+          totalReworkPcs: v.totalReworkPcs,
+          workerUtilizationPct:
+            v.totalCapacityWorkingHours > 0
+              ? (v.totalWorkingHours / v.totalCapacityWorkingHours) * 100
+              : null,
+          qualityPct: aggregateQualityPct(v.totalTrue, v.totalReworkPcs),
           efficiencyPct:
             v.totalExpected > 0 ? (v.totalTrue / v.totalExpected) * 100 : null,
         },
         rows: Array.from(v.rowsMap.values())
           .map((row) => ({
             ...row,
+            workerUtilizationPct:
+              row.capacityWorkingHours > 0
+                ? (row.workingHours / row.capacityWorkingHours) * 100
+                : null,
+            qualityPct: rowQualityPct(row.trueOutput, row.reworkPcs),
             efficiencyPct:
               row.expectedOutput > 0
                 ? (row.trueOutput / row.expectedOutput) * 100
@@ -163,11 +287,24 @@ const WorkersSubTab: React.FC = () => {
       'Worker Name': w.workerName,
       'Total Expected': w.aggregate.totalExpected,
       'Total True': w.aggregate.totalTrue,
-      'Total Working Hours': w.aggregate.totalWorkingHours,
+      'Total working hours': Number(w.aggregate.totalCapacityWorkingHours.toFixed(2)),
+      'True working hours': Number(w.aggregate.totalWorkingHours.toFixed(2)),
       'Of which overtime': w.aggregate.totalOvertimeHours,
+      'Rework pcs': Math.round(w.aggregate.totalReworkPcs),
       'Total Efficiency': w.aggregate.efficiencyPct != null ? `${w.aggregate.efficiencyPct.toFixed(1)}%` : '',
+      Quality:
+        w.aggregate.qualityPct != null ? `${w.aggregate.qualityPct.toFixed(1)}%` : '',
+      'Worker utilization':
+        w.aggregate.workerUtilizationPct != null
+          ? `${w.aggregate.workerUtilizationPct.toFixed(1)}%`
+          : '',
     }));
     const wsCompact = XLSX.utils.json_to_sheet(compactData);
+    applyLowPctHighlightsToWorksheet(
+      wsCompact,
+      columnIndicesByHeaders(wsCompact, ['Total Efficiency', 'Quality', 'Worker utilization'])
+    );
+    autoFitWorksheetColumns(wsCompact);
     XLSX.utils.book_append_sheet(wb, wsCompact, 'Compact View');
 
     // Sheet 2: Breakdown — Worker Id, Worker, Phase, Schematic, Date, Expected, True, Eff.
@@ -179,9 +316,13 @@ const WorkersSubTab: React.FC = () => {
       Date: string;
       Expected: number;
       True: number;
-      'Working Hours': number;
+      'Total working hours': number;
+      'True working hours': number;
       'Of which overtime': number;
+      'Rework pcs': number;
       'Eff.': string;
+      Quality: string;
+      'Worker utilization': string;
     }[] = [];
     for (const w of groupedByWorker) {
       for (const row of w.rows) {
@@ -193,13 +334,25 @@ const WorkersSubTab: React.FC = () => {
           Date: row.date,
           Expected: row.expectedOutput,
           True: row.trueOutput,
-          'Working Hours': row.workingHours,
+          'Total working hours': Number(row.capacityWorkingHours.toFixed(2)),
+          'True working hours': Number(row.workingHours.toFixed(2)),
           'Of which overtime': row.overtimeHours,
+          'Rework pcs': Number(row.reworkPcs.toFixed(2)),
           'Eff.': row.efficiencyPct != null ? `${row.efficiencyPct.toFixed(1)}%` : '',
+          Quality: row.qualityPct != null ? `${row.qualityPct.toFixed(1)}%` : '',
+          'Worker utilization':
+            row.workerUtilizationPct != null
+              ? `${row.workerUtilizationPct.toFixed(1)}%`
+              : '',
         });
       }
     }
     const wsBreakdown = XLSX.utils.json_to_sheet(breakdownRows);
+    applyLowPctHighlightsToWorksheet(
+      wsBreakdown,
+      columnIndicesByHeaders(wsBreakdown, ['Eff.', 'Quality', 'Worker utilization'])
+    );
+    autoFitWorksheetColumns(wsBreakdown);
     XLSX.utils.book_append_sheet(wb, wsBreakdown, 'Breakdown');
 
     const fileName = `workers-production-${appliedRange.from}_${appliedRange.to}.xlsx`;
@@ -260,18 +413,14 @@ const WorkersSubTab: React.FC = () => {
           All workers production breakdown
         </h3>
         <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-gray-600">
-          <label className="inline-flex items-center gap-1 cursor-pointer">
-            <input
-              type="checkbox"
-              className="h-3 w-3 rounded border-gray-300"
-              checked={compactView}
-              onChange={(e) => setCompactView(e.target.checked)}
-            />
-            <span className="font-medium">Compact view</span>
-            <span className="text-[11px] text-gray-500">
-              (totals only, hide detail rows)
-            </span>
-          </label>
+          <button
+            type="button"
+            onClick={() => setCompactView((v) => !v)}
+            disabled={!showContent || groupedByWorker.length === 0}
+            className="inline-flex w-full sm:w-auto justify-center items-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {compactView ? 'Expand view' : 'Compact view'}
+          </button>
           <button
             type="button"
             onClick={downloadExcel}
@@ -308,10 +457,32 @@ const WorkersSubTab: React.FC = () => {
                       <div className="font-semibold text-gray-900 truncate">{w.workerName}</div>
                       <div className="text-xs text-gray-500">ID: {w.workerId}</div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-xs uppercase tracking-wide text-gray-500">Efficiency</div>
-                      <div className="font-semibold tabular-nums text-gray-900">
-                        {w.aggregate.efficiencyPct != null ? `${w.aggregate.efficiencyPct.toFixed(1)}%` : '—'}
+                    <div className="grid grid-cols-3 gap-2 text-right">
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-gray-500">Efficiency</div>
+                        <div
+                          className={`inline-block rounded px-1.5 py-0.5 font-semibold tabular-nums ${lowPctHighlightClass(w.aggregate.efficiencyPct) || 'text-gray-900'}`}
+                        >
+                          {w.aggregate.efficiencyPct != null ? `${w.aggregate.efficiencyPct.toFixed(1)}%` : '—'}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-gray-500">Quality</div>
+                        <div
+                          className={`inline-block rounded px-1.5 py-0.5 font-semibold tabular-nums ${lowPctHighlightClass(w.aggregate.qualityPct) || 'text-gray-900'}`}
+                        >
+                          {w.aggregate.qualityPct != null ? `${w.aggregate.qualityPct.toFixed(1)}%` : '—'}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-gray-500">Utilization</div>
+                        <div
+                          className={`inline-block rounded px-1.5 py-0.5 font-semibold tabular-nums ${lowPctHighlightClass(w.aggregate.workerUtilizationPct) || 'text-gray-900'}`}
+                        >
+                          {w.aggregate.workerUtilizationPct != null
+                            ? `${w.aggregate.workerUtilizationPct.toFixed(1)}%`
+                            : '—'}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -351,7 +522,34 @@ const WorkersSubTab: React.FC = () => {
                               </div>
                               <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-gray-600">
                                 <div><span className="text-gray-500">Date:</span> {row.date}</div>
-                                <div className="text-right"><span className="text-gray-500">Eff:</span> {row.efficiencyPct != null ? `${row.efficiencyPct.toFixed(1)}%` : '—'}</div>
+                                <div className="text-right">
+                                  <span className="text-gray-500">Eff:</span>{' '}
+                                  <span
+                                    className={`tabular-nums rounded px-0.5 ${lowPctHighlightClass(row.efficiencyPct) || 'text-gray-900'}`}
+                                  >
+                                    {row.efficiencyPct != null ? `${row.efficiencyPct.toFixed(1)}%` : '—'}
+                                  </span>
+                                </div>
+                                <div className="col-span-2 grid grid-cols-2 gap-1">
+                                  <div>
+                                    <span className="text-gray-500">Qual:</span>{' '}
+                                    <span
+                                      className={`tabular-nums rounded px-0.5 ${lowPctHighlightClass(row.qualityPct) || 'text-gray-900'}`}
+                                    >
+                                      {row.qualityPct != null ? `${row.qualityPct.toFixed(1)}%` : '—'}
+                                    </span>
+                                  </div>
+                                  <div className="text-right">
+                                    <span className="text-gray-500">Util:</span>{' '}
+                                    <span
+                                      className={`tabular-nums rounded px-0.5 ${lowPctHighlightClass(row.workerUtilizationPct) || 'text-gray-900'}`}
+                                    >
+                                      {row.workerUtilizationPct != null
+                                        ? `${row.workerUtilizationPct.toFixed(1)}%`
+                                        : '—'}
+                                    </span>
+                                  </div>
+                                </div>
                                 <div><span className="text-gray-500">Exp:</span> {row.expectedOutput.toLocaleString()}</div>
                                 <div className="text-right"><span className="text-gray-500">True:</span> {row.trueOutput.toLocaleString()}</div>
                                 <div><span className="text-gray-500">Hrs:</span> {row.workingHours.toFixed(2)}</div>
@@ -378,6 +576,8 @@ const WorkersSubTab: React.FC = () => {
                   <th className="px-3 py-2 text-right">Working hours</th>
                   <th className="px-3 py-2 text-right">Of which overtime</th>
                   <th className="px-3 py-2 text-right">Efficiency</th>
+                  <th className="px-3 py-2 text-right">Quality</th>
+                  <th className="px-3 py-2 text-right">Utilization</th>
                   {!compactView && (
                     <th className="px-3 py-2">Production records</th>
                   )}
@@ -401,9 +601,31 @@ const WorkersSubTab: React.FC = () => {
                     <td className="px-3 py-3 text-right tabular-nums whitespace-nowrap">
                       {w.aggregate.totalOvertimeHours.toFixed(2)}
                     </td>
-                    <td className="px-3 py-3 text-right tabular-nums whitespace-nowrap">
+                    <td
+                      className={`px-3 py-3 text-right tabular-nums whitespace-nowrap rounded-sm ${lowPctHighlightClass(
+                        w.aggregate.efficiencyPct
+                      )}`}
+                    >
                       {w.aggregate.efficiencyPct != null
                         ? `${w.aggregate.efficiencyPct.toFixed(1)}%`
+                        : '—'}
+                    </td>
+                    <td
+                      className={`px-3 py-3 text-right tabular-nums whitespace-nowrap rounded-sm ${lowPctHighlightClass(
+                        w.aggregate.qualityPct
+                      )}`}
+                    >
+                      {w.aggregate.qualityPct != null
+                        ? `${w.aggregate.qualityPct.toFixed(1)}%`
+                        : '—'}
+                    </td>
+                    <td
+                      className={`px-3 py-3 text-right tabular-nums whitespace-nowrap rounded-sm ${lowPctHighlightClass(
+                        w.aggregate.workerUtilizationPct
+                      )}`}
+                    >
+                      {w.aggregate.workerUtilizationPct != null
+                        ? `${w.aggregate.workerUtilizationPct.toFixed(1)}%`
                         : '—'}
                     </td>
                     {!compactView && (
@@ -425,6 +647,8 @@ const WorkersSubTab: React.FC = () => {
                                   <th className="px-2 py-1 text-right">Working hours</th>
                                   <th className="px-2 py-1 text-right">Of which overtime</th>
                                   <th className="px-2 py-1 text-right">Eff.</th>
+                                  <th className="px-2 py-1 text-right">Qual.</th>
+                                  <th className="px-2 py-1 text-right">Util.</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -454,9 +678,31 @@ const WorkersSubTab: React.FC = () => {
                                     <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">
                                       {row.overtimeHours.toFixed(2)}
                                     </td>
-                                    <td className="px-2 py-1 text-right tabular-nums whitespace-nowrap">
+                                    <td
+                                      className={`px-2 py-1 text-right tabular-nums whitespace-nowrap ${lowPctHighlightClass(
+                                        row.efficiencyPct
+                                      )}`}
+                                    >
                                       {row.efficiencyPct != null
                                         ? `${row.efficiencyPct.toFixed(1)}%`
+                                        : '—'}
+                                    </td>
+                                    <td
+                                      className={`px-2 py-1 text-right tabular-nums whitespace-nowrap ${lowPctHighlightClass(
+                                        row.qualityPct
+                                      )}`}
+                                    >
+                                      {row.qualityPct != null
+                                        ? `${row.qualityPct.toFixed(1)}%`
+                                        : '—'}
+                                    </td>
+                                    <td
+                                      className={`px-2 py-1 text-right tabular-nums whitespace-nowrap ${lowPctHighlightClass(
+                                        row.workerUtilizationPct
+                                      )}`}
+                                    >
+                                      {row.workerUtilizationPct != null
+                                        ? `${row.workerUtilizationPct.toFixed(1)}%`
                                         : '—'}
                                     </td>
                                   </tr>

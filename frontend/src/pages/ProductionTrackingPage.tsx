@@ -1394,6 +1394,18 @@ const ProductionTrackingPage: React.FC = () => {
                                   <span className="ml-2 text-gray-900">{schematic.working_hours} h</span>
                                 </span>
                               )}
+                              {schematic.start_time != null && schematic.start_time !== '' && (
+                                <span>
+                                  <span className="text-sm font-medium text-gray-500">
+                                    {t('productionManagement.create.startTime')}
+                                  </span>
+                                  <span className="ml-2 text-gray-900 tabular-nums">
+                                    {schematic.start_time.length >= 5
+                                      ? schematic.start_time.slice(0, 5)
+                                      : schematic.start_time}
+                                  </span>
+                                </span>
+                              )}
                             </div>
                             {(totalProduction != null || (schematic.stages?.length ?? 0) > 0) && (
                               <div className="mt-3 flex flex-wrap gap-4">

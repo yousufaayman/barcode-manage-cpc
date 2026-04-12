@@ -6,7 +6,9 @@ from app.db.session import get_db
 from app import crud, schemas, models
 from app.crud import rework_batch as rework_batch_crud
 from app.core.deps import get_current_active_superuser, get_current_general_ops_or_above
-from typing import Annotated, List, Optional
+from app.services.workers_production_breakdown import build_all_workers_production_breakdown
+from typing import Annotated, List, Optional, Tuple
+from collections import defaultdict
 
 router = APIRouter()
 
@@ -50,6 +52,7 @@ def get_schematic(schematic_id: int, db: Annotated[Session, Depends(get_db)]):
         phase_name=phase_name,
         working_hours=float(schematic.working_hours) if schematic.working_hours is not None else None,
         hourly_production=schematic.hourly_production,
+        start_time=schematic.start_time,
         stages=[
             schemas.SewingLineStageResponse(
                 stage_id=s.stage_id,
@@ -91,6 +94,7 @@ def update_schematic(
         phase_name=phase_name,
         working_hours=float(updated.working_hours) if updated.working_hours is not None else None,
         hourly_production=updated.hourly_production,
+        start_time=updated.start_time,
     )
 
 
@@ -113,6 +117,7 @@ def create_sewing_line_schematic(
         phase_name=phase_name,
         working_hours=float(db_schematic.working_hours) if db_schematic.working_hours is not None else None,
         hourly_production=db_schematic.hourly_production,
+        start_time=db_schematic.start_time,
     )
 
 
@@ -167,132 +172,7 @@ def get_all_workers_breakdown(
     if date_from > date_to:
         raise HTTPException(status_code=400, detail=MSG_DATE_RANGE_INVALID)
 
-    # Read precomputed daily output from reporting.worker_daily_stage_production.
-    #
-    # IMPORTANT: For the Workers sub-tab we sum across *all* stage rows for the
-    # same (worker_id, work_date, schematic) because a worker can switch stages
-    # mid-day. The UI concept for WorkersSubTab is "one row per day per
-    # schematic", so stage is treated as an implementation detail.
-    rows = db.execute(
-        text(
-            """
-            SELECT
-                r.work_date,
-                r.worker_id,
-                w.worker_name,
-                p.phase_id,
-                p.phase_name,
-                sch.schematic_id,
-                sch.name AS schematic_name,
-                SUM(r.expected_output)::int AS expected_output,
-                SUM(r.true_output)::int AS true_output,
-                SUM(r.working_hours)::double precision AS working_hours,
-                SUM(r.overtime_hours)::double precision AS overtime_hours
-            FROM reporting.worker_daily_stage_production r
-            JOIN core.workers w
-              ON w.worker_id = r.worker_id
-            JOIN core.sewing_line_stages st
-              ON st.stage_id = r.stage_id
-            JOIN core.sewing_line_schematics sch
-              ON sch.schematic_id = st.schematic_id
-            JOIN core.production_phases p
-              ON p.phase_id = sch.production_phase_id
-            WHERE r.work_date >= :date_from
-              AND r.work_date <= :date_to
-            GROUP BY
-                r.work_date,
-                r.worker_id,
-                w.worker_name,
-                p.phase_id,
-                p.phase_name,
-                sch.schematic_id,
-                sch.name
-            ORDER BY
-                w.worker_name ASC,
-                p.phase_name ASC,
-                sch.name ASC,
-                r.work_date ASC;
-            """
-        ),
-        {"date_from": date_from, "date_to": date_to},
-    ).mappings().all()
-
-    records: List[schemas.WorkerProductionRecord] = []
-    aggregates_map: dict[int, dict] = {}
-
-    for r in rows:
-        worker_id = int(r["worker_id"])
-        expected_output = int(r["expected_output"] or 0)
-        true_output = int(r["true_output"] or 0)
-        working_hours = float(r["working_hours"] or 0)
-        overtime_hours = float(r["overtime_hours"] or 0)
-
-        efficiency_pct: Optional[float]
-        if expected_output > 0:
-            efficiency_pct = (true_output / float(expected_output)) * 100.0
-        else:
-            efficiency_pct = None
-
-        records.append(
-            schemas.WorkerProductionRecord(
-                worker_id=worker_id,
-                worker_name=str(r["worker_name"]),
-                phase_id=int(r["phase_id"]),
-                phase_name=str(r["phase_name"]),
-                schematic_id=int(r["schematic_id"]),
-                schematic_name=str(r["schematic_name"]),
-                work_date=r["work_date"],
-                expected_output=expected_output,
-                true_output=true_output,
-                working_hours=working_hours,
-                overtime_hours=overtime_hours,
-                efficiency_pct=efficiency_pct,
-            )
-        )
-
-        agg = aggregates_map.get(worker_id)
-        if not agg:
-            aggregates_map[worker_id] = {
-                "worker_id": worker_id,
-                "worker_name": str(r["worker_name"]),
-                "total_expected_output": 0,
-                "total_true_output": 0,
-                "total_working_hours": 0.0,
-                "total_overtime_hours": 0.0,
-            }
-            agg = aggregates_map[worker_id]
-
-        agg["total_expected_output"] += expected_output
-        agg["total_true_output"] += true_output
-        agg["total_working_hours"] += working_hours
-        agg["total_overtime_hours"] += overtime_hours
-
-    aggregates: List[schemas.WorkerProductionAggregate] = []
-    for agg in aggregates_map.values():
-        total_expected = int(agg["total_expected_output"])
-        total_true = int(agg["total_true_output"])
-        efficiency_pct = (
-            (total_true / float(total_expected)) * 100.0 if total_expected > 0 else None
-        )
-        aggregates.append(
-            schemas.WorkerProductionAggregate(
-                worker_id=int(agg["worker_id"]),
-                worker_name=str(agg["worker_name"]),
-                total_expected_output=total_expected,
-                total_true_output=total_true,
-                total_working_hours=float(agg["total_working_hours"]),
-                total_overtime_hours=float(agg["total_overtime_hours"]),
-                efficiency_pct=efficiency_pct,
-            )
-        )
-
-    aggregates.sort(key=lambda a: a.worker_name or "")
-    return schemas.AllWorkersProductionBreakdownResponse(
-        date_from=date_from,
-        date_to=date_to,
-        records=records,
-        aggregates=aggregates,
-    )
+    return build_all_workers_production_breakdown(db, date_from, date_to)
 
 
 @router.get(

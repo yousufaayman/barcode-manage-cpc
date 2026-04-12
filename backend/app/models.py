@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Date, Enum, UniqueConstraint, DECIMAL, TIMESTAMP, Text, CheckConstraint
+from sqlalchemy import Column, Integer, String, ForeignKey, Boolean, DateTime, Date, Time, Enum, UniqueConstraint, DECIMAL, TIMESTAMP, Text, CheckConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -192,6 +192,7 @@ class SewingLineSchematic(Base):
     active = Column(Boolean, nullable=False, default=True, server_default='true')
     working_hours = Column(DECIMAL(4, 2), nullable=True)  # e.g. 8.00, 8.50 hours per day
     hourly_production = Column(Integer, nullable=True)  # Total hourly production (line capacity) from production management
+    start_time = Column(Time, nullable=True)  # Line/shift start time of day
 
     # Relationships
     phase = relationship("ProductionPhase", back_populates="sewing_line_schematics")

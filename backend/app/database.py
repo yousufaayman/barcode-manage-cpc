@@ -423,6 +423,9 @@ def create_triggers_and_functions():
         -- Mark stage(s) considered as final output stages in a schematic.
         ALTER TABLE IF EXISTS core.sewing_line_stages
         ADD COLUMN IF NOT EXISTS is_in_final_stage BOOLEAN NOT NULL DEFAULT FALSE;
+
+        ALTER TABLE IF EXISTS core.sewing_line_schematics
+        ADD COLUMN IF NOT EXISTS start_time TIME NULL;
         """,
         # Phase transition function
         """

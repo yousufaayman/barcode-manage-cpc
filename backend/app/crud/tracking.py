@@ -10,6 +10,54 @@ from .batch import get_batch_by_barcode
 from .tracking_math import _calc_active_from_elapsed, _calc_elapsed_from_active
 
 
+def _elapsed_hours_since_worker_day_start(
+    db: Session,
+    assignment_date: date,
+    anchor_stage_id: int,
+    now: datetime,
+    apply_first_hour_waiver: bool = True,
+) -> float:
+    """
+    Elapsed working time since the shift start for the worker's day anchor.
+
+    Uses SewingLineSchematic.start_time for the schematic that owns anchor_stage_id.
+
+    When ``apply_first_hour_waiver`` is True: during the first clock hour after
+    shift start [start, start + 1h), elapsed is treated as 0 so assignments in that
+    window receive the full daily cap. When False (e.g. stage switch or same-stage
+    worker handoff), elapsed is always wall-clock hours since start (no waiver).
+
+    If start_time is NULL, falls back to the earliest assignment created_at on that
+    calendar date (legacy behavior when no line start is configured).
+    """
+    start_t = (
+        db.query(models.SewingLineSchematic.start_time)
+        .join(
+            models.SewingLineStage,
+            models.SewingLineStage.schematic_id == models.SewingLineSchematic.schematic_id,
+        )
+        .filter(models.SewingLineStage.stage_id == anchor_stage_id)
+        .scalar()
+    )
+    if start_t is not None:
+        day_start = datetime.combine(assignment_date, start_t)
+        if now < day_start:
+            return 0.0
+        if apply_first_hour_waiver:
+            first_hour_end = day_start + timedelta(hours=1)
+            if now < first_hour_end:
+                return 0.0
+        return max(0.0, (now - day_start).total_seconds() / 3600.0)
+    day_anchor_created_at = (
+        db.query(func.min(models.WorkerDailyStageAssignment.created_at))
+        .filter(models.WorkerDailyStageAssignment.assignment_date == assignment_date)
+        .scalar()
+    )
+    if day_anchor_created_at is None:
+        return 0.0
+    return max(0.0, (now - day_anchor_created_at).total_seconds() / 3600.0)
+
+
 def _compute_time_weighted_expected_per_stage(
     assignments_by_worker_date: Dict[Tuple[int, date], List[Dict[str, Any]]],
 ) -> Dict[Tuple[int, date], Dict[int, int]]:
@@ -209,6 +257,16 @@ def get_or_create_assignment(
     Enforces at most one active assignment per (assignment_date, stage_id): when
     activating this assignment, any other assignment for the same stage and date
     is set active=False.
+
+    Remaining hours on a row are the worker's daily cap (worker group
+    ``working_hours``, or schematic fallback if the group has none) minus elapsed
+    time since that stage's line shift start. Elapsed uses
+    ``SewingLineSchematic.start_time`` for the schematic that owns the stage in
+    question (incoming stage for new/handed-off rows; previous stage when closing
+    a segment).     During the first clock hour after ``start_time``, elapsed is 0 for cap math only
+    on a worker's first assignment of the day when it is not a same-stage handoff.
+    Stage switches and worker handoffs use real elapsed. If ``start_time`` is null,
+    elapsed falls back to the earliest assignment ``created_at`` on that calendar date (legacy).
     """
     existing_stage = (
         db.query(models.WorkerDailyStageAssignment)
@@ -258,11 +316,6 @@ def get_or_create_assignment(
         )
         return float(stage_schematic_hours or 0.0)
 
-    def _elapsed_from(ts: Optional[datetime]) -> float:
-        if ts is None:
-            return 0.0
-        return max(0.0, (now - ts).total_seconds() / 3600.0)
-
     def _remaining(total_hours: float, elapsed_hours: float) -> float:
         return max(0.0, float(total_hours) - float(elapsed_hours))
 
@@ -293,25 +346,22 @@ def get_or_create_assignment(
         .all()
     )
 
-    # Standardized elapsed anchor for the whole day (all workers/stages/schematics):
-    # first daily assignment created_at for this date.
-    day_anchor_created_at = (
-        db.query(func.min(models.WorkerDailyStageAssignment.created_at))
-        .filter(models.WorkerDailyStageAssignment.assignment_date == assignment_date)
-        .scalar()
-    )
-    elapsed_standard_day = _elapsed_from(day_anchor_created_at)
+    def _elapsed_for_stage(sid: int, *, apply_first_hour_waiver: bool = True) -> float:
+        return _elapsed_hours_since_worker_day_start(
+            db, assignment_date, sid, now, apply_first_hour_waiver=apply_first_hour_waiver
+        )
 
-    # First assignment of the day: inherit total available working hours.
+    # First assignment of the day: working_hours = daily cap − elapsed for this stage's line.
+    # First-hour waiver applies only for a net-new assignment, not same-stage worker handoff.
     # If this stage is being handed over from another worker on the same date,
     # use remaining hours for the new worker and elapsed hours for the replaced one.
     if not worker_day_assignments:
         inherited_total_hours = _get_worker_total_hours(worker_id, stage_id)
+        use_first_hour_waiver = active_stage_other is None
+        elapsed_hours = _elapsed_for_stage(stage_id, apply_first_hour_waiver=use_first_hour_waiver)
+        inherited_total_hours = _remaining(inherited_total_hours, elapsed_hours)
 
-        if active_stage_other and active_stage_other.created_at is not None:
-            elapsed_hours = elapsed_standard_day
-            inherited_total_hours = _remaining(inherited_total_hours, elapsed_hours)
-
+        if active_stage_other:
             # Old assignment should only be recalculated when still active.
             if getattr(active_stage_other, "active", False):
                 outgoing_total_hours = _get_worker_total_hours(
@@ -336,11 +386,13 @@ def get_or_create_assignment(
         db.refresh(assignment)
         return assignment, True
 
-    # Compute remaining using standardized elapsed anchor for this day.
+    # Remaining for the incoming stage = daily cap − elapsed on that stage's line (start_time).
     first_row = worker_day_assignments[0]
     total_available_hours = _get_worker_total_hours(worker_id, first_row.stage_id)
-    elapsed_worker_day = elapsed_standard_day
-    remaining_at_event = _remaining(total_available_hours, elapsed_worker_day)
+    remaining_at_event = _remaining(
+        total_available_hours,
+        _elapsed_for_stage(stage_id, apply_first_hour_waiver=False),
+    )
 
     # Determine previous/current stage using the most recently activated row.
     prev_row = worker_day_assignments[-1]
@@ -349,7 +401,7 @@ def get_or_create_assignment(
     if not is_stage_switch and existing_stage:
         if active_stage_other:
             # Worker switching on same stage/date.
-            elapsed_at_event = elapsed_standard_day
+            elapsed_at_event = _elapsed_for_stage(stage_id, apply_first_hour_waiver=False)
             incoming_total_hours = _get_worker_total_hours(worker_id, stage_id)
             incoming_remaining = _remaining(incoming_total_hours, elapsed_at_event)
 
@@ -380,12 +432,14 @@ def get_or_create_assignment(
     if getattr(prev_row, "active", False):
         prev_working_hours = float(prev_row.working_hours or 0.0)
         prev_row.working_hours = _calc_elapsed_from_active(
-            prev_working_hours, total_available_hours, elapsed_worker_day
+            prev_working_hours,
+            total_available_hours,
+            _elapsed_for_stage(int(prev_row.stage_id), apply_first_hour_waiver=False),
         )
         prev_row.active = False
 
     if active_stage_other:
-        target_stage_elapsed = elapsed_standard_day
+        target_stage_elapsed = _elapsed_for_stage(stage_id, apply_first_hour_waiver=False)
         if getattr(active_stage_other, "active", False):
             outgoing_total_hours = _get_worker_total_hours(
                 active_stage_other.worker_id, stage_id

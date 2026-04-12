@@ -22,6 +22,11 @@ import {
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
 
+function formatSchematicStartTimeHm(v: string | null | undefined): string | null {
+  if (v == null || v === '') return null;
+  return v.length >= 5 ? v.slice(0, 5) : v;
+}
+
 const ProductionManagementPage: React.FC = () => {
   const { t } = useTranslation();
   const { user } = useAuth();
@@ -355,6 +360,7 @@ const ProductionManagementPage: React.FC = () => {
                   <TableRow>
                     <TableHead>{t('productionManagement.schematicName')}</TableHead>
                     <TableHead>{t('productionManagement.phase')}</TableHead>
+                    <TableHead>{t('productionManagement.create.startTime')}</TableHead>
                     <TableHead>{t('productionManagement.status')}</TableHead>
                     <TableHead className="w-[1%] text-right align-middle whitespace-nowrap pl-4">
                       <span className="sr-only">{t('productionManagement.actions')}</span>
@@ -366,6 +372,9 @@ const ProductionManagementPage: React.FC = () => {
                     <TableRow key={s.schematic_id}>
                       <TableCell className="font-medium">{s.name}</TableCell>
                       <TableCell>{s.phase_name ?? t('common.na')}</TableCell>
+                      <TableCell className="tabular-nums">
+                        {formatSchematicStartTimeHm(s.start_time) ?? t('common.na')}
+                      </TableCell>
                       <TableCell>
                         <Badge variant={s.active ? 'default' : 'secondary'}>
                           {s.active ? t('productionManagement.active') : t('productionManagement.inactive')}

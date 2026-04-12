@@ -1344,6 +1344,8 @@ export interface SewingLineSchematic {
   phase_name?: string | null;
   working_hours?: number | null;
   hourly_production?: number | null;
+  /** Time of day (ISO-like string from API, e.g. "08:30:00") */
+  start_time?: string | null;
 }
 
 export interface SewingLineStageResponse {
@@ -1374,6 +1376,7 @@ export interface SewingLineSchematicCreate {
   active?: boolean;
   working_hours?: number | null;
   hourly_production?: number | null;
+  start_time?: string | null;
   stages?: SewingLineStageCreate[];
 }
 
@@ -1383,6 +1386,7 @@ export interface SewingLineSchematicUpdate {
   active?: boolean;
   working_hours?: number | null;
   hourly_production?: number | null;
+  start_time?: string | null;
   stages?: SewingLineStageCreate[];
 }
 
@@ -1620,6 +1624,12 @@ export interface WorkerProductionRecord {
   true_output: number;
   working_hours: number;
   overtime_hours: number;
+  /** One slot per worker/schematic/day (any assignment incl. inactive) × default daily hours + overtime */
+  capacity_working_hours: number;
+  /** Single rejections linked to worker, allocated by true-output share for that worker-day */
+  rework_pcs: number;
+  /** 100 * produced / (produced + rework) for this row */
+  quality_pct?: number | null;
   efficiency_pct?: number | null;
 }
 
@@ -1630,6 +1640,10 @@ export interface WorkerProductionAggregate {
   total_true_output: number;
   total_working_hours: number;
   total_overtime_hours: number;
+  total_capacity_working_hours: number;
+  worker_utilization_pct?: number | null;
+  total_rework_pcs: number;
+  quality_pct?: number | null;
   efficiency_pct?: number | null;
 }
 

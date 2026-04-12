@@ -28,6 +28,11 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.utils.size_sort import get_size_sort_key
 from app.crud.tracking import get_sewing_daily_report_data
+from app.services.workers_production_breakdown import (
+    build_all_workers_production_breakdown,
+    get_absence_workers_for_date,
+    get_total_active_worker_count,
+)
 from app.crud.qc_summary import (
     build_job_order_qc_summary,
     get_job_order_ids_with_qc_rejections_on_date,
@@ -317,6 +322,8 @@ class ReportPDFService:
                     styles["Italic"],
                 )
             )
+
+        self._append_sewing_worker_utilization_tables(story, db, target_date)
 
         doc.build(story)
         logger.info("Sewing report PDF generated at %s", filepath)
@@ -2135,3 +2142,173 @@ class ReportPDFService:
                 tbl.setStyle(tbl_style)
                 story.append(tbl)
                 story.append(Spacer(1, 12))
+
+    def _append_sewing_worker_utilization_tables(
+        self,
+        story: List[Any],
+        db: Session,
+        target_date: date,
+    ) -> None:
+        """
+        End-of-report tables: worker utilization (same formula as Advanced Statistics → Workers,
+        for a single day) sorted worst-to-best, and absence (no daily stage assignment that day).
+        """
+        pdf_fonts.ensure_pdf_fonts_registered()
+        content_width = 7.0 * inch
+        styles = getSampleStyleSheet()
+        pdf_fonts.patch_reportlab_sample_styles(styles)
+
+        section_title = ParagraphStyle(
+            "SewingWorkerUtilTitle",
+            parent=styles["Normal"],
+            fontSize=13,
+            leading=16,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+            textColor=colors.HexColor("#111827"),
+            spaceBefore=14,
+            spaceAfter=6,
+        )
+        capacity_style = ParagraphStyle(
+            "SewingWorkerUtilCapacity",
+            parent=styles["Normal"],
+            fontSize=10,
+            leading=13,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+            textColor=colors.HexColor("#1F2937"),
+            spaceAfter=8,
+        )
+        hdr_para = ParagraphStyle(
+            "SewingWorkerUtilTblHdr",
+            parent=styles["Normal"],
+            fontSize=9,
+            leading=11,
+            alignment=TA_CENTER,
+            textColor=colors.white,
+            fontName=pdf_fonts.PDF_FONT_BOLD,
+        )
+        header_bg = colors.HexColor("#1F2937")
+        grid_color = colors.HexColor("#E5E7EB")
+
+        story.append(PageBreak())
+        story.append(
+            Paragraph(
+                "Worker utilization",
+                section_title,
+            )
+        )
+
+        breakdown = build_all_workers_production_breakdown(db, target_date, target_date)
+        aggs = list(breakdown.aggregates or [])
+        aggs.sort(
+            key=lambda a: (
+                0 if a.worker_utilization_pct is None else 1,
+                a.worker_utilization_pct if a.worker_utilization_pct is not None else 0.0,
+                (a.worker_name or "").lower(),
+            )
+        )
+        table_worker_count = len(aggs)
+        total_workers = get_total_active_worker_count(db)
+        story.append(
+            Paragraph(
+                f"Capacity = {table_worker_count} / {total_workers}",
+                capacity_style,
+            )
+        )
+
+        u_hdr = [
+            Paragraph(lbl, hdr_para)
+            for lbl in ["Worker ID", "Worker name", "Worker utilization"]
+        ]
+        u_rows: List[List[Any]] = [u_hdr]
+        for a in aggs:
+            pct = a.worker_utilization_pct
+            pct_str = f"{float(pct):.1f}%" if pct is not None else "—"
+            u_rows.append(
+                [
+                    str(int(a.worker_id)),
+                    prepare_pdf_text(str(a.worker_name or "—")),
+                    pct_str,
+                ]
+            )
+        if len(u_rows) == 1:
+            u_rows.append(["—", "—", "—"])
+
+        w0 = 0.95 * inch
+        w1 = content_width - w0 - 1.0 * inch
+        w2 = 1.0 * inch
+        u_tbl = Table(
+            apply_pdf_unicode_to_table_rows(u_rows),
+            colWidths=[w0, max(w1, 3.5 * inch), w2],
+            repeatRows=1,
+        )
+        u_tbl.hAlign = "LEFT"
+        u_tbl.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                    ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("FONTSIZE", (0, 1), (-1, -1), 9),
+                    ("ALIGN", (0, 1), (0, -1), "CENTER"),
+                    ("ALIGN", (1, 1), (1, -1), "LEFT"),
+                    ("ALIGN", (2, 1), (2, -1), "CENTER"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("GRID", (0, 0), (-1, -1), 0.25, grid_color),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        story.append(u_tbl)
+        story.append(Spacer(1, 16))
+
+        story.append(
+            Paragraph(
+                "Absence (no daily assignment for this date)",
+                section_title,
+            )
+        )
+
+        absence_workers = get_absence_workers_for_date(db, target_date)
+        ns_hdr = [
+            Paragraph(lbl, hdr_para) for lbl in ["Worker ID", "Worker name"]
+        ]
+        ns_rows: List[List[Any]] = [ns_hdr]
+        for wid, wname in absence_workers:
+            ns_rows.append([str(int(wid)), prepare_pdf_text(str(wname or "—"))])
+        if len(ns_rows) == 1:
+            ns_rows.append(["—", "—"])
+
+        ns_w0 = 0.95 * inch
+        ns_w1 = content_width - ns_w0
+        ns_tbl = Table(
+            apply_pdf_unicode_to_table_rows(ns_rows),
+            colWidths=[ns_w0, max(ns_w1, 4.0 * inch)],
+            repeatRows=1,
+        )
+        ns_tbl.hAlign = "LEFT"
+        ns_tbl.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), pdf_fonts.PDF_FONT_BOLD),
+                    ("FONTNAME", (0, 1), (-1, -1), pdf_fonts.PDF_FONT_REGULAR),
+                    ("FONTSIZE", (0, 0), (-1, 0), 9),
+                    ("FONTSIZE", (0, 1), (-1, -1), 9),
+                    ("ALIGN", (0, 1), (0, -1), "CENTER"),
+                    ("ALIGN", (1, 1), (1, -1), "LEFT"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("GRID", (0, 0), (-1, -1), 0.25, grid_color),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        story.append(ns_tbl)

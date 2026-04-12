@@ -13,6 +13,7 @@ def create_schematic(db: Session, schematic: schemas.SewingLineSchematicCreate):
         active=schematic.active,
         working_hours=float(schematic.working_hours) if schematic.working_hours is not None else None,
         hourly_production=schematic.hourly_production,
+        start_time=schematic.start_time,
     )
     db.add(db_schematic)
     db.flush()  # get schematic_id without committing
@@ -66,6 +67,8 @@ def update_schematic(db: Session, schematic_id: int, data: schemas.SewingLineSch
         schematic.working_hours = float(v) if v is not None else None
     if "hourly_production" in set_fields:
         schematic.hourly_production = set_fields["hourly_production"]
+    if "start_time" in set_fields:
+        schematic.start_time = set_fields["start_time"]
 
     # Safely update stages without hard-deleting rows that may be referenced
     # from ops.worker_daily_stage_assignments (stage_id has ON DELETE RESTRICT).
@@ -173,6 +176,7 @@ def get_schematics(db: Session, skip: int = 0, limit: int = 100, active_only: bo
             phase_name=phase_name,
             working_hours=float(s.working_hours) if s.working_hours is not None else None,
             hourly_production=s.hourly_production,
+            start_time=s.start_time,
         )
         for s, phase_name in rows
     ]
