@@ -85,7 +85,6 @@ const SearchableDropdown: React.FC<SearchableDropdownProps> = ({
                   setSearchTerm(next);
                 }
               }}
-              onFocus={() => handleOpenChange(true)}
               placeholder={placeholder}
               disabled={disabled}
               className={cn(
@@ -232,7 +231,6 @@ export const EditableDropdown: React.FC<EditableDropdownProps> = ({
           <input
             value={inputValue}
             onChange={(e) => handleInputChange(e.target.value)}
-            onFocus={() => setOpen(true)}
             placeholder={placeholder}
             disabled={disabled}
             role="combobox"

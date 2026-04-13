@@ -273,19 +273,19 @@ const JobOrdersPage: React.FC = () => {
   useEffect(() => {
     const fetchExistingOptions = async () => {
       try {
-        const [colors, sizes, models, materials] = await Promise.all([
+        const [colors, sizes, models] = await Promise.all([
           jobOrderApi.getExistingColors(),
           jobOrderApi.getExistingSizes(),
           jobOrderApi.getExistingModels(),
-          jobOrderApi.getExistingMaterials()
         ]);
+        const clientsResponse = await api.get<Array<{ client_id: number; client_name: string }>>('/batches/clients/');
+        const clientsData = Array.isArray(clientsResponse.data) ? clientsResponse.data : [];
         // Fetch brands from jobOrderApi.getAllSimple
         const simpleJobOrders = await jobOrderApi.getAllSimple();
         const brands = [...new Set(simpleJobOrders.map(jo => jo.brand_name).filter(name => name))];
         setExistingColors(colors);
         setExistingSizes(sizes);
         setExistingModels(models);
-        setExistingMaterials(materials);
         setExistingBrands(brands);
       } catch (error) {
         console.error('Error fetching existing options:', error);
@@ -294,6 +294,18 @@ const JobOrdersPage: React.FC = () => {
 
     fetchExistingOptions();
   }, []);
+
+  useEffect(() => {
+    const loadMaterials = async () => {
+      try {
+        const mats = await jobOrderApi.getExistingMaterials();
+        setExistingMaterials(mats);
+      } catch (error) {
+        console.error('Error fetching materials options:', error);
+      }
+    };
+    loadMaterials();
+  }, [newJobOrder.brand_name]);
 
   // Detect mobile screen size
   useEffect(() => {

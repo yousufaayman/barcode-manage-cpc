@@ -54,6 +54,28 @@ def _normalize_material_request_payload(raw_material: Any) -> Dict[str, Any]:
     }
 
 
+def _next_client_fabric_sequence(db: Session, client_id: int, material_id: int) -> int:
+    row = db.execute(
+        text(
+            """
+            INSERT INTO core.client_fabric_seq (client_id, material_id, last_seq)
+            VALUES (:client_id, :material_id, 1)
+            ON CONFLICT (client_id, material_id) DO UPDATE
+                SET last_seq = core.client_fabric_seq.last_seq + 1
+            RETURNING last_seq
+            """
+        ),
+        {"client_id": client_id, "material_id": material_id},
+    ).fetchone()
+    return int(row[0]) if row and row[0] is not None else 1
+
+
+def _build_fabric_code(db: Session, client: models.Client, material_id: int) -> str:
+    base = (client.client_code or "").strip().upper() or "CL"
+    seq = _next_client_fabric_sequence(db, client.client_id, material_id)
+    return f"{base}{material_id}{seq}"
+
+
 def _replace_job_order_material_requests(db: Session, job_order_id: int, materials_payload: Optional[List[Any]]) -> None:
     if materials_payload is None:
         return
@@ -83,6 +105,18 @@ def _replace_job_order_material_requests(db: Session, job_order_id: int, materia
         if row[0]
     }
 
+    job_order = (
+        db.query(models.JobOrder)
+        .filter(models.JobOrder.job_order_id == job_order_id)
+        .first()
+    )
+    material_client_id = job_order.client_id if job_order else None
+    if material_client_id is None:
+        return
+    client = db.query(models.Client).filter(models.Client.client_id == material_client_id).first()
+    if not client:
+        return
+
     for raw_material in materials_payload:
         normalized = _normalize_material_request_payload(raw_material)
         if not normalized["type"] or not normalized["panel_type"] or normalized["consumption"] <= 0:
@@ -92,28 +126,50 @@ def _replace_job_order_material_requests(db: Session, job_order_id: int, materia
         if normalized["color_name"] and normalized["color_name"] not in allowed_color_names:
             continue
 
-        material = db.query(models.Material).filter(
-            models.Material.material_name == normalized["type"]
-        ).first()
+        material = (
+            db.query(models.Material)
+            .filter(models.Material.material_name == normalized["type"])
+            .first()
+        )
         if not material:
-            material = models.Material(material_name=normalized["type"])
+            material = models.Material(
+                material_name=normalized["type"],
+            )
             db.add(material)
             db.flush()
 
-        color_id = None
+        color = None
         computed_quantity = None
         if normalized["color_name"]:
-            clr = get_color_by_name(db, normalized["color_name"])
-            if clr:
-                color_id = clr.color_id
+            color = get_color_by_name(db, normalized["color_name"])
             color_total = float(color_total_quantities.get(normalized["color_name"], 0))
             computed_quantity = color_total * float(normalized["consumption"])
+        if color is None:
+            continue
+
+        fabric = (
+            db.query(models.ClientFabricCode)
+            .filter(
+                models.ClientFabricCode.client_id == material_client_id,
+                models.ClientFabricCode.material_id == material.material_id,
+                models.ClientFabricCode.color_id == color.color_id,
+            )
+            .first()
+        )
+        if not fabric:
+            fabric = models.ClientFabricCode(
+                client_id=material_client_id,
+                material_id=material.material_id,
+                color_id=color.color_id,
+                fabric_code=_build_fabric_code(db, client, material.material_id),
+            )
+            db.add(fabric)
+            db.flush()
 
         db.add(models.JobOrderMaterialRequest(
             job_order_id=job_order_id,
-            material_id=material.material_id,
+            fabric_code_id=fabric.id,
             panel_type=normalized["panel_type"],
-            color_id=color_id,
             consumption=normalized["consumption"],
             quantity=computed_quantity,
             measurement_scale=normalized["measurement_scale"],
@@ -165,7 +221,7 @@ def create_job_order_with_names(db: Session, job_order: schemas.JobOrderCreateWi
     
     client = get_client_by_name(db, job_order.client_name)
     if not client:
-        client = create_client(db, schemas.ClientCreate(name=job_order.client_name))
+        client = create_client(db, schemas.ClientCreate(client_name=job_order.client_name))
     
     db_job_order = models.JobOrder(
         model_id=model.model_id,
@@ -470,23 +526,133 @@ def get_job_order_overall_status(db: Session, job_order_id: int) -> Optional[Dic
 def get_job_order_materials(db: Session, job_order_id: int):
     materials = db.query(
         models.JobOrderMaterialRequest,
+        models.ClientFabricCode.fabric_code,
+        models.Material.material_id,
         models.Material.material_name,
-        models.Color.color_name
-    ).join(models.Material, models.JobOrderMaterialRequest.material_id == models.Material.material_id)
-    materials = materials.join(models.Color, models.JobOrderMaterialRequest.color_id == models.Color.color_id, isouter=True)
+        models.Color.color_name,
+    ).join(models.ClientFabricCode, models.JobOrderMaterialRequest.fabric_code_id == models.ClientFabricCode.id)
+    materials = materials.join(models.Material, models.ClientFabricCode.material_id == models.Material.material_id)
+    materials = materials.join(models.Color, models.ClientFabricCode.color_id == models.Color.color_id)
     materials = materials.filter(models.JobOrderMaterialRequest.job_order_id == job_order_id).all()
-    return [
+    rows = []
+    for row in materials:
+        jomr, fabric_code, material_id, material_name, color_name = row[0], row[1], row[2], row[3], row[4]
+        rows.append(
+            {
+                "id": jomr.id,
+                "material_id": material_id,
+                "fabric_code": fabric_code,
+                "type": material_name,
+                "material_name": material_name,
+                "panel_type": jomr.panel_type,
+                "consumption": float(jomr.consumption) if jomr.consumption is not None else None,
+                "quantity": float(jomr.quantity) if jomr.quantity is not None else None,
+                "measurement_scale": jomr.measurement_scale,
+                "color_name": color_name,
+            }
+        )
+    return rows
+
+
+def get_material_options_for_job_order(
+    db: Session,
+    job_order_id: int,
+    include_non_client: bool = False,
+):
+    job_order = (
+        db.query(models.JobOrder)
+        .filter(models.JobOrder.job_order_id == job_order_id)
+        .first()
+    )
+    if not job_order:
+        return []
+
+    client_id = job_order.client_id
+
+    # Initialize from materials explicitly used by this job order (source of truth).
+    base_rows = db.execute(
+        text(
+            """
+            SELECT DISTINCT
+                m.material_id,
+                m.material_name,
+                cfc.fabric_code,
+                c.color_id,
+                c.color_name,
+                (CASE WHEN :client_id IS NOT NULL AND cfc.client_id = :client_id THEN TRUE ELSE FALSE END) AS belongs_to_client
+            FROM core.job_order_material_requests jomr
+            JOIN core.client_fabric_codes cfc ON cfc.id = jomr.fabric_code_id
+            JOIN core.materials m ON m.material_id = cfc.material_id
+            LEFT JOIN core.colors c ON c.color_id = cfc.color_id
+            WHERE jomr.job_order_id = :job_order_id
+            ORDER BY m.material_name, cfc.fabric_code, c.color_name
+            """
+        ),
+        {"job_order_id": job_order_id, "client_id": client_id},
+    ).fetchall()
+
+    options = [
         {
-            "id": m.JobOrderMaterialRequest.id,
-            "material_id": m.JobOrderMaterialRequest.material_id,
-            "type": m.material_name,
-            "material_name": m.material_name,
-            "panel_type": m.JobOrderMaterialRequest.panel_type,
-            "consumption": float(m.JobOrderMaterialRequest.consumption) if m.JobOrderMaterialRequest.consumption is not None else None,
-            "quantity": float(m.JobOrderMaterialRequest.quantity) if m.JobOrderMaterialRequest.quantity is not None else None,
-            "measurement_scale": m.JobOrderMaterialRequest.measurement_scale,
-            "color_name": m.color_name
-        } for m in materials]
+            "material_id": int(row[0]),
+            "material_name": row[1],
+            "fabric_code": row[2],
+            "color_id": int(row[3]) if row[3] is not None else None,
+            "color_name": row[4],
+            "belongs_to_client": bool(row[5]),
+        }
+        for row in base_rows
+    ]
+
+    if include_non_client:
+        non_client_rows = db.execute(
+            text(
+                """
+                SELECT DISTINCT
+                    m.material_id,
+                    m.material_name,
+                    cfc.fabric_code,
+                    c.color_id,
+                    c.color_name
+                FROM core.materials m
+                LEFT JOIN core.client_fabric_codes cfc
+                    ON cfc.material_id = m.material_id
+                   AND (:client_id IS NULL OR cfc.client_id <> :client_id)
+                LEFT JOIN core.colors c ON c.color_id = cfc.color_id
+                ORDER BY
+                    CASE WHEN cfc.fabric_code IS NULL OR btrim(cfc.fabric_code) = '' THEN 1 ELSE 0 END,
+                    m.material_name,
+                    cfc.fabric_code,
+                    c.color_name
+                """
+            ),
+            {"client_id": client_id},
+        ).fetchall()
+
+        existing_keys = {
+            (opt["material_id"], opt.get("fabric_code"), opt.get("color_id"))
+            for opt in options
+        }
+        for row in non_client_rows:
+            key = (
+                int(row[0]),
+                row[2],
+                int(row[3]) if row[3] is not None else None,
+            )
+            if key in existing_keys:
+                continue
+            options.append(
+                {
+                    "material_id": int(row[0]),
+                    "material_name": row[1],
+                    "fabric_code": row[2],
+                    "color_id": int(row[3]) if row[3] is not None else None,
+                    "color_name": row[4],
+                    "belongs_to_client": False,
+                }
+            )
+            existing_keys.add(key)
+
+    return options
 
 # ============================================================================
 # ITEM-LEVEL QUANTITY TRACKING FUNCTIONS

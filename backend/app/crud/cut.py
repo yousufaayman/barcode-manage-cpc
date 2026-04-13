@@ -8,6 +8,28 @@ from .. import schemas
 VALID_PRINT_STATUSES = {'pending', 'in_progress', 'completed'}
 
 
+def resolve_material_id_for_cut(db: Session, job_order_id: int, color_id: int) -> Optional[int]:
+    """
+    Pick a material for this cut from job order material requests: prefer the row scoped to
+    this color, otherwise any request for the job order with NULL color.
+    """
+    row = db.execute(
+        text("""
+            SELECT cfc.material_id
+            FROM core.job_order_material_requests jomr
+            JOIN core.client_fabric_codes cfc ON cfc.id = jomr.fabric_code_id
+            WHERE jomr.job_order_id = :job_order_id
+              AND cfc.color_id = :color_id
+            ORDER BY jomr.id
+            LIMIT 1
+        """),
+        {"job_order_id": job_order_id, "color_id": color_id},
+    ).fetchone()
+    if not row or row[0] is None:
+        return None
+    return int(row[0])
+
+
 def resolve_print_status(has_prints: bool, requested_status: Optional[str], fallback_status: Optional[str] = None) -> Optional[str]:
     """
     Determine the print status to persist based on whether the job order requires printing.
@@ -172,6 +194,8 @@ def get_all_cut_details(
                 "notes": row.notes,
                 "print_status": row.print_status,
                 "requires_printing": bool(row.requires_printing),
+                "material_id": None,
+                "material_name": None,
                 "sizes": []
             }
         
@@ -182,21 +206,24 @@ def get_all_cut_details(
             "total_pieces": row.total_pieces
         })
     
-    # Fetch marker_length from ops.cut_details for list (view may not have it)
+    # marker_length, material_id, material_name from ops.cut_details (view may omit some columns)
     if cut_ids:
         placeholders = ','.join([':cut_id_' + str(i) for i in range(len(cut_ids))])
         marker_params = {f'cut_id_{i}': cid for i, cid in enumerate(cut_ids)}
-        marker_result = db.execute(
+        extra_result = db.execute(
             text(f"""
-                SELECT cut_id, marker_length
-                FROM ops.cut_details
-                WHERE cut_id IN ({placeholders})
+                SELECT cd.cut_id, cd.marker_length, cd.material_id, m.material_name
+                FROM ops.cut_details cd
+                LEFT JOIN core.materials m ON m.material_id = cd.material_id
+                WHERE cd.cut_id IN ({placeholders})
             """),
             marker_params
         )
-        for mrow in marker_result.fetchall():
+        for mrow in extra_result.fetchall():
             if mrow[0] in cuts_dict:
                 cuts_dict[mrow[0]]["marker_length"] = float(mrow[1]) if mrow[1] is not None else None
+                cuts_dict[mrow[0]]["material_id"] = int(mrow[2]) if mrow[2] is not None else None
+                cuts_dict[mrow[0]]["material_name"] = mrow[3]
     
     cuts_list = []
     for cut_id in cut_ids:
@@ -243,10 +270,13 @@ def get_cut_details_by_id(db: Session, cut_id: int) -> Optional[Dict[str, Any]]:
     cut_details_result = db.execute(
         text("""
             SELECT 
-                job_order_items_ratios,
-                marker_length
-            FROM ops.cut_details
-            WHERE cut_id = :cut_id
+                cd.job_order_items_ratios,
+                cd.marker_length,
+                cd.material_id,
+                m.material_name
+            FROM ops.cut_details cd
+            LEFT JOIN core.materials m ON m.material_id = cd.material_id
+            WHERE cd.cut_id = :cut_id
         """),
         {"cut_id": cut_id}
     )
@@ -258,6 +288,8 @@ def get_cut_details_by_id(db: Session, cut_id: int) -> Optional[Dict[str, Any]]:
     # Get the ratios JSONB - PostgreSQL JSONB is returned as dict by SQLAlchemy
     ratios = cut_details_row[0] if cut_details_row else {}
     marker_length_val = float(cut_details_row[1]) if cut_details_row[1] is not None else None
+    material_id_val = int(cut_details_row[2]) if cut_details_row[2] is not None else None
+    material_name_val = cut_details_row[3]
     # If it's a string (shouldn't happen with JSONB, but just in case), parse it
     if isinstance(ratios, str):
         import json
@@ -328,6 +360,8 @@ def get_cut_details_by_id(db: Session, cut_id: int) -> Optional[Dict[str, Any]]:
                 "print_status": row.print_status,
                 "requires_printing": bool(row.requires_printing),
                 "job_order_items_ratios": ratios,  # Include ratios
+                "material_id": material_id_val,
+                "material_name": material_name_val,
             }
         
         # Get ratio for this item_id
@@ -506,6 +540,13 @@ def create_cut(db: Session, cut: schemas.CutCreate, user_id: Optional[int] = Non
     ratios_jsonb = json.dumps({str(k): float(v) for k, v in cut.job_order_items_ratios.items()})
     
     print_status_value = resolve_print_status(job_order_has_prints, cut.print_status)
+    material_exists = db.execute(
+        text("SELECT material_id FROM core.materials WHERE material_id = :material_id"),
+        {"material_id": cut.material_id},
+    ).fetchone()
+    if not material_exists:
+        raise ValueError(f"Material with ID {cut.material_id} not found")
+    resolved_material_id = int(cut.material_id)
 
     # Insert cut_details
     cut_result = db.execute(
@@ -520,7 +561,8 @@ def create_cut(db: Session, cut: schemas.CutCreate, user_id: Optional[int] = Non
                 notes,
                 print_status,
                 total_layers,
-                num_of_rolls_used
+                num_of_rolls_used,
+                material_id
             ) VALUES (
                 :job_order_id,
                 :color_id,
@@ -531,7 +573,8 @@ def create_cut(db: Session, cut: schemas.CutCreate, user_id: Optional[int] = Non
                 :notes,
                 :print_status,
                 0,
-                0
+                0,
+                :material_id
             ) RETURNING cut_id
         """),
         {
@@ -542,7 +585,8 @@ def create_cut(db: Session, cut: schemas.CutCreate, user_id: Optional[int] = Non
             "marker_length": getattr(cut, "marker_length", None),
             "user_id": user_id,
             "notes": cut.notes,
-            "print_status": print_status_value
+            "print_status": print_status_value,
+            "material_id": resolved_material_id,
         }
     )
     cut_id = cut_result.scalar()
@@ -635,7 +679,8 @@ def update_cut(db: Session, cut_id: int, cut_update: schemas.CutUpdate, user_id:
                 waste_fabric_weight,
                 marker_length,
                 notes,
-                print_status
+                print_status,
+                material_id
             FROM ops.cut_details
             WHERE cut_id = :cut_id
         """),
@@ -702,6 +747,19 @@ def update_cut(db: Session, cut_id: int, cut_update: schemas.CutUpdate, user_id:
     new_print_status = resolve_print_status(job_order_has_prints, cut_update.print_status, existing_cut.print_status)
 
     new_marker_length = cut_update.marker_length if cut_update.marker_length is not None else existing_cut.marker_length
+    if cut_update.material_id is not None:
+        material_exists = db.execute(
+            text("SELECT material_id FROM core.materials WHERE material_id = :material_id"),
+            {"material_id": cut_update.material_id},
+        ).fetchone()
+        if not material_exists:
+            raise ValueError(f"Material with ID {cut_update.material_id} not found")
+        new_material_id = int(cut_update.material_id)
+    elif cut_update.job_order_id is not None or cut_update.color_id is not None:
+        new_material_id = resolve_material_id_for_cut(db, new_job_order_id, new_color_id)
+    else:
+        new_material_id = existing_cut.material_id
+
     db.execute(
         text("""
             UPDATE ops.cut_details
@@ -711,7 +769,8 @@ def update_cut(db: Session, cut_id: int, cut_update: schemas.CutUpdate, user_id:
                 waste_fabric_weight = :waste_fabric_weight,
                 marker_length = :marker_length,
                 notes = :notes,
-                print_status = :print_status
+                print_status = :print_status,
+                material_id = :material_id
             WHERE cut_id = :cut_id
         """),
         {
@@ -722,6 +781,7 @@ def update_cut(db: Session, cut_id: int, cut_update: schemas.CutUpdate, user_id:
             "marker_length": new_marker_length,
             "notes": cut_update.notes,
             "print_status": new_print_status,
+            "material_id": new_material_id,
             "cut_id": cut_id
         }
     )
@@ -951,7 +1011,8 @@ def archive_cut_detail(db: Session, cut_id: int):
                 created_at,
                 created_by_user_id,
                 notes,
-                print_status
+                print_status,
+                material_id
             FROM ops.cut_details
             WHERE cut_id = :cut_id
         """),
@@ -986,6 +1047,7 @@ def archive_cut_detail(db: Session, cut_id: int):
         created_by_user_id=cut_row[9],
         notes=cut_row[10],
         print_status=cut_row[11],
+        material_id=cut_row[12],
         archived_at=func.now()
     )
     db.add(archived_cut)
@@ -1122,7 +1184,8 @@ def restore_cut_detail(db: Session, cut_id: int):
                 updated_at,
                 created_by_user_id,
                 notes,
-                print_status
+                print_status,
+                material_id
             FROM archive.cut_details
             WHERE cut_id = :cut_id
         """),
@@ -1155,7 +1218,8 @@ def restore_cut_detail(db: Session, cut_id: int):
                 created_at,
                 created_by_user_id,
                 notes,
-                print_status
+                print_status,
+                material_id
             ) VALUES (
                 :cut_id,
                 :job_order_id,
@@ -1168,7 +1232,8 @@ def restore_cut_detail(db: Session, cut_id: int):
                 :created_at,
                 :created_by_user_id,
                 :notes,
-                :print_status
+                :print_status,
+                :material_id
             )
         """),
         {
@@ -1183,7 +1248,8 @@ def restore_cut_detail(db: Session, cut_id: int):
             "created_at": cut_row[8],
             "created_by_user_id": cut_row[10],
             "notes": cut_row[11],
-            "print_status": cut_row[12]
+            "print_status": cut_row[12],
+            "material_id": cut_row[13],
         }
     )
     

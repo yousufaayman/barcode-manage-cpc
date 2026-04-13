@@ -6,6 +6,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Switch } from '../components/ui/switch';
 import { Plus, X, ArrowLeft, Scissors, RefreshCw } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { cutsApi, jobOrderApi } from '../services/api';
@@ -24,7 +25,17 @@ interface JobOrder {
   job_order_id: number;
   job_order_number: string;
   model_name: string | null;
+  client_id?: number | null;
   items: JobOrderItem[];
+}
+
+interface MaterialOption {
+  material_id: number;
+  material_name: string;
+  fabric_code?: string | null;
+  color_id?: number | null;
+  color_name?: string | null;
+  belongs_to_client: boolean;
 }
 
 const AddCutPage: React.FC = () => {
@@ -45,6 +56,9 @@ const AddCutPage: React.FC = () => {
   const [selectedJobOrderId, setSelectedJobOrderId] = useState<number | null>(null);
   const [jobOrder, setJobOrder] = useState<JobOrder | null>(null);
   const [selectedColorId, setSelectedColorId] = useState<number | null>(null);
+  const [selectedMaterialId, setSelectedMaterialId] = useState<number | null>(null);
+  const [includeNonClientMaterials, setIncludeNonClientMaterials] = useState(false);
+  const [materialOptions, setMaterialOptions] = useState<MaterialOption[]>([]);
   const [ratios, setRatios] = useState<{ [item_id: string]: number }>({});
   const [wasteWeight, setWasteWeight] = useState<string>('');
   const [markerLength, setMarkerLength] = useState<string>('');
@@ -68,6 +82,13 @@ const AddCutPage: React.FC = () => {
   }>>([]);
 
   const skipJobOrderResetRef = useRef(false);
+  const getMaterialOptionLabel = (m: MaterialOption): string => {
+    const colorPart = m.color_name ? ` - ${m.color_name}` : '';
+    if (m.fabric_code) {
+      return `${m.material_name} (${m.fabric_code}${colorPart})`;
+    }
+    return `${m.material_name}${colorPart} (No client fabric code)`;
+  };
   const handleRetryLoadCut = () => {
     setInitialCutError(null);
     setInitialCutLoading(true);
@@ -125,6 +146,54 @@ const AddCutPage: React.FC = () => {
   }, [selectedJobOrderId, toast]);
 
   useEffect(() => {
+    const fetchMaterialOptions = async () => {
+      if (!selectedJobOrderId) {
+        setMaterialOptions([]);
+        setSelectedMaterialId(null);
+        return;
+      }
+      try {
+        const options = await jobOrderApi.getMaterialOptions(
+          selectedJobOrderId,
+          includeNonClientMaterials
+        );
+        setMaterialOptions(options);
+      } catch (error) {
+        console.error('Error fetching material options:', error);
+        toast({
+          title: 'Error',
+          description: 'Failed to fetch materials for this client',
+          variant: 'destructive',
+        });
+      }
+    };
+    fetchMaterialOptions();
+  }, [selectedJobOrderId, includeNonClientMaterials, toast]);
+
+  useEffect(() => {
+    if (!materialOptions.length) {
+      setSelectedMaterialId(null);
+      return;
+    }
+    if (
+      selectedMaterialId &&
+      materialOptions.some(
+        (opt) =>
+          opt.material_id === selectedMaterialId &&
+          (opt.color_id == null || selectedColorId == null || opt.color_id === selectedColorId)
+      )
+    ) {
+      return;
+    }
+    const preferred = materialOptions.find((opt) => opt.belongs_to_client) || materialOptions[0];
+    setSelectedMaterialId(preferred?.material_id ?? null);
+    if (preferred?.color_id != null) {
+      setSelectedColorId(preferred.color_id);
+      setRatios({});
+    }
+  }, [materialOptions, selectedMaterialId, selectedColorId]);
+
+  useEffect(() => {
     if (!isEditMode || !editingCutId) {
       setInitialCutLoading(false);
       setInitialCutError(null);
@@ -158,6 +227,7 @@ const AddCutPage: React.FC = () => {
             : ''
         );
         setNotes(existingCut.notes || '');
+        setSelectedMaterialId(existingCut.material_id ?? null);
         setRolls(
           (existingCut.rolls || []).map((roll) => ({
             roll_number: roll.roll_number,
@@ -260,10 +330,10 @@ const AddCutPage: React.FC = () => {
   };
 
   const handleSubmit = async () => {
-    if (!selectedJobOrderId || !selectedColorId) {
+    if (!selectedJobOrderId || !selectedColorId || !selectedMaterialId) {
       toast({
         title: 'Error',
-        description: 'Please select a job order and color',
+        description: 'Please select a job order, material, and color',
         variant: 'destructive',
       });
       return;
@@ -308,6 +378,7 @@ const AddCutPage: React.FC = () => {
       const cutData = {
         job_order_id: selectedJobOrderId,
         color_id: selectedColorId,
+        material_id: selectedMaterialId ?? undefined,
         job_order_items_ratios: ratios,
         waste_fabric_weight: wasteWeight ? parseFloat(wasteWeight) : undefined,
         marker_length: markerLength ? parseFloat(markerLength) : undefined,
@@ -438,6 +509,47 @@ const AddCutPage: React.FC = () => {
                     label=""
                   />
                 </div>
+
+                {jobOrder && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="material">Material *</Label>
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <span>Show non-client materials</span>
+                        <Switch
+                          checked={includeNonClientMaterials}
+                          onCheckedChange={setIncludeNonClientMaterials}
+                        />
+                      </div>
+                    </div>
+                    <SearchableDropdown
+                      options={materialOptions.map((m) => getMaterialOptionLabel(m))}
+                      value={(() => {
+                        const found = materialOptions.find(
+                          (m) =>
+                            m.material_id === selectedMaterialId &&
+                            (m.color_id == null || selectedColorId == null || m.color_id === selectedColorId)
+                        );
+                        if (!found) return '';
+                        return getMaterialOptionLabel(found);
+                      })()}
+                      onChange={(value) => {
+                        const found = materialOptions.find((m) => getMaterialOptionLabel(m) === value);
+                        if (!found) {
+                          setSelectedMaterialId(null);
+                          return;
+                        }
+                        setSelectedMaterialId(found.material_id);
+                        if (found.color_id != null) {
+                          setSelectedColorId(found.color_id);
+                          setRatios({});
+                        }
+                      }}
+                      placeholder="Select material"
+                      label=""
+                    />
+                  </div>
+                )}
 
                 {jobOrder && (
                   <div>

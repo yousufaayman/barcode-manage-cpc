@@ -20,7 +20,8 @@ import {
   Printer,
   Box,
   Palette,
-  Ruler
+  Ruler,
+  Tag,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
@@ -270,6 +271,9 @@ const CutDetailsPage: React.FC = () => {
               </h1>
               <p className="text-gray-600 mt-1">
                 {cut.job_order_number} - {cut.model_name} - {cut.color_name}
+                {cut.material_name != null && cut.material_name !== ''
+                  ? ` — ${t('cutDetailsPage.material')}: ${cut.material_name}`
+                  : ''}
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -303,7 +307,7 @@ const CutDetailsPage: React.FC = () => {
                 <CardTitle>{t('cutDetailsPage.cutOverview')}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-6 lg:max-h-[520px] overflow-y-auto pr-1">
-                {/* Cut Overview: 10 details, 5 per row. Row 1: Job Order, Model, Color, Created At, Marker Length. Row 2: Total Layers, Rolls Used, Cut Weight, Total Pieces, Waste Weight. */}
+                {/* Row 1: Job Order, Model, Color, Created At, Marker Length. Row 2: Material, Total Layers, Rolls, Cut Weight, Total Pieces, Waste. */}
                 <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
                   {/* Row 1 - Detail 1 */}
                   <div className="bg-indigo-50 rounded-lg p-4 border border-indigo-100 flex flex-col min-h-[100px]">
@@ -348,6 +352,17 @@ const CutDetailsPage: React.FC = () => {
                         ? <>{cut.marker_length.toFixed(3)} <span className="text-sm font-normal">M</span></>
                         : '—'}
                     </span>
+                  </div>
+
+                  {/* Row 2 - Material */}
+                  <div className="bg-amber-50 rounded-lg p-4 border border-amber-100 flex flex-col min-h-[100px]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Tag className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                      <span className="text-xs font-medium text-amber-800 uppercase tracking-wide">{t('cutDetailsPage.material')}</span>
+                    </div>
+                    <p className="text-lg font-bold text-amber-900 mt-auto leading-tight break-words">
+                      {cut.material_name ?? '—'}
+                    </p>
                   </div>
 
                   {/* Row 2 - Detail 6 */}

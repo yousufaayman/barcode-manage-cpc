@@ -401,6 +401,15 @@ export interface JobOrder {
   priority?: number;
 }
 
+export interface JobOrderMaterialOption {
+  material_id: number;
+  material_name: string;
+  fabric_code?: string | null;
+  color_id?: number | null;
+  color_name?: string | null;
+  belongs_to_client: boolean;
+}
+
 export interface JobOrderCreate {
   model_id: number;
   job_order_number: string;
@@ -1029,8 +1038,15 @@ export const jobOrderApi = {
     const response = await api.get<JobOrderQcSummary>(`/job-orders/${jobOrderId}/qc-summary`);
     return response.data;
   },
-  getMaterials: async (jobOrderId: number): Promise<{id:number,material_id:number,type?:string,material_name:string,panel_type?:string,color_name?:string,quantity?:number,consumption?:number,measurement_scale?:'KG'|'M',notes?:string}[]> => {
+  getMaterials: async (jobOrderId: number): Promise<{id:number,material_id:number,type?:string,material_name:string,fabric_code?:string|null,panel_type?:string,color_name?:string,quantity?:number,consumption?:number,measurement_scale?:'KG'|'M',notes?:string}[]> => {
     const response = await api.get(`/job-orders/${jobOrderId}/materials`);
+    return response.data;
+  },
+  getMaterialOptions: async (jobOrderId: number, includeNonClient: boolean = false): Promise<JobOrderMaterialOption[]> => {
+    const response = await api.get<JobOrderMaterialOption[]>(
+      `/job-orders/${jobOrderId}/material-options`,
+      { params: { include_non_client: includeNonClient } }
+    );
     return response.data;
   },
 
@@ -1186,6 +1202,8 @@ export interface CutDetails {
   model_name: string;
   color_id: number;
   color_name: string;
+  material_id?: number | null;
+  material_name?: string | null;
   waste_fabric_weight: number | null;
   marker_length?: number | null;
   created_at: string | null;
@@ -1281,6 +1299,7 @@ export const cutsApi = {
   createCut: async (cut: {
     job_order_id: number;
     color_id: number;
+    material_id: number;
     job_order_items_ratios: { [key: string]: number };
     waste_fabric_weight?: number;
     notes?: string;
@@ -1307,6 +1326,7 @@ export const cutsApi = {
     cut: {
       job_order_id?: number;
       color_id?: number;
+      material_id?: number;
       job_order_items_ratios?: { [key: string]: number };
       waste_fabric_weight?: number;
       notes?: string;

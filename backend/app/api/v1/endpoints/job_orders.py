@@ -21,6 +21,7 @@ from app.crud.job_order import (
     get_job_order_items_with_issues,
     get_job_order_items_with_quantity_reductions,
     get_job_order_materials,
+    get_material_options_for_job_order,
     get_job_order_overall_status as crud_get_job_order_overall_status,
     get_job_order_production_tracking,
     get_job_orders_by_model,
@@ -1047,11 +1048,11 @@ def get_existing_models(
 @router.get("/options/materials", response_model=List[str])
 def get_existing_materials(
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)]
+    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)],
 ):
-    """Return list of unique material names"""
-    materials = db.query(models.Material.material_name).all()
-    return [m.material_name for m in materials]
+    """Return list of unique material names."""
+    rows = db.query(models.Material.material_name).distinct().order_by(models.Material.material_name).all()
+    return [m.material_name for m in rows]
 
 @router.get("/{job_order_id}/items-with-details/", response_model=List[Dict])
 def get_job_order_items_with_details_endpoint(job_order_id: int, db: Annotated[Session, Depends(get_db)]):
@@ -1062,6 +1063,19 @@ def get_job_order_items_with_details_endpoint(job_order_id: int, db: Annotated[S
 def get_job_order_materials_endpoint(job_order_id: int, db: Annotated[Session, Depends(get_db)]):
     mats = get_job_order_materials(db, job_order_id)
     return mats
+
+
+@router.get("/{job_order_id}/material-options", response_model=List[Dict])
+def get_job_order_material_options_endpoint(
+    job_order_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    include_non_client: Annotated[bool, Query()] = False,
+):
+    return get_material_options_for_job_order(
+        db,
+        job_order_id,
+        include_non_client=include_non_client,
+    )
 
 @router.put(
     "/items/{item_id}/notes",

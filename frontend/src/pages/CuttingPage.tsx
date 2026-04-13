@@ -412,6 +412,11 @@ const CuttingPage: React.FC = () => {
                       <Badge variant="outline" className="text-xs">
                         {cut.model_name}
                       </Badge>
+                      {cut.material_name != null && cut.material_name !== '' && (
+                        <Badge variant="outline" className="text-xs border-amber-200 bg-amber-50 text-amber-900">
+                          {cut.material_name}
+                        </Badge>
+                      )}
                       {renderPrintingBadge(cut)}
                     </div>
                   </div>

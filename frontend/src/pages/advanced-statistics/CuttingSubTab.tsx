@@ -24,6 +24,7 @@ interface CutRow {
   jobOrderNumber: string;
   colorName: string;
   modelName: string;
+  materialName: string;
   date: string;
   quantity: number;
   printing: string;
@@ -271,6 +272,7 @@ const CuttingSubTab: React.FC = () => {
           jobOrderNumber: cut.job_order_number ?? '-',
           colorName,
           modelName: cut.model_name ?? '-',
+          materialName: cut.material_name ?? '-',
           date: cut.created_at ? new Date(cut.created_at).toLocaleDateString() : '-',
           quantity,
           printing: cut.print_status ?? 'N/A',
@@ -597,6 +599,7 @@ const CuttingSubTab: React.FC = () => {
       'Cut Number',
       'Cut Date',
       'Color',
+      'Material',
       ...sizeColumns.map(String),
       'Total',
       'Consumption (m)',
@@ -688,6 +691,7 @@ const CuttingSubTab: React.FC = () => {
             String(cut.cut_id),
             dateStr,
             getCutColor(cut),
+            cut.material_name ?? '—',
             ...sizeColumns.map((col) => sizeValues[col] ?? ''),
             rowTotal || '',
             consumptionM,
@@ -703,6 +707,7 @@ const CuttingSubTab: React.FC = () => {
           'Total',
           '',
           colorName,
+          '',
           ...sizeColumns.map((col) => colorSizeTotals[col] ?? 0),
           colorRowTotal,
           avgMColor,
@@ -724,6 +729,7 @@ const CuttingSubTab: React.FC = () => {
         'Total',
         '',
         '',
+        '',
         ...sizeColumns.map((col) => jobOrderSizeTotals[col] ?? 0),
         jobOrderRowTotal,
         avgConsumptionM,
@@ -737,12 +743,13 @@ const CuttingSubTab: React.FC = () => {
       { wch: 12 },
       { wch: 12 },
       { wch: 14 },
+      { wch: 22 },
       ...sizeColumns.map(() => ({ wch: 10 })),
       { wch: 10 },
       { wch: 16 },
       { wch: 16 },
     ];
-    const numCols = 4 + sizeColumns.length + 3; // Job Order, Cut Number, Date, Color, sizes..., Total, Cons m, Cons kg
+    const numCols = 5 + sizeColumns.length + 3; // Job Order, Cut #, Date, Color, Material, sizes..., Total, Cons m, Cons kg
     for (let c = 0; c < numCols; c++) {
       const ref = XLSX.utils.encode_cell({ r: 0, c });
       const val = headerRow[c];
@@ -765,7 +772,7 @@ const CuttingSubTab: React.FC = () => {
             ws2[ref].s = {
               fill: totalRowFill,
               font: totalFont,
-              alignment: { horizontal: c >= 3 ? 'right' : 'left' },
+              alignment: { horizontal: c >= 5 ? 'right' : 'left' },
             };
           }
         }
@@ -921,7 +928,7 @@ const CuttingSubTab: React.FC = () => {
             )}
             {jobOrderGroups.map((group) => {
               const { clientName, jobOrderNumber, sizeLabels, cuts } = group;
-              const colSpan = 2 + sizeLabels.length + 3;
+              const colSpan = 3 + sizeLabels.length + 3;
               const rows: JSX.Element[] = [];
 
               let lastColor: string | null = null;
@@ -954,6 +961,7 @@ const CuttingSubTab: React.FC = () => {
                       <TableCell className="pl-6">
                         Color Total: {lastColor}
                       </TableCell>
+                      <TableCell />
                       <TableCell />
                       {colorTotals.map((val, idx) => (
                         <TableCell
@@ -1054,6 +1062,7 @@ const CuttingSubTab: React.FC = () => {
                 rows.push(
                   <TableRow key={`cut-${cut.cut_id}`}>
                     <TableCell>{String(cut.cut_id)}</TableCell>
+                    <TableCell>{cut.material_name ?? '—'}</TableCell>
                     <TableCell>
                       {cut.created_at
                         ? new Date(cut.created_at).toLocaleDateString()
@@ -1088,6 +1097,7 @@ const CuttingSubTab: React.FC = () => {
                     className="bg-emerald-50/80 font-semibold text-emerald-900"
                   >
                     <TableCell>Total</TableCell>
+                    <TableCell />
                     <TableCell />
                     {jobOrderTotals.map((val, idx) => (
                       <TableCell
@@ -1133,6 +1143,7 @@ const CuttingSubTab: React.FC = () => {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Cut Number</TableHead>
+                          <TableHead>Material</TableHead>
                           <TableHead>Cut Date</TableHead>
                           {sizeLabels.map((label) => (
                             <TableHead key={label} className="text-right">
@@ -1162,6 +1173,7 @@ const CuttingSubTab: React.FC = () => {
                 <TableRow>
                   <TableHead>Cut Number</TableHead>
                   <TableHead>Job Order</TableHead>
+                  <TableHead>Material</TableHead>
                   <TableHead>Cut Date</TableHead>
                   <TableHead className="text-right">Cut Quantity</TableHead>
                   <TableHead className="text-center">Printing</TableHead>
@@ -1174,7 +1186,7 @@ const CuttingSubTab: React.FC = () => {
                 {cutRows.length === 0 && !loadingCuts && (
                   <TableRow>
                     <TableCell
-                      colSpan={8}
+                      colSpan={9}
                       className="py-8 text-center text-sm text-gray-500"
                     >
                       No results found for the selected filters.
@@ -1185,6 +1197,7 @@ const CuttingSubTab: React.FC = () => {
                   <TableRow key={row.id}>
                     <TableCell>{row.cutNumber}</TableCell>
                     <TableCell>{row.jobOrderNumber}</TableCell>
+                    <TableCell>{row.materialName}</TableCell>
                     <TableCell>{row.date}</TableCell>
                     <TableCell className="text-right">{row.quantity}</TableCell>
                     <TableCell className="text-center">{row.printing}</TableCell>

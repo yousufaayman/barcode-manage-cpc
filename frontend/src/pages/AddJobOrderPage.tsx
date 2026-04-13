@@ -175,17 +175,15 @@ const AddJobOrderPage: React.FC = () => {
   useEffect(() => {
     const fetchExistingOptions = async () => {
       try {
-        const [colors, sizes, models, jobOrders, materials] = await Promise.all([
+        const [colors, sizes, models, jobOrders] = await Promise.all([
           jobOrderApi.getExistingColors(),
           jobOrderApi.getExistingSizes(),
           jobOrderApi.getExistingModels(),
           jobOrderApi.getAllSimple(),
-          jobOrderApi.getExistingMaterials()
         ]);
         setExistingColors(colors);
         setExistingSizes(sizes);
         setExistingModels(models);
-        setExistingMaterials(materials);
         const clientsResponse = await api.get('/batches/clients/');
         const clientsData = Array.isArray(clientsResponse.data) ? clientsResponse.data : [];
         const clientNames = clientsData
@@ -203,6 +201,18 @@ const AddJobOrderPage: React.FC = () => {
 
     fetchExistingOptions();
   }, []);
+
+  useEffect(() => {
+    const loadMaterials = async () => {
+      try {
+        const mats = await jobOrderApi.getExistingMaterials();
+        setExistingMaterials(mats);
+      } catch (error) {
+        console.error('Error fetching materials options:', error);
+      }
+    };
+    loadMaterials();
+  }, [newJobOrder.client_name]);
 
   useEffect(() => {
     if (autoGenerateJobOrderNumber && autoJobOrderNumber) {

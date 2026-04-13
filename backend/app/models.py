@@ -28,9 +28,11 @@ class Client(Base):
 
     client_id = Column(Integer, primary_key=True, index=True)
     client_name = Column(String(255), unique=True, index=True, nullable=False)
+    client_code = Column(String(32), unique=True, index=True, nullable=False)
 
     # Relationships
     job_orders = relationship("JobOrder", back_populates="client")
+    fabric_codes = relationship("ClientFabricCode", back_populates="client")
 
 class Color(Base):
     """Core.colors - Reference data for colors"""
@@ -43,7 +45,7 @@ class Color(Base):
     # Relationships
     batches = relationship("Batch", back_populates="color")
     job_order_items = relationship("JobOrderItem", back_populates="color")
-    job_order_material_requests = relationship("JobOrderMaterialRequest", back_populates="color")
+    fabric_codes = relationship("ClientFabricCode", back_populates="color")
 
 class Size(Base):
     """Core.sizes - Reference data for sizes"""
@@ -77,7 +79,27 @@ class Material(Base):
     material_name = Column(String(100), unique=True, index=True, nullable=False)
 
     # Relationships
-    job_order_material_requests = relationship("JobOrderMaterialRequest", back_populates="material")
+    fabric_codes = relationship("ClientFabricCode", back_populates="material")
+
+
+class ClientFabricCode(Base):
+    """Core.client_fabric_codes - Fabric codes scoped by client+material+color"""
+    __tablename__ = "client_fabric_codes"
+    __table_args__ = (
+        UniqueConstraint('client_id', 'material_id', 'color_id', name='uq_client_fabric_codes_client_material_color'),
+        {'schema': 'core'}
+    )
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    client_id = Column(Integer, ForeignKey("core.clients.client_id", ondelete="CASCADE"), nullable=False, index=True)
+    material_id = Column(Integer, ForeignKey("core.materials.material_id", ondelete="CASCADE"), nullable=False, index=True)
+    color_id = Column(Integer, ForeignKey("core.colors.color_id", ondelete="CASCADE"), nullable=False, index=True)
+    fabric_code = Column(String(100), unique=True, index=True, nullable=False)
+
+    client = relationship("Client", back_populates="fabric_codes")
+    material = relationship("Material", back_populates="fabric_codes")
+    color = relationship("Color", back_populates="fabric_codes")
+    job_order_material_requests = relationship("JobOrderMaterialRequest", back_populates="fabric_code")
 
 class System(Base):
     """Core.systems - System definitions for role-based access"""
@@ -270,29 +292,27 @@ class JobOrderMaterialRequest(Base):
     """Core.job_order_material_requests - Material consumption requirements per JO/color/panel"""
     __tablename__ = "job_order_material_requests"
     __table_args__ = (
-        UniqueConstraint('job_order_id', 'material_id', 'panel_type', 'color_id', name='uq_job_material_request'),
+        UniqueConstraint('job_order_id', 'fabric_code_id', 'panel_type', name='uq_job_material_request'),
         CheckConstraint("measurement_scale IN ('KG','M')", name='ck_job_material_request_measurement_scale'),
         {'schema': 'core'}
     )
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     job_order_id = Column(Integer, ForeignKey("core.job_orders.job_order_id", ondelete="CASCADE"), nullable=False)
-    material_id = Column(Integer, ForeignKey("core.materials.material_id", ondelete="RESTRICT"), nullable=False)
+    fabric_code_id = Column(Integer, ForeignKey("core.client_fabric_codes.id", ondelete="RESTRICT"), nullable=False)
     panel_type = Column(String(100), nullable=False)
-    color_id = Column(Integer, ForeignKey("core.colors.color_id", ondelete="RESTRICT"), nullable=True)
     consumption = Column(DECIMAL(10, 3), nullable=False)
     quantity = Column(DECIMAL(10, 3), nullable=True)
     measurement_scale = Column(String(10), nullable=False, default='KG', server_default='KG')
 
     # Relationships
     job_order = relationship("JobOrder", back_populates="material_requests")
-    material = relationship("Material", back_populates="job_order_material_requests")
-    color = relationship("Color", back_populates="job_order_material_requests")
+    fabric_code = relationship("ClientFabricCode", back_populates="job_order_material_requests")
 
     def __repr__(self):
         return (
-            f"<JobOrderMaterialRequest JO:{self.job_order_id} Mat:{self.material_id} "
-            f"Panel:{self.panel_type} Color:{self.color_id} Cons:{self.consumption}>"
+            f"<JobOrderMaterialRequest JO:{self.job_order_id} Fab:{self.fabric_code_id} "
+            f"Panel:{self.panel_type} Cons:{self.consumption}>"
         )
 
 # ============================================================================
@@ -728,6 +748,7 @@ class ArchivedCutDetail(Base):
     created_by_user_id = Column(Integer, nullable=True)
     notes = Column(Text, nullable=True)
     print_status = Column(String(50), nullable=True)
+    material_id = Column(Integer, nullable=True)
     archived_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 class ArchivedCutRoll(Base):

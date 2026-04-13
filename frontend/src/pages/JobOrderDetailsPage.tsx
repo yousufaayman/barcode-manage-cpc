@@ -218,6 +218,7 @@ const JobOrderDetailsPage: React.FC = () => {
   });
   const [expandedQcPhaseIds, setExpandedQcPhaseIds] = useState<Record<number, boolean>>({});
   const [showProblemNotifications, setShowProblemNotifications] = useState(false);
+  const [showPhaseDifferences, setShowPhaseDifferences] = useState(false);
   const [topImageVisible, setTopImageVisible] = useState(true);
   const [expandedCompensationDates, setExpandedCompensationDates] = useState<Record<string, boolean>>({});
   const [expandedRejectionStages, setExpandedRejectionStages] = useState<Record<string, boolean>>({});
@@ -578,7 +579,7 @@ const JobOrderDetailsPage: React.FC = () => {
     const totalJobOrder = viewJobOrder.items.reduce((sum: number, it: any) => sum + it.quantity, 0);
 
     // Materials section
-    const matsHTML = materials.map((m: any) => `<tr><td style="border:1px solid #000;padding:4px;">${m.material_name}</td><td style="border:1px solid #000;padding:4px;">${m.panel_type || '-'}</td><td style="border:1px solid #000;padding:4px;">${m.color_name || '-'}</td><td style="border:1px solid #000;padding:4px;text-align:center;">${m.consumption ?? '-'}${m.measurement_scale ? ` ${m.measurement_scale}` : ''}</td><td style="border:1px solid #000;padding:4px;text-align:center;font-weight:bold;">${m.quantity}${m.measurement_scale ? ` ${m.measurement_scale}` : ''}</td></tr>`).join('');
+    const matsHTML = materials.map((m: any) => `<tr><td style="border:1px solid #000;padding:4px;">${m.material_name}</td><td style="border:1px solid #000;padding:4px;">${m.fabric_code || '-'}</td><td style="border:1px solid #000;padding:4px;">${m.panel_type || '-'}</td><td style="border:1px solid #000;padding:4px;">${m.color_name || '-'}</td><td style="border:1px solid #000;padding:4px;text-align:center;">${m.consumption ?? '-'}${m.measurement_scale ? ` ${m.measurement_scale}` : ''}</td><td style="border:1px solid #000;padding:4px;text-align:center;font-weight:bold;">${m.quantity}${m.measurement_scale ? ` ${m.measurement_scale}` : ''}</td></tr>`).join('');
 
     // Printing sections
     let printConfigHTML = '';
@@ -681,7 +682,7 @@ const JobOrderDetailsPage: React.FC = () => {
           <div style="flex:1;min-width:0;">
             <h4 style="margin:0 0 2px 0;text-align:center;">${t('jobOrderDetails.requiredMaterials')}</h4>
             <table style="width:100%;border-collapse:collapse;font-size:10pt;">
-              <thead><tr><th style="border:1px solid #000;padding:4px;text-align:center;">${t('jobOrderDetails.material')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('jobOrderDetails.panelType')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('barcode.color')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('jobOrderDetails.consumption')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('barcode.quantity')}</th></tr></thead>
+              <thead><tr><th style="border:1px solid #000;padding:4px;text-align:center;">${t('jobOrderDetails.material')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">Fabric Code</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('jobOrderDetails.panelType')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('barcode.color')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('jobOrderDetails.consumption')}</th><th style="border:1px solid #000;padding:4px;text-align:center;">${t('barcode.quantity')}</th></tr></thead>
               <tbody>${matsHTML}</tbody>
             </table>
           </div>` : ''}
@@ -1340,11 +1341,14 @@ const JobOrderDetailsPage: React.FC = () => {
                 const colorGroups = groupItemsByColor(viewTrackingData);
                 const perColorLossSummary = Object.entries(colorGroups).map(([color, items]) => {
                   const workingTotal = items.reduce((sum, item) => sum + (item.working_quantity || 0), 0);
-                  const secondDegreeTotal = items.reduce((sum, item) => sum + (item.second_degree_quantity || 0), 0);
+                  const secondDegreeTotal = items.reduce((sum, item) => {
+                    const secondDegreeQty = item.second_degree_quantity || 0;
+                    const secondDegreeCutQty = item.second_degree_cut_qty || 0;
+                    return sum + Math.max(0, secondDegreeQty - secondDegreeCutQty);
+                  }, 0);
                   const cutTotal = items.reduce((sum, item) => sum + (item.cut_quantity || 0), 0);
-                  const lostQtyTotal = Math.max(0, cutTotal - workingTotal);
                   const secondDegreePct = workingTotal > 0 ? (secondDegreeTotal / workingTotal) * 100 : 0;
-                  const lostQtyPct = workingTotal > 0 ? (lostQtyTotal / workingTotal) * 100 : 0;
+                  const lostQtyPct = cutTotal > 0 ? (Math.max(0, cutTotal - workingTotal) / cutTotal) * 100 : 0;
 
                   return {
                     color,
@@ -1373,7 +1377,11 @@ const JobOrderDetailsPage: React.FC = () => {
                 <div className="text-center">
                   <div className="font-medium text-slate-500">{t('jobOrderDetails.secondDegree')}</div>
                   <div className="text-xl font-bold text-orange-600">
-                    {viewTrackingData.reduce((sum, item) => sum + item.second_degree_quantity, 0).toLocaleString()}
+                    {viewTrackingData.reduce((sum, item) => {
+                      const secondDegreeQty = item.second_degree_quantity || 0;
+                      const secondDegreeCutQty = item.second_degree_cut_qty || 0;
+                      return sum + Math.max(0, secondDegreeQty - secondDegreeCutQty);
+                    }, 0).toLocaleString()}
                   </div>
                 </div>
                 <div className="text-center">
@@ -1542,6 +1550,7 @@ const JobOrderDetailsPage: React.FC = () => {
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.completed')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.remainingQuantity')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.secondDegree')}</th>
+                  <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.secondDegreeCut')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Consumption (KG)</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Consumption (M)</th>
                   {user?.role === 'admin' && (
@@ -1557,7 +1566,11 @@ const JobOrderDetailsPage: React.FC = () => {
                   return Object.entries(groupedItems).map(([color, items]) => {
                     const sortedItems = sortSizes(items);
                     const colorRows = sortedItems.map((item, itemIdx) => {
-                      const secondDegreeColor = item.second_degree_quantity > 0 ? 'text-orange-600 font-medium' : 'text-gray-500';
+                      const secondDegreeQty = item.second_degree_quantity || 0;
+                      const secondDegreeCutQty = item.second_degree_cut_qty || 0;
+                      const secondDegreeWithoutCutQty = Math.max(0, secondDegreeQty - secondDegreeCutQty);
+                      const secondDegreeColor = secondDegreeWithoutCutQty > 0 ? 'text-orange-600 font-medium' : 'text-gray-500';
+                      const secondDegreeCutColor = secondDegreeCutQty > 0 ? 'text-orange-600 font-medium' : 'text-gray-500';
                       const completedColor = item.completed_quantity > 0 ? 'text-green-600 font-semibold' : 'text-gray-500';
                       const remainingColor = item.remaining_quantity > 0 ? 'text-blue-700 font-semibold' : 'text-gray-700';
                       
@@ -1586,7 +1599,8 @@ const JobOrderDetailsPage: React.FC = () => {
                           <td className="px-4 py-2 border-b border-gray-200 text-right font-medium text-blue-600">{item.working_quantity || 0}</td>
                           <td className={`px-4 py-2 border-b border-gray-200 text-right ${completedColor}`}>{item.completed_quantity}</td>
                           <td className={`px-4 py-2 border-b border-gray-200 text-right ${remainingColor}`}>{item.remaining_quantity}</td>
-                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${secondDegreeColor}`}>{item.second_degree_quantity}</td>
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${secondDegreeColor}`}>{secondDegreeWithoutCutQty}</td>
+                          <td className={`px-4 py-2 border-b border-gray-200 text-right ${secondDegreeCutColor}`}>{secondDegreeCutQty}</td>
                           <td className="px-4 py-2 border-b border-gray-200 text-right font-medium text-purple-700">
                             {item.true_consumption !== null && item.true_consumption !== undefined
                               ? item.true_consumption.toFixed(4)
@@ -1612,8 +1626,52 @@ const JobOrderDetailsPage: React.FC = () => {
                         </tr>
                       );
                     });
+
+                    const colorTotals = sortedItems.reduce(
+                      (acc, item) => {
+                        const secondDegreeQty = item.second_degree_quantity || 0;
+                        const secondDegreeCutQty = item.second_degree_cut_qty || 0;
+                        return {
+                          expected: acc.expected + (item.expected_quantity || 0),
+                          cut: acc.cut + (item.cut_quantity || 0),
+                          working: acc.working + (item.working_quantity || 0),
+                          completed: acc.completed + (item.completed_quantity || 0),
+                          remaining: acc.remaining + (item.remaining_quantity || 0),
+                          secondDegree: acc.secondDegree + Math.max(0, secondDegreeQty - secondDegreeCutQty),
+                          secondDegreeCut: acc.secondDegreeCut + secondDegreeCutQty
+                        };
+                      },
+                      {
+                        expected: 0,
+                        cut: 0,
+                        working: 0,
+                        completed: 0,
+                        remaining: 0,
+                        secondDegree: 0,
+                        secondDegreeCut: 0
+                      }
+                    );
+
+                    const colorTotalRow = (
+                      <tr key={`total-${color}`} className="bg-amber-100/70 border-t-2 border-amber-400 shadow-[inset_0_1px_0_0_rgba(251,191,36,0.45)]">
+                        <td className="px-4 py-2 border-b border-gray-300 font-semibold text-slate-900">{color}</td>
+                        <td className="px-4 py-2 border-b border-gray-300 font-semibold text-slate-900">Total</td>
+                        <td className="px-4 py-2 border-b border-gray-300 text-right font-bold text-slate-900">{colorTotals.expected}</td>
+                        <td className="px-4 py-2 border-b border-gray-300 text-right font-bold text-purple-800">{colorTotals.cut}</td>
+                        <td className="px-4 py-2 border-b border-gray-300 text-right font-bold text-blue-700">{colorTotals.working}</td>
+                        <td className="px-4 py-2 border-b border-gray-300 text-right font-bold text-green-700">{colorTotals.completed}</td>
+                        <td className="px-4 py-2 border-b border-gray-300 text-right font-bold text-blue-800">{colorTotals.remaining}</td>
+                        <td className="px-4 py-2 border-b border-gray-300 text-right font-bold text-orange-700">{colorTotals.secondDegree}</td>
+                        <td className="px-4 py-2 border-b border-gray-300 text-right font-bold text-orange-700">{colorTotals.secondDegreeCut}</td>
+                        <td className="px-4 py-2 border-b border-gray-300 text-right font-semibold text-slate-500">—</td>
+                        <td className="px-4 py-2 border-b border-gray-300 text-right font-semibold text-slate-500">—</td>
+                        {user?.role === 'admin' && (
+                          <td className="px-4 py-2 border-b border-gray-300 text-center text-slate-500">—</td>
+                        )}
+                      </tr>
+                    );
                     
-                    return colorRows;
+                    return [...colorRows, colorTotalRow];
                   }).flat();
                 })()}
               </tbody>
@@ -1633,6 +1691,10 @@ const JobOrderDetailsPage: React.FC = () => {
                           <div className="flex flex-col gap-0.5">
                             <dt className="text-xs font-medium text-slate-500">{t('jobOrderDetails.material')}</dt>
                             <dd className="font-medium text-slate-900 break-words">{m.material_name}</dd>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="text-xs font-medium text-slate-500">Fabric Code</dt>
+                            <dd className="text-slate-800 break-words">{m.fabric_code || '-'}</dd>
                           </div>
                           <div className="flex flex-col gap-0.5">
                             <dt className="text-xs font-medium text-slate-500">{t('jobOrderDetails.panelType')}</dt>
@@ -1665,6 +1727,7 @@ const JobOrderDetailsPage: React.FC = () => {
                       <thead className="bg-gray-100">
                         <tr>
                           <th className="px-3 py-2 border-b text-left md:px-4">{t('jobOrderDetails.material')}</th>
+                          <th className="px-3 py-2 border-b text-left md:px-4">Fabric Code</th>
                           <th className="px-3 py-2 border-b text-left md:px-4">{t('jobOrderDetails.panelType')}</th>
                           <th className="px-3 py-2 border-b text-left md:px-4">{t('barcode.color')}</th>
                           <th className="px-3 py-2 border-b text-right md:px-4">{t('jobOrderDetails.consumption')}</th>
@@ -1675,6 +1738,7 @@ const JobOrderDetailsPage: React.FC = () => {
                         {materials.map((m, idx) => (
                           <tr key={idx} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                             <td className="px-3 py-2 border-b md:px-4">{m.material_name}</td>
+                            <td className="px-3 py-2 border-b md:px-4">{m.fabric_code || '-'}</td>
                             <td className="px-3 py-2 border-b md:px-4">{m.panel_type || '-'}</td>
                             <td className="px-3 py-2 border-b md:px-4">{m.color_name || '-'}</td>
                             <td className="px-3 py-2 border-b text-right md:px-4">
@@ -1799,7 +1863,17 @@ const JobOrderDetailsPage: React.FC = () => {
 
           <TabsContent value="phases">
             <div className="overflow-x-auto">
-              <h3 className="text-lg font-semibold mb-3 text-gray-800">{t('jobOrderDetails.phaseDetails')}</h3>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-lg font-semibold text-gray-800">{t('jobOrderDetails.phaseDetails')}</h3>
+                <Button
+                  type="button"
+                  variant={showPhaseDifferences ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setShowPhaseDifferences(prev => !prev)}
+                >
+                  Show Differences
+                </Button>
+              </div>
               <table className="w-full border rounded-lg overflow-hidden shadow-sm table-fixed">
                 <thead className="bg-gray-100 text-gray-800">
                   <tr>
@@ -1808,13 +1882,34 @@ const JobOrderDetailsPage: React.FC = () => {
                     <th className="px-3 py-2 border-b border-gray-200 font-semibold text-center align-middle w-24">{t('jobOrderDetails.expected')}</th>
                     <th className="px-3 py-2 border-b border-gray-200 font-semibold text-center align-middle w-28">{t('jobOrderDetails.cutQuantity')}</th>
                     <th className="px-3 py-2 border-b border-gray-200 font-semibold text-center align-middle w-28">{t('jobOrderDetails.cutInspection')}</th>
+                    {showPhaseDifferences && (
+                      <th className="px-3 py-2 border-b border-red-200 bg-red-50 font-semibold text-center align-middle text-red-700 w-32">Diff Cut-Inspect</th>
+                    )}
                     <th className="px-3 py-2 border-b border-gray-200 font-semibold text-center align-middle w-32">{t('jobOrderDetails.secondDegreeCut')}</th>
                     <th className="px-3 py-2 border-b border-gray-200 font-semibold text-center align-middle w-24">{t('jobOrderDetails.sewingIn')}</th>
+                    {showPhaseDifferences && (
+                      <th className="px-3 py-2 border-b border-red-200 bg-red-50 font-semibold text-center align-middle text-red-700 w-32">Diff Inspect-SewIn</th>
+                    )}
                     <th className="px-3 py-2 border-b border-gray-200 font-semibold text-center align-middle w-24">{t('jobOrderDetails.sewingOut')}</th>
+                    {showPhaseDifferences && (
+                      <th className="px-3 py-2 border-b border-red-200 bg-red-50 font-semibold text-center align-middle text-red-700 w-32">Diff SewIn-SewOut</th>
+                    )}
                     <th className="px-3 py-2 border-b border-gray-200 font-semibold text-center align-middle w-20">{t('jobOrderDetails.qcIn')}</th>
+                    {showPhaseDifferences && (
+                      <th className="px-3 py-2 border-b border-red-200 bg-red-50 font-semibold text-center align-middle text-red-700 w-32">Diff SewOut-QCIn</th>
+                    )}
                     <th className="px-3 py-2 border-b border-gray-200 font-semibold text-center align-middle w-20">{t('jobOrderDetails.qcOut')}</th>
+                    {showPhaseDifferences && (
+                      <th className="px-3 py-2 border-b border-red-200 bg-red-50 font-semibold text-center align-middle text-red-700 w-32">Diff QCIn-QCOut</th>
+                    )}
                     <th className="px-3 py-2 border-b border-gray-200 font-semibold text-center align-middle w-28">{t('jobOrderDetails.packagingIn')}</th>
+                    {showPhaseDifferences && (
+                      <th className="px-3 py-2 border-b border-red-200 bg-red-50 font-semibold text-center align-middle text-red-700 w-36">Diff QCOut-PackIn</th>
+                    )}
                     <th className="px-3 py-2 border-b border-gray-200 font-semibold text-center align-middle w-28">{t('jobOrderDetails.packagingOut')}</th>
+                    {showPhaseDifferences && (
+                      <th className="px-3 py-2 border-b border-red-200 bg-red-50 font-semibold text-center align-middle text-red-700 w-36">Diff PackIn-PackOut</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -1841,6 +1936,16 @@ const JobOrderDetailsPage: React.FC = () => {
                         
                         rowIndex++;
                         
+                        const cutQty = item.cut_quantity || 0;
+                        const cutInspectionQty = item.cut_inspection_qty || 0;
+                        const secondDegreeCutQty = item.second_degree_cut_qty || 0;
+                        const sewingInQty = item.sewing_in_qty || 0;
+                        const sewingOutQty = item.sewing_out_qty || 0;
+                        const qcInQty = item.qc_in_qty || 0;
+                        const qcOutQty = item.qc_out_qty || 0;
+                        const packagingInQty = item.packaging_in_qty || 0;
+                        const packagingOutQty = item.packaging_out_qty || 0;
+
                         return (
                           <tr key={`phase-${item.item_id}-${itemIdx}`} className={`${rowBackgroundClass} transition-colors`}>
                             <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">
@@ -1852,20 +1957,106 @@ const JobOrderDetailsPage: React.FC = () => {
                             </td>
                             <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{item.size_value}</td>
                             <td className="px-3 py-2 border-b border-gray-200 text-center align-middle font-medium">{item.expected_quantity}</td>
-                            <td className={`px-3 py-2 border-b border-gray-200 text-center align-middle ${enhancedCutColor}`}>{item.cut_quantity}</td>
-                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{item.cut_inspection_qty ?? 0}</td>
-                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle text-orange-600">{item.second_degree_cut_qty ?? 0}</td>
-                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{item.sewing_in_qty ?? 0}</td>
-                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{item.sewing_out_qty ?? 0}</td>
-                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{item.qc_in_qty ?? 0}</td>
-                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{item.qc_out_qty ?? 0}</td>
-                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{item.packaging_in_qty ?? 0}</td>
-                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{item.packaging_out_qty ?? 0}</td>
+                            <td className={`px-3 py-2 border-b border-gray-200 text-center align-middle ${enhancedCutColor}`}>{cutQty}</td>
+                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{cutInspectionQty}</td>
+                            {showPhaseDifferences && (
+                              <td className="px-3 py-2 border-b border-red-200 bg-red-50/40 text-center align-middle font-semibold text-red-700">{cutQty - cutInspectionQty}</td>
+                            )}
+                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle text-orange-600">{secondDegreeCutQty}</td>
+                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{sewingInQty}</td>
+                            {showPhaseDifferences && (
+                              <td className="px-3 py-2 border-b border-red-200 bg-red-50/40 text-center align-middle font-semibold text-red-700">{cutInspectionQty - sewingInQty}</td>
+                            )}
+                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{sewingOutQty}</td>
+                            {showPhaseDifferences && (
+                              <td className="px-3 py-2 border-b border-red-200 bg-red-50/40 text-center align-middle font-semibold text-red-700">{sewingInQty - sewingOutQty}</td>
+                            )}
+                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{qcInQty}</td>
+                            {showPhaseDifferences && (
+                              <td className="px-3 py-2 border-b border-red-200 bg-red-50/40 text-center align-middle font-semibold text-red-700">{sewingOutQty - qcInQty}</td>
+                            )}
+                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{qcOutQty}</td>
+                            {showPhaseDifferences && (
+                              <td className="px-3 py-2 border-b border-red-200 bg-red-50/40 text-center align-middle font-semibold text-red-700">{qcInQty - qcOutQty}</td>
+                            )}
+                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{packagingInQty}</td>
+                            {showPhaseDifferences && (
+                              <td className="px-3 py-2 border-b border-red-200 bg-red-50/40 text-center align-middle font-semibold text-red-700">{qcOutQty - packagingInQty}</td>
+                            )}
+                            <td className="px-3 py-2 border-b border-gray-200 text-center align-middle">{packagingOutQty}</td>
+                            {showPhaseDifferences && (
+                              <td className="px-3 py-2 border-b border-red-200 bg-red-50/40 text-center align-middle font-semibold text-red-700">{packagingInQty - packagingOutQty}</td>
+                            )}
                           </tr>
                         );
                       });
+
+                      const phaseTotals = sortedItems.reduce(
+                        (acc, item) => ({
+                          expected: acc.expected + (item.expected_quantity || 0),
+                          cut: acc.cut + (item.cut_quantity || 0),
+                          cutInspection: acc.cutInspection + (item.cut_inspection_qty || 0),
+                          secondDegreeCut: acc.secondDegreeCut + (item.second_degree_cut_qty || 0),
+                          sewingIn: acc.sewingIn + (item.sewing_in_qty || 0),
+                          sewingOut: acc.sewingOut + (item.sewing_out_qty || 0),
+                          qcIn: acc.qcIn + (item.qc_in_qty || 0),
+                          qcOut: acc.qcOut + (item.qc_out_qty || 0),
+                          packagingIn: acc.packagingIn + (item.packaging_in_qty || 0),
+                          packagingOut: acc.packagingOut + (item.packaging_out_qty || 0)
+                        }),
+                        {
+                          expected: 0,
+                          cut: 0,
+                          cutInspection: 0,
+                          secondDegreeCut: 0,
+                          sewingIn: 0,
+                          sewingOut: 0,
+                          qcIn: 0,
+                          qcOut: 0,
+                          packagingIn: 0,
+                          packagingOut: 0
+                        }
+                      );
+
+                      const colorTotalRow = (
+                        <tr key={`phase-total-${color}`} className="bg-amber-100/70 border-t-2 border-amber-400 shadow-[inset_0_1px_0_0_rgba(251,191,36,0.45)]">
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-semibold text-slate-900">{color}</td>
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-semibold text-slate-900">Total</td>
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-bold text-slate-900">{phaseTotals.expected}</td>
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-bold text-purple-800">{phaseTotals.cut}</td>
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-bold text-slate-900">{phaseTotals.cutInspection}</td>
+                          {showPhaseDifferences && (
+                            <td className="px-3 py-2 border-b border-red-300 bg-red-100/60 text-center align-middle font-bold text-red-800">{phaseTotals.cut - phaseTotals.cutInspection}</td>
+                          )}
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-bold text-orange-700">{phaseTotals.secondDegreeCut}</td>
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-bold text-slate-900">{phaseTotals.sewingIn}</td>
+                          {showPhaseDifferences && (
+                            <td className="px-3 py-2 border-b border-red-300 bg-red-100/60 text-center align-middle font-bold text-red-800">{phaseTotals.cutInspection - phaseTotals.sewingIn}</td>
+                          )}
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-bold text-slate-900">{phaseTotals.sewingOut}</td>
+                          {showPhaseDifferences && (
+                            <td className="px-3 py-2 border-b border-red-300 bg-red-100/60 text-center align-middle font-bold text-red-800">{phaseTotals.sewingIn - phaseTotals.sewingOut}</td>
+                          )}
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-bold text-slate-900">{phaseTotals.qcIn}</td>
+                          {showPhaseDifferences && (
+                            <td className="px-3 py-2 border-b border-red-300 bg-red-100/60 text-center align-middle font-bold text-red-800">{phaseTotals.sewingOut - phaseTotals.qcIn}</td>
+                          )}
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-bold text-slate-900">{phaseTotals.qcOut}</td>
+                          {showPhaseDifferences && (
+                            <td className="px-3 py-2 border-b border-red-300 bg-red-100/60 text-center align-middle font-bold text-red-800">{phaseTotals.qcIn - phaseTotals.qcOut}</td>
+                          )}
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-bold text-slate-900">{phaseTotals.packagingIn}</td>
+                          {showPhaseDifferences && (
+                            <td className="px-3 py-2 border-b border-red-300 bg-red-100/60 text-center align-middle font-bold text-red-800">{phaseTotals.qcOut - phaseTotals.packagingIn}</td>
+                          )}
+                          <td className="px-3 py-2 border-b border-gray-300 text-center align-middle font-bold text-slate-900">{phaseTotals.packagingOut}</td>
+                          {showPhaseDifferences && (
+                            <td className="px-3 py-2 border-b border-red-300 bg-red-100/60 text-center align-middle font-bold text-red-800">{phaseTotals.packagingIn - phaseTotals.packagingOut}</td>
+                          )}
+                        </tr>
+                      );
                       
-                      return colorRows;
+                      return [...colorRows, colorTotalRow];
                     }).flat();
                   })()}
                 </tbody>

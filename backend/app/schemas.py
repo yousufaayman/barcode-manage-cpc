@@ -104,6 +104,7 @@ class ClientCreate(ClientBase):
 
 class Client(ClientBase):
     client_id: int
+    client_code: str
 
     class Config:
         from_attributes = True
@@ -649,6 +650,7 @@ class JobOrderMaterialRequestCreateWithName(BaseModel):
 class JobOrderMaterialRequest(BaseModel):
     id: int
     job_order_id: int
+    fabric_code: str
     type: str
     panel_type: str
     consumption: float
@@ -1590,6 +1592,8 @@ class CutDetailsResponse(BaseModel):
     model_name: str
     color_id: int
     color_name: str
+    material_id: Optional[int] = None
+    material_name: Optional[str] = None
     waste_fabric_weight: Optional[float] = None
     marker_length: Optional[float] = None
     created_at: Optional[str] = None
@@ -1635,6 +1639,7 @@ class CutSizeTransitionCreate(BaseModel):
 class CutCreate(BaseModel):
     job_order_id: int
     color_id: int
+    material_id: int
     job_order_items_ratios: Dict[str, float]  # {"item_id": ratio}
     waste_fabric_weight: Optional[float] = None
     marker_length: Optional[float] = None
@@ -1647,6 +1652,7 @@ class CutCreate(BaseModel):
 class CutUpdate(BaseModel):
     job_order_id: Optional[int] = None
     color_id: Optional[int] = None
+    material_id: Optional[int] = None
     job_order_items_ratios: Optional[Dict[str, float]] = None
     waste_fabric_weight: Optional[float] = None
     marker_length: Optional[float] = None

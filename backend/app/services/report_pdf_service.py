@@ -1346,6 +1346,7 @@ class ReportPDFService:
                     "print_status": row.print_status or "",
                     "sizes": [],
                     "marker_length": None,  # filled later
+                    "material_name": "",
                 }
                 cuts[cut_id] = cut
 
@@ -1356,20 +1357,22 @@ class ReportPDFService:
                 }
             )
 
-        # Fetch marker_length for all cuts at once
+        # marker_length and material from ops.cut_details
         cut_ids = list(cuts.keys())
         placeholders = ",".join([f":c{i}" for i in range(len(cut_ids))])
         marker_params = {f"c{i}": cid for i, cid in enumerate(cut_ids)}
         marker_sql = f"""
-            SELECT cut_id, marker_length
-            FROM ops.cut_details
-            WHERE cut_id IN ({placeholders})
+            SELECT cd.cut_id, cd.marker_length, cd.material_id, m.material_name
+            FROM ops.cut_details cd
+            LEFT JOIN core.materials m ON m.material_id = cd.material_id
+            WHERE cd.cut_id IN ({placeholders})
         """
         marker_rows = db.execute(text(marker_sql), marker_params).fetchall()
         for m in marker_rows:
             cid = m.cut_id
             if cid in cuts:
                 cuts[cid]["marker_length"] = float(m.marker_length) if m.marker_length is not None else None
+                cuts[cid]["material_name"] = getattr(m, "material_name", None) or ""
 
         # Sort sizes using shared size order
         for cut in cuts.values():
@@ -1667,8 +1670,8 @@ class ReportPDFService:
                     )
                     story.append(color_header)
 
-                    # Build table header: Cut #, dynamic size columns, Total, Printing, Consumption (m/kg)
-                    header_labels: List[str] = ["Cut #"] + list(size_labels) + [
+                    # Build table header: Cut #, Material, dynamic size columns, Total, Printing, Consumption (m/kg)
+                    header_labels: List[str] = ["Cut #", "Material"] + list(size_labels) + [
                         "Total",
                         "Printing",
                         "Consumption (m)",
@@ -1754,7 +1757,8 @@ class ReportPDFService:
                             job_order_consumption_kg_num += num_kg
                             job_order_consumption_kg_den += float(total_pieces)
 
-                        row = [str(cut.get("cut_id") or "")]
+                        material_label = str(cut.get("material_name") or "").strip() or "—"
+                        row = [str(cut.get("cut_id") or ""), material_label]
                         row.extend(val if val != 0 else "" for val in row_pieces)
                         row.append(row_total if row_total != 0 else "")
 
@@ -1774,7 +1778,7 @@ class ReportPDFService:
                         color_kg_num / color_kg_den if color_kg_den > 0 else None
                     )
                     # First cell shows only the color name (no extra label)
-                    color_total_row: List[Any] = [str(color_name)]
+                    color_total_row: List[Any] = [str(color_name), ""]
                     color_total_row.extend(
                         val if val != 0 else "" for val in color_totals
                     )
@@ -1790,8 +1794,8 @@ class ReportPDFService:
 
                     # Table column widths – dynamically distribute size columns
                     num_size_cols = len(size_labels)
-                    # Fixed widths for non-size columns (Cut #, Total, Printing, Cons m, Cons kg)
-                    base_widths = [0.8 * inch]  # Cut #
+                    # Fixed widths for non-size columns (Cut #, Material, Total, Printing, Cons m, Cons kg)
+                    base_widths = [0.65 * inch, 1.0 * inch]  # Cut #, Material
                     tail_widths = [0.7 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch]
                     fixed_total = sum(base_widths) + sum(tail_widths)
                     remaining = max(content_width - fixed_total, 1.0 * inch)
@@ -1844,7 +1848,7 @@ class ReportPDFService:
 
                 # Job order total row across all colors
                 if size_labels:
-                    job_total_row: List[Any] = ["Total"]
+                    job_total_row: List[Any] = ["Total", ""]
                     job_total_row.extend(
                         val if val != 0 else "" for val in job_order_totals
                     )
@@ -1866,7 +1870,7 @@ class ReportPDFService:
 
                     jt_data = [job_total_row]
                     num_size_cols = len(size_labels)
-                    base_widths = [0.8 * inch]  # Cut # / label
+                    base_widths = [0.65 * inch, 1.0 * inch]  # Total label + spacer
                     tail_widths = [0.7 * inch, 0.9 * inch, 0.9 * inch, 0.9 * inch]
                     fixed_total = sum(base_widths) + sum(tail_widths)
                     remaining = max(content_width - fixed_total, 1.0 * inch)

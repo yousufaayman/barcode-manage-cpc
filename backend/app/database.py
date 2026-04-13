@@ -38,10 +38,10 @@ def create_indexes():
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_core_colors_name ON core.colors (name);",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_core_sizes_value ON core.sizes (value);",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_core_models_name ON core.models (name);",
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_core_materials_name ON core.materials (name);",
+        # core.materials: uniqueness via uq_core_materials_* partial indexes (migration in create_triggers_and_functions)
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_core_production_phases_name ON core.production_phases (name);",
         "CREATE INDEX IF NOT EXISTS idx_core_job_order_items_composite ON core.job_order_items (job_order_id, color_id, size_id);",
-        "CREATE INDEX IF NOT EXISTS idx_core_job_order_material_requests_composite ON core.job_order_material_requests (job_order_id, material_id, panel_type, color_id);",
+        "CREATE INDEX IF NOT EXISTS idx_core_job_order_material_requests_composite ON core.job_order_material_requests (job_order_id, fabric_code_id, panel_type);",
         "CREATE INDEX IF NOT EXISTS idx_core_production_phases_type ON core.production_phases (type);",
         "CREATE INDEX IF NOT EXISTS idx_core_production_phases_sequence ON core.production_phases (sequence_order);",
         "CREATE INDEX IF NOT EXISTS idx_core_job_orders_print_config ON core.job_orders USING GIN (print_config);",
@@ -84,6 +84,145 @@ def create_indexes():
 def create_triggers_and_functions():
     """Create PostgreSQL triggers and functions"""
     functions_and_triggers = [
+        """
+        -- core.clients: unique client_code generated on insert (first 2 letters, then 3, then 2 + letter from name, then 1 + AA..ZZ)
+        ALTER TABLE IF EXISTS core.clients
+            ADD COLUMN IF NOT EXISTS client_code VARCHAR(32);
+
+        CREATE OR REPLACE FUNCTION core.client_code_taken(p_code text, p_exclude_id integer)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        AS $taken$
+            SELECT EXISTS (
+                SELECT 1
+                FROM core.clients c
+                WHERE c.client_code = p_code
+                  AND (p_exclude_id IS NULL OR c.client_id <> p_exclude_id)
+            );
+        $taken$;
+
+        CREATE OR REPLACE FUNCTION core.generate_client_code(p_name text, p_exclude_id integer)
+        RETURNS text
+        LANGUAGE plpgsql
+        STABLE
+        AS $gen$
+        DECLARE
+            letters text;
+            base2 text;
+            v_try text;
+            fl text;
+            rec record;
+            i int;
+            j int;
+        BEGIN
+            letters := regexp_replace(lower(trim(coalesce(p_name, ''))), '[^[:alpha:]]', '', 'g');
+            IF length(letters) = 0 THEN
+                letters := 'x';
+            END IF;
+
+            IF length(letters) >= 2 THEN
+                v_try := upper(substr(letters, 1, 2));
+            ELSE
+                v_try := upper(substr(letters, 1, 1) || substr(letters, 1, 1));
+            END IF;
+            IF NOT core.client_code_taken(v_try, p_exclude_id) THEN
+                RETURN v_try;
+            END IF;
+
+            IF length(letters) >= 3 THEN
+                v_try := upper(substr(letters, 1, 3));
+                IF NOT core.client_code_taken(v_try, p_exclude_id) THEN
+                    RETURN v_try;
+                END IF;
+            END IF;
+
+            IF length(letters) >= 2 THEN
+                base2 := substr(letters, 1, 2);
+            ELSE
+                base2 := substr(letters, 1, 1) || substr(letters, 1, 1);
+            END IF;
+
+            FOR rec IN
+                SELECT substr(letters, s.i, 1) AS ch
+                FROM generate_series(1, length(letters)) AS s(i)
+                ORDER BY random()
+            LOOP
+                v_try := upper(base2 || rec.ch);
+                IF NOT core.client_code_taken(v_try, p_exclude_id) THEN
+                    RETURN v_try;
+                END IF;
+            END LOOP;
+
+            fl := upper(substr(letters, 1, 1));
+            FOR i IN 0..25 LOOP
+                FOR j IN 0..25 LOOP
+                    v_try := fl || chr(ascii('A') + i) || chr(ascii('A') + j);
+                    IF NOT core.client_code_taken(v_try, p_exclude_id) THEN
+                        RETURN v_try;
+                    END IF;
+                END LOOP;
+            END LOOP;
+
+            RAISE EXCEPTION 'Could not allocate client_code for name %', p_name;
+        END;
+        $gen$;
+
+        CREATE OR REPLACE FUNCTION core.clients_set_client_code()
+        RETURNS TRIGGER
+        LANGUAGE plpgsql
+        AS $trg$
+        BEGIN
+            IF NEW.client_code IS NULL OR btrim(NEW.client_code::text) = '' THEN
+                NEW.client_code := core.generate_client_code(NEW.client_name, NULL);
+            END IF;
+            RETURN NEW;
+        END;
+        $trg$;
+
+        DROP TRIGGER IF EXISTS trg_clients_set_client_code ON core.clients;
+        CREATE TRIGGER trg_clients_set_client_code
+            BEFORE INSERT ON core.clients
+            FOR EACH ROW
+            EXECUTE FUNCTION core.clients_set_client_code();
+
+        DO $fill$
+        DECLARE
+            r RECORD;
+        BEGIN
+            FOR r IN
+                SELECT client_id, client_name
+                FROM core.clients
+                WHERE client_code IS NULL
+                ORDER BY client_id
+            LOOP
+                UPDATE core.clients c
+                SET client_code = core.generate_client_code(r.client_name, r.client_id)
+                WHERE c.client_id = r.client_id;
+            END LOOP;
+        END
+        $fill$;
+
+        DROP INDEX IF EXISTS core.uq_core_clients_client_code;
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_core_clients_client_code ON core.clients (client_code);
+
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'core' AND table_name = 'clients'
+                  AND column_name = 'client_code' AND is_nullable = 'YES'
+            ) THEN
+                ALTER TABLE core.clients ALTER COLUMN client_code SET NOT NULL;
+            END IF;
+        END $$;
+        """,
+        """
+        -- Materials are global; fabric codes moved to core.client_fabric_codes
+        DROP TRIGGER IF EXISTS trg_materials_set_fabric_code ON core.materials;
+        DROP FUNCTION IF EXISTS core.materials_set_fabric_code();
+        DROP TABLE IF EXISTS core.material_fabric_seq;
+        """,
         # Cleanup legacy function/trigger names and wrong schema references
         "DROP TRIGGER IF EXISTS trigger_handle_phase_transition ON ops.batches;",
         "DROP TRIGGER IF EXISTS trigger_handle_phase_transitions ON ops.batches;",
@@ -561,6 +700,45 @@ def create_triggers_and_functions():
             AFTER UPDATE ON ops.batches
             FOR EACH ROW
             EXECUTE FUNCTION ops.track_item_batch_completion_changes();
+        """,
+
+        """
+        -- Cuts: store material_id (core.materials), aligned with job order material requests for JO + color
+        ALTER TABLE IF EXISTS ops.cut_details
+            ADD COLUMN IF NOT EXISTS material_id INTEGER;
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'fk_cut_details_material_id'
+            ) THEN
+                ALTER TABLE ops.cut_details
+                    ADD CONSTRAINT fk_cut_details_material_id
+                    FOREIGN KEY (material_id) REFERENCES core.materials(material_id) ON DELETE SET NULL;
+            END IF;
+        END $$;
+        CREATE INDEX IF NOT EXISTS idx_ops_cut_details_material_id ON ops.cut_details (material_id);
+
+        ALTER TABLE IF EXISTS archive.cut_details
+            ADD COLUMN IF NOT EXISTS material_id INTEGER;
+
+        UPDATE ops.cut_details cd
+        SET material_id = subq.material_id
+        FROM (
+            SELECT DISTINCT ON (cd2.cut_id)
+                cd2.cut_id,
+                cfc.material_id
+            FROM ops.cut_details cd2
+            JOIN core.job_order_material_requests jomr
+              ON jomr.job_order_id = cd2.job_order_id
+            JOIN core.client_fabric_codes cfc
+              ON cfc.id = jomr.fabric_code_id
+             AND cfc.color_id = cd2.color_id
+            ORDER BY cd2.cut_id,
+                     jomr.id
+        ) subq
+        WHERE cd.cut_id = subq.cut_id
+          AND cd.material_id IS NULL;
         """,
     ]
     

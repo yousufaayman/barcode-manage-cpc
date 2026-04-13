@@ -13,7 +13,7 @@ class CRUDAdapter:
     def get_models(self):
         """Get the PostgreSQL models"""
         from .models import (
-            User, Client, Color, Size, Model, Material, ProductionPhase,
+            User, Client, Color, Size, Model, Material, ClientFabricCode, ProductionPhase,
             JobOrder, JobOrderItem, JobOrderMaterialRequest, Batch, BarcodeScanEvent,
             ArchivedBatch, ArchivedJobOrder, ArchivedJobOrderItem,
             JobOrderItemSummary, JobOrderSummary
@@ -25,6 +25,7 @@ class CRUDAdapter:
             'Size': Size,
             'Model': Model,
             'Material': Material,
+            'ClientFabricCode': ClientFabricCode,
             'ProductionPhase': ProductionPhase,
             'JobOrder': JobOrder,
             'JobOrderItem': JobOrderItem,
@@ -82,6 +83,7 @@ class CRUDAdapter:
             'Size': 'core.sizes',
             'Model': 'core.models',
             'Material': 'core.materials',
+            'ClientFabricCode': 'core.client_fabric_codes',
             'ProductionPhase': 'core.production_phases',
             'JobOrder': 'core.job_orders',
             'JobOrderItem': 'core.job_order_items',
