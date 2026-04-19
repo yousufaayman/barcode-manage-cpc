@@ -115,8 +115,10 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
             <NavItem to="/dashboard" label={t('navigation.dashboard')} icon={LayoutDashboard} />
             <NavItem to="/scanner" label={t('navigation.barcodeScanner')} icon={QrCode} />
             <NavItem to="/barcode-management" label={t('navigation.barcodeManagement')} icon={Package} />
-            <NavItem to="/cutting" label={t('navigation.cutting')} icon={Scissors} />
-            {(user?.role === 'admin' || user?.role === 'general_operations') && (
+            {(user?.role === 'admin' || user?.role === 'general_operations' || user?.role === 'cutting') && (
+              <NavItem to="/cutting" label={t('navigation.cutting')} icon={Scissors} />
+            )}
+            {(user?.role === 'admin' || user?.role === 'general_operations' || user?.role === 'cutting' || user?.role === 'sewing' || user?.role === 'packaging') && (
               <NavItem to="/job-orders" label={t('navigation.jobOrders')} icon={FileText} />
             )}
             {(user?.role === 'admin' || user?.role === 'general_operations' || user?.role === 'cutting') && (
@@ -142,21 +144,14 @@ const Sidebar: React.FC<SidebarProps> = ({ onClose }) => {
           </div>
         )}
 
-        {(user?.role === 'general_operations' || user?.role === 'sewing') && (
+        {user?.role === 'general_operations' && (
           <div className="mb-4">
             <h3 className={`text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2 ${isCollapsed ? 'hidden' : ''}`}>
               {t('navigation.additional')}
             </h3>
             <div className="space-y-1">
-              {(user?.role === 'general_operations') && (
-                <>
-                  <NavItem to="/production" label={t('navigation.productionManagement')} icon={LayoutGrid} />
-                  <NavItem to="/advanced-statistics" label={t('navigation.advancedStatistics')} icon={BarChart3} />
-                </>
-              )}
-              {user?.role === 'sewing' && (
-                <NavItem to="/production" label={t('navigation.productionManagement')} icon={LayoutGrid} />
-              )}
+              <NavItem to="/production" label={t('navigation.productionManagement')} icon={LayoutGrid} />
+              <NavItem to="/advanced-statistics" label={t('navigation.advancedStatistics')} icon={BarChart3} />
             </div>
           </div>
         )}

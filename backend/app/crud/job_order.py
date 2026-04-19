@@ -569,6 +569,28 @@ def get_material_options_for_job_order(
 
     client_id = job_order.client_id
 
+    if include_non_client:
+        all_material_rows = db.execute(
+            text(
+                """
+                SELECT m.material_id, m.material_name
+                FROM core.materials m
+                ORDER BY m.material_name
+                """
+            )
+        ).fetchall()
+        return [
+            {
+                "material_id": int(row[0]),
+                "material_name": row[1],
+                "fabric_code": None,
+                "color_id": None,
+                "color_name": None,
+                "belongs_to_client": False,
+            }
+            for row in all_material_rows
+        ]
+
     # Initialize from materials explicitly used by this job order (source of truth).
     base_rows = db.execute(
         text(
@@ -602,55 +624,6 @@ def get_material_options_for_job_order(
         }
         for row in base_rows
     ]
-
-    if include_non_client:
-        non_client_rows = db.execute(
-            text(
-                """
-                SELECT DISTINCT
-                    m.material_id,
-                    m.material_name,
-                    cfc.fabric_code,
-                    c.color_id,
-                    c.color_name
-                FROM core.materials m
-                LEFT JOIN core.client_fabric_codes cfc
-                    ON cfc.material_id = m.material_id
-                   AND (:client_id IS NULL OR cfc.client_id <> :client_id)
-                LEFT JOIN core.colors c ON c.color_id = cfc.color_id
-                ORDER BY
-                    CASE WHEN cfc.fabric_code IS NULL OR btrim(cfc.fabric_code) = '' THEN 1 ELSE 0 END,
-                    m.material_name,
-                    cfc.fabric_code,
-                    c.color_name
-                """
-            ),
-            {"client_id": client_id},
-        ).fetchall()
-
-        existing_keys = {
-            (opt["material_id"], opt.get("fabric_code"), opt.get("color_id"))
-            for opt in options
-        }
-        for row in non_client_rows:
-            key = (
-                int(row[0]),
-                row[2],
-                int(row[3]) if row[3] is not None else None,
-            )
-            if key in existing_keys:
-                continue
-            options.append(
-                {
-                    "material_id": int(row[0]),
-                    "material_name": row[1],
-                    "fabric_code": row[2],
-                    "color_id": int(row[3]) if row[3] is not None else None,
-                    "color_name": row[4],
-                    "belongs_to_client": False,
-                }
-            )
-            existing_keys.add(key)
 
     return options
 

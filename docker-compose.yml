@@ -1,0 +1,92 @@
+version: "3.9"
+
+services:
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    ports:
+      - "0.0.0.0:81:80"
+    volumes:
+      - media_files:/app/media:ro
+    networks:
+      - app_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+      POSTGRESQL_HOST: ${DB_HOST}
+      POSTGRESQL_PORT: ${DB_PORT}
+      POSTGRESQL_USER: ${DB_USER}
+      POSTGRESQL_PASSWORD: ${DB_PASSWORD}
+      POSTGRESQL_DATABASE: ${DB_NAME}
+      MEDIA_ROOT: ${MEDIA_ROOT}
+      JOB_ORDER_IMAGE_UPLOAD_DIR: ${MEDIA_ROOT}
+      REPORTS_DIR: ${REPORTS_ROOT}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
+      CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - media_files:/app/media
+      - reports:/app/reports
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  report-email-worker:
+    build:
+      context: ./report-email-worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Same Docker network as backend; overrides API_BASE_URL if present in .env for host-based setups.
+      API_BASE_URL: http://backend:8000/api/v1
+    networks:
+      - app_net
+
+networks:
+  app_net:
+    driver: bridge
+
+volumes:
+  media_files:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/appdata/media
+  reports:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/appdata/reports

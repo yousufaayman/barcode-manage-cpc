@@ -422,6 +422,16 @@ class BatchProductionDailyAssignmentOption(BaseModel):
     assignment_date: Optional[date] = None
 
 
+class BatchProductionHistoryEntry(BaseModel):
+    """Detailed production history rows for a batch."""
+    production_id: int
+    worker_id: int
+    worker_name: str
+    stage_name: str
+    quantity_produced: int
+    registered_at: datetime
+
+
 # Job Order Print Configuration (JSONB)
 class JobOrderPrintConfig(BaseModel):
     type: str

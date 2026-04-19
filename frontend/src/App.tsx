@@ -65,6 +65,10 @@ const AppContent: React.FC = () => {
             <Route path="/barcode-management" element={<BarcodeManagementPage />} />
             <Route path="/job-orders/:jobOrderId" element={<JobOrderDetailsPage />} />
             <Route path="/barcode-details/:batchId" element={<BarcodeDetailsPage />} />
+          </Route>
+
+          {/* Admin, General Operations, and Cutting: Cutting module */}
+          <Route element={<PrivateRoute allowedRoles={['admin', 'general_operations', 'cutting']} />}>
             <Route path="/cutting" element={<CuttingPage />} />
             <Route path="/cutting/createcut" element={<AddCutPage />} />
             <Route path="/cutting/:cutId" element={<CutDetailsPage />} />
@@ -75,9 +79,13 @@ const AppContent: React.FC = () => {
             <Route path="/bulk-create" element={<BulkBarcodeCreatePage />} />
           </Route>
 
+          {/* Admin, General Operations, and production roles: Job Orders (read-only outside admin/general operations) */}
+          <Route element={<PrivateRoute allowedRoles={['admin', 'general_operations', 'cutting', 'sewing', 'packaging']} />}>
+            <Route path="/job-orders" element={<JobOrdersPage />} />
+          </Route>
+
           {/* Admin and General Operations Only Routes */}
           <Route element={<PrivateRoute allowedRoles={['admin', 'general_operations']} />}>
-            <Route path="/job-orders" element={<JobOrdersPage />} />
             <Route path="/add-job-order" element={<AddJobOrderPage />} />
             <Route path="/advanced-statistics" element={<AdvancedStatisticsPage />} />
         <Route

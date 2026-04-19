@@ -172,6 +172,7 @@ const JobOrdersPage: React.FC = () => {
   // Priority modal state
   const [priorityModalOpen, setPriorityModalOpen] = useState(false);
   const [allJobOrdersForPriority, setAllJobOrdersForPriority] = useState<JobOrderSummary[]>([]);
+  const canManageJobOrders = user?.role === 'admin' || user?.role === 'general_operations';
   
   // Fetch open job orders using summary endpoint
   const fetchOpenJobOrders = async () => {
@@ -860,7 +861,7 @@ const JobOrdersPage: React.FC = () => {
           className="rounded border-gray-300 text-green-600 focus:ring-green-500"
         />
       ),
-      hidden: user?.role !== 'admin' && user?.role !== 'general_operations'
+      hidden: !canManageJobOrders
     },
     {
       key: 'job_order_number',
@@ -1014,7 +1015,7 @@ const JobOrdersPage: React.FC = () => {
               <Eye className="w-4 h-4 text-gray-600" />
             </Button>
           </Link>
-          {(user?.role === 'admin' || user?.role === 'general_operations') && (
+          {canManageJobOrders && (
             <Button
               variant="ghost"
               size="sm"
@@ -1091,31 +1092,33 @@ const JobOrdersPage: React.FC = () => {
               </div>
             </div>
             
-            <div className="form-group">
-              <label className="text-sm font-medium text-gray-700 mb-2 block">{t('common.actions')}</label>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <Button
-                  onClick={handleOpenPriorityModal}
-                  variant="outline"
-                  className="min-w-[140px] sm:flex-1"
-                >
-                  <ArrowUpDown className="h-4 w-4 mr-2" />
-                  <span className="whitespace-nowrap">{t('jobOrders.priority.title', 'Prioritize')}</span>
-                </Button>
-                <Button
-                  onClick={handleAddJobOrder}
-                  className="min-w-[140px] sm:flex-1 text-white font-medium"
-                  style={{ backgroundColor: 'rgb(17, 139, 80)', borderColor: 'rgb(17, 139, 80)', color: '#fff', fontWeight: 500 }}
-                >
-                  <span className="whitespace-nowrap">{t('jobOrders.addJobOrder')}</span>
-                </Button>
+            {canManageJobOrders && (
+              <div className="form-group">
+                <label className="text-sm font-medium text-gray-700 mb-2 block">{t('common.actions')}</label>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Button
+                    onClick={handleOpenPriorityModal}
+                    variant="outline"
+                    className="min-w-[140px] sm:flex-1"
+                  >
+                    <ArrowUpDown className="h-4 w-4 mr-2" />
+                    <span className="whitespace-nowrap">{t('jobOrders.priority.title', 'Prioritize')}</span>
+                  </Button>
+                  <Button
+                    onClick={handleAddJobOrder}
+                    className="min-w-[140px] sm:flex-1 text-white font-medium"
+                    style={{ backgroundColor: 'rgb(17, 139, 80)', borderColor: 'rgb(17, 139, 80)', color: '#fff', fontWeight: 500 }}
+                  >
+                    <span className="whitespace-nowrap">{t('jobOrders.addJobOrder')}</span>
+                  </Button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
         
         {/* Archive Action Button */}
-        {(user?.role === 'admin' || user?.role === 'ops_manager') && selectedJobOrders.length > 0 && (
+        {canManageJobOrders && selectedJobOrders.length > 0 && (
           <div className="mb-6 text-center">
             <button
               onClick={handleArchiveSelected}

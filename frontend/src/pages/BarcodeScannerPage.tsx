@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Layout from '../components/Layout';
-import { barcodeApi, jobOrderApi, BarcodeData } from '../services/api';
+import { barcodeApi, jobOrderApi, BarcodeData, BatchProductionHistoryEntry } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useTranslation } from 'react-i18next';
 import { Label } from '../components/ui/label';
 import { Card, CardContent } from '../components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { Eye, Edit3, Scan, Keyboard, Package, RefreshCw, Play, Square, AlertTriangle } from 'lucide-react';
+import { Eye, Edit3, Scan, Keyboard, Package, Play, Square, AlertTriangle } from 'lucide-react';
 
 type ScannerMode = 'view' | 'update' | 'updateQuantity' | 'secondDegree' | 'productionIssues';
 type InputMode = 'manual' | 'scanner';
@@ -135,6 +135,8 @@ const BarcodeScannerPage: React.FC = () => {
   const [decrementSewingDailyAssignments, setDecrementSewingDailyAssignments] = useState<
     Array<{ daily_assignment_id: number; worker_id: number; worker_name: string; stage_name: string; quantity_produced: number }>
   >([]);
+  const [batchProductionHistory, setBatchProductionHistory] = useState<BatchProductionHistoryEntry[]>([]);
+  const [isLoadingBatchProductionHistory, setIsLoadingBatchProductionHistory] = useState(false);
   const [isLoadingDecrementStages, setIsLoadingDecrementStages] = useState(false);
   const [visitedPhases, setVisitedPhases] = useState<Phase[]>([]);
   
@@ -392,6 +394,33 @@ const BarcodeScannerPage: React.FC = () => {
       cancelled = true;
     };
   }, [mode, barcodeData?.batch_id, quantityDecrementPhaseId, phases]);
+
+  useEffect(() => {
+    if (!barcodeData?.batch_id) {
+      setBatchProductionHistory([]);
+      setIsLoadingBatchProductionHistory(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingBatchProductionHistory(true);
+
+    barcodeApi
+      .getBatchProductionHistory(barcodeData.batch_id)
+      .then((rows) => {
+        if (!cancelled) setBatchProductionHistory(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setBatchProductionHistory([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingBatchProductionHistory(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [barcodeData?.batch_id]);
 
   // Function to handle input mode switching
   const handleInputModeChange = (newMode: InputMode) => {
@@ -848,6 +877,8 @@ const BarcodeScannerPage: React.FC = () => {
     setQuantityDecrementPhaseId(null);
     setQuantityDecrementDailyAssignmentId(null);
     setDecrementSewingDailyAssignments([]);
+    setBatchProductionHistory([]);
+    setIsLoadingBatchProductionHistory(false);
     setVisitedPhases([]);
     if (barcodeInputRef.current) {
       barcodeInputRef.current.focus();
@@ -901,11 +932,19 @@ const BarcodeScannerPage: React.FC = () => {
   const getAllowedPhasesForRole = (role: string): number[] => {
     switch (role) {
       case 'admin':
-        return [1, 2, 3, 4, 7, 8]; // All phases: Cutting, Sewing lines 1-4, Packaging
+        return phases.length > 0 ? phases.map((p) => p.id) : [1, 2, 3, 4, 7, 8, 9];
       case 'cutting':
         return [1]; // Only cutting
-      case 'sewing':
-        return [2, 3, 4, 7, 8]; // All sewing lines (2,3,4,7) and packaging
+      case 'sewing': {
+        // Sewing can update sewing lines + packaging + QC.
+        const allowed = phases
+          .filter((p) => {
+            const phaseType = (p.type || '').toLowerCase();
+            return phaseType === 'sewing' || phaseType === 'packaging' || isQcPhase(p);
+          })
+          .map((p) => p.id);
+        return allowed.length > 0 ? allowed : [2, 3, 4, 7, 8, 9];
+      }
       case 'packaging':
         return [8]; // Only packaging
       default:
@@ -1308,26 +1347,6 @@ const BarcodeScannerPage: React.FC = () => {
                   <Package className="inline-block w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
                   <span className="hidden sm:inline">{t('barcode.updateQuantityMode')}</span>
                   <span className="sm:hidden">{t('barcode.updateQuantityShort')}</span>
-                </button>
-                <button
-                  onClick={() => {
-                    setMode('secondDegree');
-                    setBarcode('');
-                    setBarcodeData(null);
-                    setError('');
-                    setScanned(false);
-                    setQuantity(0);
-                    setSecondDegreeToggle(true);
-                  }}
-                  className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
-                    mode === 'secondDegree'
-                      ? 'bg-green text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  <RefreshCw className="inline-block w-3 h-3 sm:w-4 sm:h-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">{t('barcode.secondDegreeMode')}</span>
-                  <span className="sm:hidden">{t('barcode.secondDegreeModeShort')}</span>
                 </button>
                 <button
                   onClick={() => {
@@ -2302,6 +2321,47 @@ const BarcodeScannerPage: React.FC = () => {
                     </div>
                   </div>
                 )}
+
+                {/* Production History */}
+                <div className="mb-2">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Production History</h3>
+                  {isLoadingBatchProductionHistory ? (
+                    <p className="text-sm text-gray-600">Loading production history...</p>
+                  ) : batchProductionHistory.length === 0 ? (
+                    <p className="text-sm text-gray-600">No production history found for this batch.</p>
+                  ) : (
+                    <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                      <table className="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left font-medium text-gray-600">Worker</th>
+                            <th className="px-4 py-3 text-left font-medium text-gray-600">Quantity Produced</th>
+                            <th className="px-4 py-3 text-left font-medium text-gray-600">Registered At</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 bg-white">
+                          {batchProductionHistory.map((row) => {
+                            const stageName = row.stage_name?.trim() ?? '';
+                            return (
+                              <tr key={row.production_id}>
+                                <td className="px-4 py-3 text-gray-900">
+                                  {row.worker_name}
+                                  {stageName.length > 0 ? (
+                                    <span className="ml-2 text-xs text-gray-500">({stageName})</span>
+                                  ) : null}
+                                </td>
+                                <td className="px-4 py-3 text-gray-900">{row.quantity_produced}</td>
+                                <td className="px-4 py-3 text-gray-700">
+                                  {row.registered_at ? new Date(row.registered_at).toLocaleString() : '-'}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
           </div>

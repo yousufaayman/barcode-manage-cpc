@@ -1,3 +1,32 @@
+# Web API
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# Settings & validation (Pydantic v2)
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+email-validator>=2.0.0
+
+# Database (PostgreSQL)
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+
+# Auth (JWT + bcrypt)
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# Reports & data
+pandas>=2.0.0
+reportlab>=4.0.0
+
+# Barcodes & identifiers
+base36>=0.1.1
+zebra>=0.2.0
+
+# Ops / health
+psutil>=5.9.0
+
 # Second-degree Arabic ZPL: arabic-reshaper + python-bidi (printer font e.g. Swiss 271 via ^A@)
 arabic-reshaper>=3.0.0
 python-bidi>=0.4.2

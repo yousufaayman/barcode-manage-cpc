@@ -558,6 +558,30 @@ def get_batch_production_daily_assignments(
     ]
 
 
+@router.get("/{batch_id}/production-history", response_model=List[schemas.BatchProductionHistoryEntry])
+def get_batch_production_history(
+    batch_id: int,
+    db: Annotated[Session, Depends(get_db)],
+):
+    """
+    Get detailed production_history rows for a batch.
+    Each row includes worker, quantity produced, and the registration timestamp.
+    """
+    from app.crud.tracking import get_batch_production_history_rows
+    rows = get_batch_production_history_rows(db, batch_id)
+    return [
+        schemas.BatchProductionHistoryEntry(
+            production_id=production_id,
+            worker_id=worker_id,
+            worker_name=worker_name,
+            stage_name=stage_name,
+            quantity_produced=qty,
+            registered_at=registered_at,
+        )
+        for production_id, worker_id, worker_name, stage_name, qty, registered_at in rows
+    ]
+
+
 @router.get(
     "/barcode/{barcode}/job-order-item",
     responses={404: {"description": "Not found"}},

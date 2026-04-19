@@ -1212,16 +1212,18 @@ const JobOrderDetailsPage: React.FC = () => {
           </Button>
           {viewJobOrder && (
             <>
-              <Button
-                variant="outline"
-                onClick={handleEditJobOrder}
-                className="flex items-center gap-1 text-sm px-3 py-2 md:px-4 md:py-2"
-                disabled={editLoading}
-              >
-                <Edit className="w-4 h-4" /> 
-                <span className="hidden sm:inline">{t('common.edit')}</span>
-                <span className="sm:hidden">{t('common.edit')}</span>
-              </Button>
+              {(user?.role === 'admin' || user?.role === 'general_operations') && (
+                <Button
+                  variant="outline"
+                  onClick={handleEditJobOrder}
+                  className="flex items-center gap-1 text-sm px-3 py-2 md:px-4 md:py-2"
+                  disabled={editLoading}
+                >
+                  <Edit className="w-4 h-4" />
+                  <span className="hidden sm:inline">{t('common.edit')}</span>
+                  <span className="sm:hidden">{t('common.edit')}</span>
+                </Button>
+              )}
               
               {/* Archive Button - Only for Admin users */}
               {user?.role === 'admin' && (

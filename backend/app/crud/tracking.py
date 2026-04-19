@@ -656,6 +656,48 @@ def get_daily_assignments_from_batch_production_history(
     ]
 
 
+def get_batch_production_history_rows(
+    db: Session,
+    batch_id: int,
+) -> List[Tuple[int, int, str, str, int, datetime]]:
+    """
+    Get raw production_history rows for a batch with worker and stage context.
+    Returns rows in newest-first order:
+    (production_id, worker_id, worker_name, stage_name, quantity_produced, timestamp)
+    """
+    rows = (
+        db.query(
+            models.ProductionHistory.production_id,
+            models.Worker.worker_id,
+            models.Worker.worker_name,
+            models.SewingLineStage.stage_name,
+            models.ProductionHistory.quantity_produced,
+            models.ProductionHistory.timestamp,
+        )
+        .join(
+            models.WorkerDailyStageAssignment,
+            models.WorkerDailyStageAssignment.daily_assignment_id
+            == models.ProductionHistory.daily_assignment_id,
+        )
+        .join(models.Worker, models.Worker.worker_id == models.WorkerDailyStageAssignment.worker_id)
+        .join(models.SewingLineStage, models.SewingLineStage.stage_id == models.WorkerDailyStageAssignment.stage_id)
+        .filter(models.ProductionHistory.batch_id == batch_id)
+        .order_by(models.ProductionHistory.timestamp.desc(), models.ProductionHistory.production_id.desc())
+        .all()
+    )
+    return [
+        (
+            r.production_id,
+            r.worker_id,
+            r.worker_name or "",
+            r.stage_name or "",
+            r.quantity_produced or 0,
+            r.timestamp,
+        )
+        for r in rows
+    ]
+
+
 def get_phase_daily_production_total(
     db: Session,
     phase_id: int,

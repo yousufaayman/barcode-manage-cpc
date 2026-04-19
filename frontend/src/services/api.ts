@@ -100,6 +100,15 @@ export interface BarcodeData {
   notes?: string;
 }
 
+export interface BatchProductionHistoryEntry {
+  production_id: number;
+  worker_id: number;
+  worker_name: string;
+  stage_name: string;
+  quantity_produced: number;
+  registered_at: string;
+}
+
 // Event-based timeline interfaces
 export interface BarcodeScanEvent {
   id: number;
@@ -837,6 +846,11 @@ export const barcodeApi = {
   getBatchProductionDailyAssignments: async (batch_id: number, phase_id?: number): Promise<Array<{daily_assignment_id: number; worker_id: number; worker_name: string; stage_name: string; quantity_produced: number; assignment_date?: string}>> => {
     const params = phase_id != null ? { phase_id } : {};
     const response = await api.get<Array<{daily_assignment_id: number; worker_id: number; worker_name: string; stage_name: string; quantity_produced: number; assignment_date?: string}>>(`/batches/${batch_id}/production-daily-assignments`, { params });
+    return response.data;
+  },
+
+  getBatchProductionHistory: async (batch_id: number): Promise<BatchProductionHistoryEntry[]> => {
+    const response = await api.get<BatchProductionHistoryEntry[]>(`/batches/${batch_id}/production-history`);
     return response.data;
   },
 

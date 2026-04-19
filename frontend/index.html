@@ -15,8 +15,9 @@
 
   <body>
     <div id="root"></div>
-    <!-- Zebra Browser Print SDK -->
-    <script type="text/javascript" src="/BrowserPrint-1.0.0.min.js"></script>
+    <!-- Zebra Browser Print SDK: core first, then Zebra module (see SDK Documentation folder) -->
+    <script type="text/javascript" src="/BrowserPrint-3.1.250.min.js"></script>
+    <script type="text/javascript" src="/BrowserPrint-Zebra-1.1.250.min.js"></script>
     <!-- IMPORTANT: DO NOT REMOVE THIS SCRIPT TAG OR THIS VERY COMMENT! -->
     <script src="https://cdn.gpteng.co/gptengineer.js" type="module"></script>
     <script type="module" src="/src/main.tsx"></script>

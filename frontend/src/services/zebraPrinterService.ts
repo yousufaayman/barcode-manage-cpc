@@ -34,22 +34,60 @@ interface BarcodePrintData {
   stage_name?: string;
 }
 
+/** Browser Print 3.x device instance (from `BrowserPrint-3.x.min.js` + optional `BrowserPrint-Zebra`) */
+interface BrowserPrintV3Device {
+  name: string;
+  connection?: string;
+  deviceType?: string;
+  send: (data: string, onFinished?: (result?: string) => void, onError?: (err?: string) => void) => void;
+}
+
+/** Union of legacy (1.x) and modern (3.x) global `BrowserPrint` objects */
+interface BrowserPrintSdk {
+  isServiceAvailable?: (callback: (response: ZebraResponse) => void) => void;
+  getPrinters?: (callback: (response: ZebraResponse) => void) => void;
+  getDefaultPrinter?: (callback: (response: ZebraResponse) => void) => void;
+  setDefaultPrinter?: (printerName: string, callback: (response: ZebraResponse) => void) => void;
+  send?: (printerName: string, printData: string, callback: (response: ZebraResponse) => void) => void;
+  getApplicationConfiguration?: (
+    success: (config: Record<string, unknown> | null) => void,
+    error?: (message?: string) => void
+  ) => void;
+  getLocalDevices?: (
+    success: (devices: BrowserPrintV3Device[] | Record<string, unknown>) => void,
+    error?: (message?: string) => void,
+    deviceType?: string
+  ) => void;
+  getDefaultDevice?: (
+    deviceType: string | undefined,
+    success: (device: BrowserPrintV3Device | null) => void,
+    error?: (message?: string) => void
+  ) => void;
+}
+
 declare global {
   interface Window {
-    BrowserPrint: {
-      getDefaultPrinter: (callback: (response: ZebraResponse) => void) => void;
-      getPrinters: (callback: (response: ZebraResponse) => void) => void;
-      setDefaultPrinter: (printerName: string, callback: (response: ZebraResponse) => void) => void;
-      send: (printerName: string, printData: string, callback: (response: ZebraResponse) => void) => void;
-      isServiceAvailable: (callback: (response: ZebraResponse) => void) => void;
-    };
+    BrowserPrint: BrowserPrintSdk;
   }
+}
+
+function browserPrintConfigLooksLive(config: Record<string, unknown> | null): boolean {
+  if (!config) return false;
+  const app = config.application as Record<string, unknown> | undefined;
+  const v =
+    (typeof app?.version === 'string' ? app.version : '').trim() ||
+    (typeof config.version === 'string' ? config.version : '').trim();
+  return v.length > 0;
 }
 
 class ZebraPrinterService {
   private isServiceReady = false;
+  /** `null` until first successful probe */
+  private browserPrintMode: 'legacy' | 'v3' | null = null;
   private defaultPrinter: ZebraPrinter | null = null;
   private availablePrinters: ZebraPrinter[] = [];
+  /** Browser Print 3.x: map display name → device for `send` */
+  private v3DevicesByName = new Map<string, BrowserPrintV3Device>();
   /** Cached ZPL Arabic line from API (^FO...^A@...); undefined = not fetched yet */
   private secondDegreeArabicFragment: string | undefined = undefined;
   private bidi = bidiFactory();
@@ -58,21 +96,97 @@ class ZebraPrinterService {
     this.initializeService();
   }
 
+  private getBp(): BrowserPrintSdk {
+    if (typeof window.BrowserPrint === 'undefined') {
+      throw new Error('Zebra Browser Print service is not available. Please install Zebra Browser Print software.');
+    }
+    return window.BrowserPrint;
+  }
+
+  private detectBrowserPrintMode(): 'legacy' | 'v3' {
+    const bp = this.getBp();
+    if (typeof bp.isServiceAvailable === 'function') return 'legacy';
+    if (typeof bp.getApplicationConfiguration === 'function') return 'v3';
+    throw new Error('Unrecognized Zebra Browser Print JavaScript API.');
+  }
+
+  private normalizeV3DeviceList(result: unknown): BrowserPrintV3Device[] {
+    const isDevice = (d: unknown): d is BrowserPrintV3Device =>
+      !!d &&
+      typeof d === 'object' &&
+      typeof (d as BrowserPrintV3Device).send === 'function' &&
+      typeof (d as BrowserPrintV3Device).name === 'string';
+
+    if (Array.isArray(result)) {
+      return result.filter(isDevice);
+    }
+    if (result && typeof result === 'object') {
+      const out: BrowserPrintV3Device[] = [];
+      for (const v of Object.values(result as Record<string, unknown>)) {
+        if (Array.isArray(v)) {
+          for (const item of v) {
+            if (isDevice(item)) out.push(item);
+          }
+        }
+      }
+      return out;
+    }
+    return [];
+  }
+
+  private cacheV3Devices(devices: BrowserPrintV3Device[]): void {
+    this.v3DevicesByName.clear();
+    const list: ZebraPrinter[] = [];
+    for (const d of devices) {
+      this.v3DevicesByName.set(d.name, d);
+      list.push({
+        name: d.name,
+        connectionType: d.connection || d.deviceType || 'USB',
+      });
+    }
+    this.availablePrinters = list;
+  }
+
   private async initializeService(): Promise<void> {
     return new Promise((resolve, reject) => {
-      if (typeof window.BrowserPrint === 'undefined') {
-        reject(new Error('Zebra Browser Print service is not available. Please install Zebra Browser Print software.'));
-        return;
-      }
+      try {
+        const bp = this.getBp();
+        const mode = (this.browserPrintMode ??= this.detectBrowserPrintMode());
 
-      window.BrowserPrint.isServiceAvailable((response) => {
-        if (response.success && response.data?.available) {
-          this.isServiceReady = true;
-          resolve();
-        } else {
-          reject(new Error('Zebra Browser Print service is not running. Please start the service.'));
+        if (mode === 'legacy') {
+          if (!bp.isServiceAvailable) {
+            reject(new Error('Zebra Browser Print legacy API missing isServiceAvailable.'));
+            return;
+          }
+          bp.isServiceAvailable((response) => {
+            if (response.success && response.data?.available) {
+              this.isServiceReady = true;
+              resolve();
+            } else {
+              reject(new Error('Zebra Browser Print service is not running. Please start the service.'));
+            }
+          });
+          return;
         }
-      });
+
+        if (!bp.getApplicationConfiguration) {
+          reject(new Error('Zebra Browser Print 3.x API missing getApplicationConfiguration.'));
+          return;
+        }
+        bp.getApplicationConfiguration(
+          (config) => {
+            if (browserPrintConfigLooksLive(config)) {
+              this.isServiceReady = true;
+              resolve();
+            } else {
+              reject(new Error('Zebra Browser Print service is not running. Please start the service.'));
+            }
+          },
+          () => reject(new Error('Zebra Browser Print service is not running. Please start the service.'))
+        );
+      } catch (e) {
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
     });
   }
 
@@ -87,57 +201,121 @@ class ZebraPrinterService {
   }
 
   async getAvailablePrinters(): Promise<ZebraPrinter[]> {
-    return new Promise((resolve, reject) => {
-      if (!this.isServiceReady) {
-        reject(new Error('Service not ready'));
-        return;
-      }
+    if (!this.isServiceReady || !this.browserPrintMode) {
+      throw new Error('Service not ready');
+    }
 
-      window.BrowserPrint.getPrinters((response) => {
-        if (response.success && response.data) {
-          this.availablePrinters = response.data;
-          resolve(response.data);
-        } else {
-          reject(new Error(response.error || 'Failed to get printers'));
-        }
+    if (this.browserPrintMode === 'legacy') {
+      const bp = this.getBp();
+      if (!bp.getPrinters) throw new Error('BrowserPrint.getPrinters not available');
+      return new Promise((resolve, reject) => {
+        bp.getPrinters!((response) => {
+          if (response.success && response.data) {
+            this.availablePrinters = response.data;
+            resolve(response.data);
+          } else {
+            reject(new Error(response.error || 'Failed to get printers'));
+          }
+        });
       });
+    }
+
+    const bp = this.getBp();
+    if (!bp.getLocalDevices) throw new Error('BrowserPrint.getLocalDevices not available');
+
+    return new Promise((resolve, reject) => {
+      const finish = (devices: BrowserPrintV3Device[]) => {
+        this.cacheV3Devices(devices);
+        resolve(this.availablePrinters);
+      };
+
+      const onErr = (msg?: string) => reject(new Error(msg || 'Failed to get printers'));
+
+      bp.getLocalDevices!(
+        (result) => {
+          const filtered = this.normalizeV3DeviceList(result);
+          if (filtered.length > 0) {
+            finish(filtered);
+            return;
+          }
+          bp.getLocalDevices!(
+            (full) => finish(this.normalizeV3DeviceList(full)),
+            onErr
+          );
+        },
+        onErr,
+        'printer'
+      );
     });
   }
 
   async getDefaultPrinter(): Promise<ZebraPrinter | null> {
-    return new Promise((resolve, reject) => {
-      if (!this.isServiceReady) {
-        reject(new Error('Service not ready'));
-        return;
-      }
+    if (!this.isServiceReady || !this.browserPrintMode) {
+      throw new Error('Service not ready');
+    }
 
-      window.BrowserPrint.getDefaultPrinter((response) => {
-        if (response.success && response.data) {
-          this.defaultPrinter = response.data;
-          resolve(response.data);
-        } else {
-          resolve(null);
-        }
+    if (this.browserPrintMode === 'legacy') {
+      const bp = this.getBp();
+      if (!bp.getDefaultPrinter) throw new Error('BrowserPrint.getDefaultPrinter not available');
+      return new Promise((resolve, reject) => {
+        bp.getDefaultPrinter!((response) => {
+          if (response.success && response.data) {
+            this.defaultPrinter = response.data;
+            resolve(response.data);
+          } else {
+            resolve(null);
+          }
+        });
       });
+    }
+
+    const bp = this.getBp();
+    if (!bp.getDefaultDevice) throw new Error('BrowserPrint.getDefaultDevice not available');
+
+    return new Promise((resolve, reject) => {
+      bp.getDefaultDevice!(
+        'printer',
+        (device) => {
+          if (device && device.name) {
+            this.v3DevicesByName.set(device.name, device);
+            this.defaultPrinter = {
+              name: device.name,
+              connectionType: device.connection || device.deviceType || 'USB',
+            };
+            resolve(this.defaultPrinter);
+          } else {
+            resolve(null);
+          }
+        },
+        () => resolve(null)
+      );
     });
   }
 
   async setDefaultPrinter(printerName: string): Promise<boolean> {
-    return new Promise((resolve, reject) => {
-      if (!this.isServiceReady) {
-        reject(new Error('Service not ready'));
-        return;
-      }
+    if (!this.isServiceReady || !this.browserPrintMode) {
+      throw new Error('Service not ready');
+    }
 
-      window.BrowserPrint.setDefaultPrinter(printerName, (response) => {
-        if (response.success) {
-          this.defaultPrinter = { name: printerName, connectionType: 'USB' };
-          resolve(true);
-        } else {
-          reject(new Error(response.error || 'Failed to set default printer'));
-        }
+    if (this.browserPrintMode === 'legacy') {
+      const bp = this.getBp();
+      if (!bp.setDefaultPrinter) throw new Error('BrowserPrint.setDefaultPrinter not available');
+      return new Promise((resolve, reject) => {
+        bp.setDefaultPrinter!(printerName, (response) => {
+          if (response.success) {
+            this.defaultPrinter = { name: printerName, connectionType: 'USB' };
+            resolve(true);
+          } else {
+            reject(new Error(response.error || 'Failed to set default printer'));
+          }
+        });
       });
-    });
+    }
+
+    const fromList = this.availablePrinters.find((p) => p.name === printerName);
+    const conn = fromList?.connectionType || 'USB';
+    this.defaultPrinter = { name: printerName, connectionType: conn };
+    return true;
   }
 
   /**
@@ -312,17 +490,50 @@ class ZebraPrinterService {
           console.error('[Zebra] ZPL must start with ^XA; got:', zplCode.slice(0, 120));
         }
 
-        window.BrowserPrint.send(targetPrinter, zplCode, (response) => {
-          if (response.success) {
-            if (!response.data && response.error) {
-              console.warn('[Zebra] success=true but check error field:', response);
-            }
-            resolve(true);
-          } else {
-            console.error('[Zebra] BrowserPrint failed:', response);
-            reject(new Error(response.error || 'Failed to print'));
+        const bp = this.getBp();
+        const mode = this.browserPrintMode;
+        if (!mode) {
+          reject(new Error('Zebra Browser Print is not initialized yet.'));
+          return;
+        }
+
+        if (mode === 'legacy') {
+          if (!bp.send) {
+            reject(new Error('BrowserPrint.send not available'));
+            return;
           }
-        });
+          bp.send(targetPrinter, zplCode, (response) => {
+            if (response.success) {
+              if (!response.data && response.error) {
+                console.warn('[Zebra] success=true but check error field:', response);
+              }
+              resolve(true);
+            } else {
+              console.error('[Zebra] BrowserPrint failed:', response);
+              reject(new Error(response.error || 'Failed to print'));
+            }
+          });
+          return;
+        }
+
+        let device = this.v3DevicesByName.get(targetPrinter);
+        if (!device) {
+          await this.getAvailablePrinters();
+          device = this.v3DevicesByName.get(targetPrinter);
+        }
+        if (!device) {
+          reject(new Error(`Printer not found for Browser Print: ${targetPrinter}`));
+          return;
+        }
+
+        device.send(
+          zplCode,
+          () => resolve(true),
+          (err) => {
+            console.error('[Zebra] BrowserPrint device.send failed:', err);
+            reject(new Error(err || 'Failed to print'));
+          }
+        );
       } catch (error) {
         reject(error);
       }

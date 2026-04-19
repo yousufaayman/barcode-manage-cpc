@@ -11,11 +11,14 @@ import { Button } from '@/components/ui/button';
 import SearchableDropdown from '@/components/SearchableDropdown';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import HandleMonitor from '@/components/HandleMonitor';
+import { sortSizes } from '@/utils/sizeSort';
 
 
 const DashboardPage: React.FC = () => {
   const { user } = useAuth();
   const { t } = useTranslation();
+  const isCuttingRole = user?.role === 'cutting';
+  const isSewingRole = user?.role === 'sewing';
   const [stats, setStats] = useState<BatchStats>({
     total_batches: 0,
     in_production: 0,
@@ -110,12 +113,13 @@ const DashboardPage: React.FC = () => {
         ...Object.fromEntries(Object.entries(joFilters).filter(([_, v]) => v !== '')),
       };
       const { items, total } = await jobOrderApi.getSummary(params);
+      const sortedItems = [...items].sort((a, b) => (b.priority || 0) - (a.priority || 0));
       setJobOrdersTotal(total);
       if (reset) {
-        setJobOrderSummaries(items);
+        setJobOrderSummaries(sortedItems);
         setJobOrdersSkip(items.length);
       } else {
-        setJobOrderSummaries(prev => [...prev, ...items]);
+        setJobOrderSummaries(prev => [...prev, ...sortedItems]);
         setJobOrdersSkip(prev => prev + items.length);
       }
     } catch (e) {
@@ -128,6 +132,13 @@ const DashboardPage: React.FC = () => {
       }
     }
   }, [joFilters, jobOrdersSkip, jobOrdersLimit]);
+
+  useEffect(() => {
+    if (isCuttingRole) {
+      setActiveTab('job-orders');
+      setLoadedTabs(new Set(['job-orders']));
+    }
+  }, [isCuttingRole]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -143,7 +154,7 @@ const DashboardPage: React.FC = () => {
         setPhases(phasesData);
 
         // Fetch barcodes for department if user is not admin; aggregate across multi-line phases like Sewing-1, Sewing-2
-        if (user && user.role && user.role !== 'admin' && user.role !== 'general_operations') {
+        if (user && user.role && user.role !== 'admin' && user.role !== 'general_operations' && user.role !== 'cutting') {
           const roleName = user.role; // e.g., 'Sewing'
           let targetPhaseNames: string[] = [roleName];
           try {
@@ -239,7 +250,13 @@ const DashboardPage: React.FC = () => {
     const fetchClients = async () => {
       try {
         const simple = await jobOrderApi.getAllSimple();
-        const clients = [...new Set(simple.map(s => s.brand_name).filter(Boolean))] as string[];
+        const clients = [
+          ...new Set(
+            simple
+              .map((s: any) => s.client_name || s.brand_name)
+              .filter(Boolean)
+          )
+        ] as string[];
         setClientOptions(clients);
       } catch (e) {
         setClientOptions([]);
@@ -255,6 +272,13 @@ const DashboardPage: React.FC = () => {
       const jobOrderTotals: {[jobOrderId: number]: number} = {};
       const colorTotals: {[key: string]: number} = {};
       
+      if (isCuttingRole) {
+        setExpectedQuantities({});
+        setJobOrderExpectedTotals({});
+        setColorExpectedTotals({});
+        return;
+      }
+
       // Get all unique job order IDs from phase barcodes
       const allJobOrderIds = new Set<number>();
       Object.values(phaseBarcodes).forEach(phaseData => {
@@ -296,7 +320,7 @@ const DashboardPage: React.FC = () => {
     if (Object.keys(phaseBarcodes).length > 0) {
       fetchExpectedQuantities();
     }
-  }, [phaseBarcodes]);
+  }, [phaseBarcodes, isCuttingRole]);
 
 
 
@@ -578,7 +602,7 @@ const DashboardPage: React.FC = () => {
                         
                         {/* Sizes */}
                         <div className="divide-y">
-                          {Array.from(color.sizes.values()).map((size) => (
+                          {sortSizes(Array.from(color.sizes.values())).map((size) => (
                             <div key={size.size_value} className="px-4 py-3 flex items-center justify-between">
                               <div className="flex items-center space-x-4">
                                 <div className="w-16 text-sm text-gray-500">{t('dashboard.size')}</div>
@@ -649,7 +673,7 @@ const DashboardPage: React.FC = () => {
             >
               {t('dashboard.jobOrders.title')}
             </button>
-            {user.role && user.role !== 'general_operations' && (
+            {user.role && user.role !== 'general_operations' && !isCuttingRole && (
               <>
                 <button
                   onClick={() => {
@@ -733,7 +757,7 @@ const DashboardPage: React.FC = () => {
                     <div className="flex-1 flex items-center justify-center text-gray-500">{t('dashboard.jobOrders.none')}</div>
                   ) : (
                     <div
-                      className="flex-1 overflow-x-auto overflow-y-auto min-h-0"
+                      className="flex-1 overflow-x-auto overflow-y-auto min-h-0 rounded-xl border border-slate-200 bg-white shadow-sm"
                       onScroll={(e) => {
                         const target = e.currentTarget;
                         if (hasMoreJobOrders && !isLoadingMore && target.scrollTop + target.clientHeight >= target.scrollHeight - 50) {
@@ -742,36 +766,139 @@ const DashboardPage: React.FC = () => {
                       }}
                     >
                       <table className="min-w-full text-sm">
-                        <thead className="sticky top-0 bg-gray-50 z-10">
+                        <thead className="sticky top-0 bg-slate-50/95 backdrop-blur z-10 border-b border-slate-200">
                           <tr>
-                            <th className="px-3 py-2 text-left">{t('dashboard.jobOrders.columns.number')}</th>
-                            <th className="px-3 py-2 text-left">{t('dashboard.jobOrders.columns.model')}</th>
-                            <th className="px-3 py-2 text-left">{t('dashboard.jobOrders.columns.client')}</th>
-                            <th className="px-3 py-2 text-right">{t('dashboard.jobOrders.columns.expected')}</th>
-                            <th className="px-3 py-2 text-right">{t('dashboard.jobOrders.columns.working')}</th>
-                            <th className="px-3 py-2 text-right">{t('dashboard.jobOrders.columns.completed')}</th>
-                            <th className="px-3 py-2 text-right">{t('dashboard.jobOrders.columns.actions')}</th>
+                            <th className="px-4 py-3 text-left font-semibold text-slate-700">{t('dashboard.jobOrders.columns.number')}</th>
+                            <th className="px-4 py-3 text-left font-semibold text-slate-700">{t('dashboard.jobOrders.columns.client')}</th>
+                            {isCuttingRole && (
+                              <>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.expected', 'Order Qty Sum')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.cutQty', 'Cut Qty Sum')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.diff', 'Diff')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.actions')}</th>
+                              </>
+                            )}
+                            {isSewingRole && (
+                              <>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.expected', 'Order Qty Sum')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.cutQty', 'Cut Qty Sum')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.working', 'Working Qty Sum')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.diffWorkingOrder', 'Diff (Working - Order)')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.actions')}</th>
+                              </>
+                            )}
+                            {!isCuttingRole && !isSewingRole && (
+                              <>
+                                <th className="px-4 py-3 text-left font-semibold text-slate-700">{t('dashboard.jobOrders.columns.model')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.priority', 'Priority')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.expected')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.working')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.completed')}</th>
+                                <th className="px-4 py-3 text-right font-semibold text-slate-700">{t('dashboard.jobOrders.columns.actions')}</th>
+                              </>
+                            )}
                           </tr>
                         </thead>
                         <tbody>
                           {jobOrderSummaries.map((jo, idx) => (
-                            <tr key={jo.job_order_id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                              <td className="px-3 py-2">{jo.job_order_number}</td>
-                              <td className="px-3 py-2">{jo.model_name || '-'}</td>
-                              <td className="px-3 py-2">{jo.brand_name || '-'}</td>
-                              <td className="px-3 py-2 text-right">{jo.total_expected_quantity?.toLocaleString?.() ?? jo.total_expected_quantity}</td>
-                              <td className="px-3 py-2 text-right">{jo.total_produced_quantity?.toLocaleString?.() ?? jo.total_produced_quantity}</td>
-                              <td className="px-3 py-2 text-right">{jo.completed_quantity?.toLocaleString?.() ?? jo.completed_quantity}</td>
-                              <td className="px-3 py-2 text-right">
-                                <Link to={`/job-orders/${jo.job_order_id}`} className="inline-flex items-center px-2 py-1 border rounded text-blue-700 border-blue-300 hover:bg-blue-50">
-                                  {t('dashboard.jobOrders.viewDetails')}
-                                </Link>
-                              </td>
+                            <tr
+                              key={jo.job_order_id}
+                              className={`${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'} border-b border-slate-100 hover:bg-emerald-50/40 transition-colors`}
+                            >
+                              <td className="px-4 py-3 font-medium text-slate-900">{jo.job_order_number}</td>
+                              <td className="px-4 py-3 text-slate-700">{jo.client_name || '-'}</td>
+                              {isCuttingRole && (
+                                <>
+                                  <td className="px-4 py-3 text-right">
+                                    <span className="inline-flex items-center rounded-full bg-blue-50 text-blue-700 px-2.5 py-1 text-xs font-semibold">
+                                      {jo.total_expected_quantity?.toLocaleString?.() ?? jo.total_expected_quantity}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <span className="inline-flex items-center rounded-full bg-purple-50 text-purple-700 px-2.5 py-1 text-xs font-semibold">
+                                      {jo.cut_quantity?.toLocaleString?.() ?? jo.cut_quantity}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    {(() => {
+                                      const diff = (jo.cut_quantity || 0) - (jo.total_expected_quantity || 0);
+                                      const diffClass = diff > 0
+                                        ? 'bg-rose-50 text-rose-700'
+                                        : diff < 0
+                                          ? 'bg-amber-50 text-amber-700'
+                                          : 'bg-emerald-50 text-emerald-700';
+                                      return (
+                                        <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${diffClass}`}>
+                                          {diff > 0 ? '+' : ''}{diff.toLocaleString()}
+                                        </span>
+                                      );
+                                    })()}
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <Link to={`/job-orders/${jo.job_order_id}`} className="inline-flex items-center px-2 py-1 border rounded text-blue-700 border-blue-300 hover:bg-blue-50">
+                                      {t('dashboard.jobOrders.viewDetails')}
+                                    </Link>
+                                  </td>
+                                </>
+                              )}
+                              {isSewingRole && (
+                                <>
+                                  <td className="px-4 py-3 text-right">
+                                    <span className="inline-flex items-center rounded-full bg-blue-50 text-blue-700 px-2.5 py-1 text-xs font-semibold">
+                                      {jo.total_expected_quantity?.toLocaleString?.() ?? jo.total_expected_quantity}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <span className="inline-flex items-center rounded-full bg-purple-50 text-purple-700 px-2.5 py-1 text-xs font-semibold">
+                                      {jo.cut_quantity?.toLocaleString?.() ?? jo.cut_quantity}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <span className="inline-flex items-center rounded-full bg-cyan-50 text-cyan-700 px-2.5 py-1 text-xs font-semibold">
+                                      {jo.working_quantity?.toLocaleString?.() ?? jo.working_quantity}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    {(() => {
+                                      const diff = (jo.working_quantity || 0) - (jo.total_expected_quantity || 0);
+                                      const diffClass = diff > 0
+                                        ? 'bg-rose-50 text-rose-700'
+                                        : diff < 0
+                                          ? 'bg-amber-50 text-amber-700'
+                                          : 'bg-emerald-50 text-emerald-700';
+                                      return (
+                                        <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${diffClass}`}>
+                                          {diff > 0 ? '+' : ''}{diff.toLocaleString()}
+                                        </span>
+                                      );
+                                    })()}
+                                  </td>
+                                  <td className="px-4 py-3 text-right">
+                                    <Link to={`/job-orders/${jo.job_order_id}`} className="inline-flex items-center px-2 py-1 border rounded text-blue-700 border-blue-300 hover:bg-blue-50">
+                                      {t('dashboard.jobOrders.viewDetails')}
+                                    </Link>
+                                  </td>
+                                </>
+                              )}
+                              {!isCuttingRole && !isSewingRole && (
+                                <>
+                                  <td className="px-4 py-3">{jo.model_name || '-'}</td>
+                                  <td className="px-4 py-3 text-right font-semibold text-indigo-700">{jo.priority ?? 0}</td>
+                                  <td className="px-4 py-3 text-right">{jo.total_expected_quantity?.toLocaleString?.() ?? jo.total_expected_quantity}</td>
+                                  <td className="px-4 py-3 text-right">{jo.total_produced_quantity?.toLocaleString?.() ?? jo.total_produced_quantity}</td>
+                                  <td className="px-4 py-3 text-right">{jo.completed_quantity?.toLocaleString?.() ?? jo.completed_quantity}</td>
+                                  <td className="px-4 py-3 text-right">
+                                    <Link to={`/job-orders/${jo.job_order_id}`} className="inline-flex items-center px-2 py-1 border rounded text-blue-700 border-blue-300 hover:bg-blue-50">
+                                      {t('dashboard.jobOrders.viewDetails')}
+                                    </Link>
+                                  </td>
+                                </>
+                              )}
                             </tr>
                           ))}
                           {hasMoreJobOrders && (
                             <tr>
-                              <td colSpan={7} className="px-3 py-3 text-center text-gray-500">
+                              <td colSpan={isCuttingRole ? 6 : isSewingRole ? 7 : 8} className="px-4 py-3 text-center text-gray-500">
                                 {isLoadingMore ? t('common.loadingMore') : ''}
                               </td>
                             </tr>
@@ -785,7 +912,7 @@ const DashboardPage: React.FC = () => {
             )}
             
             {/* Pending Items Tab */}
-            {user.role && user.role !== 'general_operations' && activeTab === 'pending' && loadedTabs.has('pending') && (
+            {user.role && user.role !== 'general_operations' && !isCuttingRole && activeTab === 'pending' && loadedTabs.has('pending') && (
               <div className="flex-1 flex flex-col min-h-0">
                 <Card className="flex-1 flex flex-col min-h-0 h-full border-0 shadow-none">
                   <CardHeader className="flex-shrink-0">
@@ -839,7 +966,7 @@ const DashboardPage: React.FC = () => {
             )}
             
             {/* In Progress Items Tab */}
-            {user.role && user.role !== 'general_operations' && activeTab === 'in-progress' && loadedTabs.has('in-progress') && (
+            {user.role && user.role !== 'general_operations' && !isCuttingRole && activeTab === 'in-progress' && loadedTabs.has('in-progress') && (
               <div className="flex-1 flex flex-col min-h-0">
                 <Card className="flex-1 flex flex-col min-h-0 h-full border-0 shadow-none">
                   <CardHeader className="flex-shrink-0">
