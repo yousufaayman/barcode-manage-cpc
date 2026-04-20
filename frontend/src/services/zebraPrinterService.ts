@@ -10,8 +10,6 @@ interface ZebraResponse {
 }
 
 import api from './api';
-import bidiFactory from 'bidi-js';
-import reshaper from 'arabic-persian-reshaper';
 
 interface BarcodePrintData {
   barcode: string;
@@ -90,7 +88,7 @@ class ZebraPrinterService {
   private v3DevicesByName = new Map<string, BrowserPrintV3Device>();
   /** Cached ZPL Arabic line from API (^FO...^A@...); undefined = not fetched yet */
   private secondDegreeArabicFragment: string | undefined = undefined;
-  private bidi = bidiFactory();
+  private readonly arabicFontPath = 'E:TT0003M_.TTF';
 
   constructor() {
     this.initializeService();
@@ -336,79 +334,37 @@ class ZebraPrinterService {
         .trim();
     };
 
-    const maybeShapeArabicForZpl = (text: string): string => {
-      const safe = zplSafeUtf8(text);
-      // Arabic blocks + Arabic Presentation Forms ranges
-      const hasArabic = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/.test(safe);
-      if (!hasArabic) return safe;
-
-      // 1) Reshape into contextual forms (presentation glyphs)
-      const shaped = (reshaper as any)?.ArabicShaper?.convertArabic
-        ? (reshaper as any).ArabicShaper.convertArabic(safe)
-        : safe;
-
-      // 2) Apply bidi reordering so Zebra prints visual order correctly
-      try {
-        const embeddingLevels = this.bidi.getEmbeddingLevels(shaped, 'rtl');
-        const flips = this.bidi.getReorderSegments(shaped, embeddingLevels);
-        const arr = Array.from(shaped);
-
-        // Reverse each segment (inclusive)
-        flips.forEach((range: [number, number]) => {
-          const [start, end] = range;
-          for (let i = 0; i <= (end - start) / 2; i++) {
-            const a = start + i;
-            const b = end - i;
-            const tmp = arr[a];
-            arr[a] = arr[b];
-            arr[b] = tmp;
-          }
-        });
-
-        // Mirror brackets/parentheses where needed
-        const mirrored = this.bidi.getMirroredCharactersMap(shaped, embeddingLevels);
-        mirrored.forEach((ch: string, idx: number) => {
-          arr[idx] = ch;
-        });
-
-        return arr.join('');
-      } catch {
-        return shaped;
-      }
-    };
-
     const client = cleanText(barcodeData.brand);
     const model = cleanText(barcodeData.model);
-    const color = cleanText(barcodeData.color);
+    const color = zplSafeUtf8(barcodeData.color ?? '');
     const qty = String(barcodeData.quantity ?? 0);
-    const size = cleanText(barcodeData.size);
+    const size = zplSafeUtf8(barcodeData.size ?? '');
     // Sticker says "Serial:" for legacy wording; value is batch.layers from DB (not ops.batches.serial).
     const layersStr = String(barcodeData.layers ?? '');
     const po = cleanText(barcodeData.job_order_number ?? '');
     const cleanBarcode = cleanText(barcodeData.barcode);
-    const phaseName = cleanText(barcodeData.phase_name ?? '');
-    const stageName = cleanText(barcodeData.stage_name ?? '');
-
     const arabic = (secondDegreeArabicField || '').trim();
 
     if (barcodeData.is_rework) {
-      // Rework label: user-provided layout, rendered as UTF-8.
-      // NOTE: For rework, variable fields may include Arabic; keep UTF-8 and pre-shape + bidi reorder.
-      const reworkColor = maybeShapeArabicForZpl(barcodeData.color ?? '');
-      const reworkSize = maybeShapeArabicForZpl(barcodeData.size ?? '');
-      const reworkPhase = maybeShapeArabicForZpl(barcodeData.phase_name ?? '');
-      const reworkStage = maybeShapeArabicForZpl(barcodeData.stage_name ?? '');
+      // Rework label rendered as UTF-8 raw Arabic with printer font alias 1.
+      const reworkColor = zplSafeUtf8(barcodeData.color ?? '');
+      const reworkSize = zplSafeUtf8(barcodeData.size ?? '');
+      const reworkPhase = zplSafeUtf8(barcodeData.phase_name ?? '');
+      const reworkStage = zplSafeUtf8(barcodeData.stage_name ?? '');
       const lines = [
         '^XA',
+        '^PW800',
+        '^LL400',
         '^CI28',
+        `^CW1,${this.arabicFontPath}`,
         '^PA0,1,1,1',
-        '^FO10,60^BY2,2.5,50',
+        '^FO30,60^BY2,2.5,50',
         '^BCN,80,Y,N,N',
         `^FD${zplSafeUtf8(barcodeData.barcode ?? '')}^FS`,
-        '^FO340,20^A@N,30,30,E:SWISS271.TTF^FD\uFE95\uFE8E\uFEA3\uFEFC\uFEBB\uFE87^FS',
-        `^FO20,200^A@N,30,30,E:SWISS271.TTF^FD\uFEDE\uFEF4\uFEE4\uFECC\uFEDF\uFE8D: ${client} | \uFEDE\uFEF3\uFEA9\uFEEE\uFEE4\uFEDF\uFE8D: ${model}^FS`,
-        `^FO20,270^A@N,30,30,E:SWISS271.TTF^FD\uFEE5\uFEEE\uFEE0\uFEDF\uFE8D: ${reworkColor} | \uFEB1\uFE8E\uFED8\uFEE4\uFEDF\uFE8D: ${reworkSize} | \uFEC2\uFEA8\uFEDF\uFE8D: ${reworkPhase}^FS`,
-        `^FO20,340^A@N,30,30,E:SWISS271.TTF^FDPO: ${po} | \uFE94\uFEE0\uFEA3\uFEAE\uFEE4\uFEDF\uFE8D: ${reworkStage}^FS`,
+        '^FO340,20^A1N,30,30^FDإصلاح^FS',
+        `^FO20,200^A1N,30,30^FDالعميل: ${client} | الموديل: ${model}^FS`,
+        `^FO20,270^A1N,30,30^FDاللون: ${reworkColor} | المقاس: ${reworkSize} | المرحلة: ${reworkPhase}^FS`,
+        `^FO20,340^A1N,30,30^FDPO: ${po} | المرحلة: ${reworkStage}^FS`,
         '^XZ',
       ];
       return lines.join('\r\n');
@@ -417,19 +373,22 @@ class ZebraPrinterService {
     if (barcodeData.is_second_degree) {
       const lines = [
         '^XA',
+        '^PW800',
+        '^LL400',
         '^CI28',
+        `^CW1,${this.arabicFontPath}`,
         '^PA0,1,1,1',
-        '^FO10,50^BY2,2.5,50',
+        '^FO30,50^BY2,2.5,50',
         '^BCN,80,Y,N,N',
         `^FD${cleanBarcode}^FS`,
-        `^FO50,200^A@N,35,35,E:SWISS271.TTF^FD\uFEDE\uFEF4\uFEE4\uFECC\uFEDF\uFE8D: ${client} | \uFEDE\uFEF3\uFEA9\uFEEE\uFEE4\uFEDF\uFE8D: ${model}^FS`,
-        `^FO50,270^A@N,35,35,E:SWISS271.TTF^FD\uFEE5\uFEEE\uFEE0\uFEDF\uFE8D: ${color} | \uFE94\uFEF4\uFEE4\uFEDC\uFEDF\uFE8D: ${qty} | \uFEB1\uFE8E\uFED8\uFEE4\uFEDF\uFE8D: ${size}^FS`,
+        `^FO50,200^A1N,35,35^FDالعميل: ${client} | الموديل: ${model}^FS`,
+        `^FO50,270^A1N,35,35^FDاللون: ${color} | الكمية: ${qty} | المقاس: ${size}^FS`,
         `^FO50,340^A0N,35,35^FDPO: ${po} |^FS`,
       ];
       if (arabic) {
         lines.push(arabic);
       } else {
-        lines.push('^FO580,340^A@N,50,50,E:SWISS271.TTF^FD\uFE94\uFEF4\uFEE7\uFE8E\uFE9B \uFE94\uFE9F\uFEAD\uFEA9^FS');
+        lines.push('^FO580,340^A1N,50,50^FDدرجة ثانية^FS');
       }
       lines.push('^PQ1', '^XZ');
       return lines.join('\r\n');
@@ -437,14 +396,17 @@ class ZebraPrinterService {
 
     return [
       '^XA',
+      '^PW800',
+      '^LL400',
       '^CI28',
+      `^CW1,${this.arabicFontPath}`,
       '^PA0,1,1,1',
-      '^FO10,50^BY2,2.5,50',
+      '^FO30,50^BY2,2.5,50',
       '^BCN,80,Y,N,N',
       `^FD${cleanBarcode}^FS`,
-      `^FO50,200^A@N,35,35,E:SWISS271.TTF^FD\uFEDE\uFEF4\uFEE4\uFECC\uFEDF\uFE8D: ${client} | \uFEDE\uFEF3\uFEA9\uFEEE\uFEE4\uFEDF\uFE8D: ${model}^FS`,
-      `^FO50,270^A@N,35,35,E:SWISS271.TTF^FD\uFEE5\uFEEE\uFEE0\uFEDF\uFE8D: ${color} | \uFE94\uFEF4\uFEE4\uFEDC\uFEDF\uFE8D: ${qty} | \uFEB1\uFE8E\uFED8\uFEE4\uFEDF\uFE8D: ${size}^FS`,
-      `^FO50,340^A@N,35,35,E:SWISS271.TTF^FD\uFEDD\uFE8E\uFEF3\uFEAE\uFEF4\uFEB3: ${layersStr} | PO: ${po}^FS`,
+      `^FO50,200^A1N,35,35^FDالعميل: ${client} | الموديل: ${model}^FS`,
+      `^FO50,270^A1N,35,35^FDاللون: ${color} | الكمية: ${qty} | المقاس: ${size}^FS`,
+      `^FO50,340^A1N,35,35^FDالطبقات: ${layersStr} | PO: ${po}^FS`,
       '^PQ1',
       '^XZ',
     ].join('\r\n');

@@ -401,6 +401,9 @@ const BulkBarcodeCreatePage: React.FC = () => {
               serial: payload.serial,
               job_order_number: payload.job_order_number,
               is_second_degree: payload.is_second_degree,
+              is_rework: true,
+              phase_name: payload.phase_name || '',
+              stage_name: payload.stage_name || '',
             }],
             selectedPrinter,
             1

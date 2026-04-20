@@ -1,6 +1,6 @@
 """
-Second-degree Arabic on Zebra: use a printer-resident Arabic font (e.g. Swiss 271) via ^A@,
-plus arabic_reshaper + bidi. ^CI28 (UTF-8) is emitted on the label before this field (see barcodes / frontend).
+Second-degree Arabic on Zebra using raw Arabic text.
+^CI28 (UTF-8) is emitted on the label before this field (see barcodes / frontend).
 """
 from __future__ import annotations
 
@@ -13,23 +13,16 @@ logger = logging.getLogger(__name__)
 _ARABIC_SECOND_DEGREE = "درجة ثانية"
 
 
-def get_second_degree_arabic_shaped_text() -> str:
-    try:
-        import arabic_reshaper
-        from bidi.algorithm import get_display
-    except ImportError:
-        return ""
-    return get_display(arabic_reshaper.reshape(_ARABIC_SECOND_DEGREE))
+def get_second_degree_arabic_raw_text() -> str:
+    return _ARABIC_SECOND_DEGREE
 
 
 def get_second_degree_arabic_zpl_field() -> str:
     """
-    Single field: ^FO + ^A@ + ^FD...^FS. Font path/name must match what is on the printer (e.g. E:SWISS271.TTF).
-    Empty if deps missing or ZEBRA_SECOND_DEGREE_ARABIC_FONT is unset.
+    Single field: ^FO + ^A1 + ^FD...^FS.
+    The caller must bind font alias 1 first: ^CW1,<font-path>.
     """
-    shaped = get_second_degree_arabic_shaped_text()
-    if not shaped:
-        return ""
+    arabic_text = get_second_degree_arabic_raw_text()
 
     font = (settings.ZEBRA_SECOND_DEGREE_ARABIC_FONT or "").strip()
     if not font:
@@ -39,4 +32,4 @@ def get_second_degree_arabic_zpl_field() -> str:
     h, w = settings.ZEBRA_SECOND_DEGREE_ARABIC_FONT_HEIGHT, settings.ZEBRA_SECOND_DEGREE_ARABIC_FONT_WIDTH
     fx = settings.ZEBRA_SECOND_DEGREE_ARABIC_FO_X
     fy = settings.ZEBRA_SECOND_DEGREE_ARABIC_FO_Y
-    return f"^FO{fx},{fy}^A@N,{h},{w},{font}^FD{shaped}^FS"
+    return f"^FO{fx},{fy}^A1N,{h},{w}^FD{arabic_text}^FS"

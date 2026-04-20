@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Annotated, List, Dict, Any
 import logging
-import re
 from pydantic import BaseModel
 from zebra import Zebra
 
 from app.core.deps import get_db
+from app.core.config import settings
 from app import models
 
 
@@ -21,16 +21,17 @@ ZPL_PRINT_ALIGNMENT = "^PA0,1,1,1"
 # ZPL: ^BC — Code 128 barcode (N, height 80, print interpretation line, no UCC check digit, no mode).
 ZPL_BC_CODE128 = "^BCN,80,Y,N,N"
 # ZPL: ^FO field origin + ^BY module width for standard / second-degree barcode block (y=50).
-ZPL_FO_BY_BARCODE_STANDARD = "^FO10,50^BY2,2.5,50"
+# Shifted slightly right for final print alignment.
+ZPL_FO_BY_BARCODE_STANDARD = "^FO30,50^BY2,2.5,50"
 
 # OpenAPI: document HTTPException status codes on routes.
 _HTTP_RESP_400 = {"description": "Bad request"}
 _HTTP_RESP_500 = {"description": "Internal server error"}
 _HTTP_RESP_400_500 = {400: _HTTP_RESP_400, 500: _HTTP_RESP_500}
 
-_ARABIC_CHARS_RE = re.compile(
-    r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]"
-)
+# 10cm x 5cm at 203 dpi is approximately 800 x 400 dots.
+ZPL_LABEL_WIDTH_10X5 = "^PW800"
+ZPL_LABEL_LENGTH_10X5 = "^LL400"
 
 
 def _zpl_clean_ascii(text: str) -> str:
@@ -56,20 +57,15 @@ def _zpl_safe_utf8(text: str) -> str:
     )
 
 
-def _zpl_shape_arabic(text: str) -> str:
-    """Presentation forms + bidi for Arabic in ^FD when libraries are available."""
-    safe = _zpl_safe_utf8(text)
-    if not safe:
-        return ""
-    if not _ARABIC_CHARS_RE.search(safe):
-        return safe
-    try:
-        import arabic_reshaper
-        from bidi.algorithm import get_display
+def _zpl_font_path() -> str:
+    """Use configured printer font path for Arabic-capable text."""
+    return (settings.ZEBRA_SECOND_DEGREE_ARABIC_FONT or "E:TT0003M_.TTF").strip()
 
-        return get_display(arabic_reshaper.reshape(safe))
-    except Exception:
-        return safe
+
+def _zpl_shape_arabic(text: str) -> str:
+    """Raw Arabic for printer flow that already renders correctly."""
+    safe = _zpl_safe_utf8(text)
+    return safe
 
 
 def _build_zpl_rework(
@@ -88,17 +84,21 @@ def _build_zpl_rework(
     color_utf8 = _zpl_shape_arabic(color_name)
     size_utf8 = _zpl_shape_arabic(size_value)
     barcode_utf8 = _zpl_safe_utf8(barcode_string)
+    font = _zpl_font_path()
     parts = [
         "^XA",
+        ZPL_LABEL_WIDTH_10X5,
+        ZPL_LABEL_LENGTH_10X5,
         ZPL_UTF8_CHARSET,
+        f"^CW1,{font}",
         ZPL_PRINT_ALIGNMENT,
-        "^FO10,60^BY2,2.5,50",
+        "^FO30,60^BY2,2.5,50",
         ZPL_BC_CODE128,
         f"^FD{barcode_utf8}^FS",
-        "^FO340,20^A@N,30,30,E:SWISS271.TTF^FD\ufe95\ufe8e\ufea3\ufefc\ufebb\ufe87^FS",
-        f"^FO20,200^A@N,30,30,E:SWISS271.TTF^FD\ufede\ufef4\ufee4\ufecc\ufedf\ufe8d: {client} | \ufede\ufef3\ufea9\ufeee\ufee4\ufedf\ufe8d: {model}^FS",
-        f"^FO20,270^A@N,30,30,E:SWISS271.TTF^FD\ufee5\ufeee\ufee0\ufedf\ufe8d: {color_utf8} | \ufeb1\ufe8e\ufed8\ufee4\ufedf\ufe8d: {size_utf8} | \ufec2\ufea8\ufedf\ufe8d: {phase_s}^FS",
-        f"^FO20,340^A@N,30,30,E:SWISS271.TTF^FDPO: {po} | \ufe94\ufee0\ufea3\ufeae\ufee4\ufedf\ufe8d: {stage_s}^FS",
+        "^FO340,20^A1N,30,30^FDإصلاح^FS",
+        f"^FO20,200^A1N,30,30^FDالعميل: {client} | الموديل: {model}^FS",
+        f"^FO20,270^A1N,30,30^FDاللون: {color_utf8} | المقاس: {size_utf8} | المرحلة: {phase_s}^FS",
+        f"^FO20,340^A1N,30,30^FDPO: {po} | المرحلة: {stage_s}^FS",
         "^XZ",
     ]
     return "\r\n".join(parts)
@@ -117,20 +117,22 @@ def _build_zpl_second_degree(
     from app.utils.second_degree_arabic_zpl import get_second_degree_arabic_zpl_field
 
     arabic_field = (get_second_degree_arabic_zpl_field() or "").strip()
+    font = _zpl_font_path()
     parts = [
         "^XA",
+        ZPL_LABEL_WIDTH_10X5,
+        ZPL_LABEL_LENGTH_10X5,
         ZPL_UTF8_CHARSET,
+        f"^CW1,{font}",
         ZPL_PRINT_ALIGNMENT,
         ZPL_FO_BY_BARCODE_STANDARD,
         ZPL_BC_CODE128,
         f"^FD{clean_barcode}^FS",
-        f"^FO50,200^A@N,35,35,E:SWISS271.TTF^FD\ufede\ufef4\ufee4\ufecc\ufedf\ufe8d: {client} | \ufede\ufef3\ufea9\ufeee\ufee4\ufedf\ufe8d: {model}^FS",
-        f"^FO50,270^A@N,35,35,E:SWISS271.TTF^FD\ufee5\ufeee\ufee0\ufedf\ufe8d: {color} | \ufe94\ufef4\ufee4\ufedc\ufedf\ufe8d: {qty} | \ufeb1\ufe8e\ufed8\ufee4\ufedf\ufe8d: {size}^FS",
+        f"^FO50,200^A1N,35,35^FDالعميل: {client} | الموديل: {model}^FS",
+        f"^FO50,270^A1N,35,35^FDاللون: {color} | الكمية: {qty} | المقاس: {size}^FS",
         f"^FO50,340^A0N,35,35^FDPO: {po} |^FS",
     ]
-    fallback_arabic = (
-        "^FO580,340^A@N,50,50,E:SWISS271.TTF^FD\ufe94\ufef4\ufee7\ufe8e\ufe9b \ufe94\ufe9f\ufead\ufea9^FS"
-    )
+    fallback_arabic = "^FO580,340^A1N,50,50^FDدرجة ثانية^FS"
     parts.append(arabic_field if arabic_field else fallback_arabic)
     parts.extend(["^PQ1", "^XZ"])
     return "\r\n".join(parts)
@@ -147,16 +149,20 @@ def _build_zpl_standard(
     po: str,
     clean_barcode: str,
 ) -> str:
+    font = _zpl_font_path()
     parts = [
         "^XA",
+        ZPL_LABEL_WIDTH_10X5,
+        ZPL_LABEL_LENGTH_10X5,
         ZPL_UTF8_CHARSET,
+        f"^CW1,{font}",
         ZPL_PRINT_ALIGNMENT,
         ZPL_FO_BY_BARCODE_STANDARD,
         ZPL_BC_CODE128,
         f"^FD{clean_barcode}^FS",
-        f"^FO50,200^A@N,35,35,E:SWISS271.TTF^FD\ufede\ufef4\ufee4\ufecc\ufedf\ufe8d: {client} | \ufede\ufef3\ufea9\ufeee\ufee4\ufedf\ufe8d: {model}^FS",
-        f"^FO50,270^A@N,35,35,E:SWISS271.TTF^FD\ufee5\ufeee\ufee0\ufedf\ufe8d: {color} | \ufe94\ufef4\ufee4\ufedc\ufedf\ufe8d: {qty} | \ufeb1\ufe8e\ufed8\ufee4\ufedf\ufe8d: {size}^FS",
-        f"^FO50,340^A@N,35,35,E:SWISS271.TTF^FD\ufedd\ufe8e\ufef3\ufeae\ufef4\ufeb3: {layers_s} | PO: {po}^FS",
+        f"^FO50,200^A1N,35,35^FDالعميل: {client} | الموديل: {model}^FS",
+        f"^FO50,270^A1N,35,35^FDاللون: {color} | الكمية: {qty} | المقاس: {size}^FS",
+        f"^FO50,340^A1N,35,35^FDالطبقات: {layers_s} | PO: {po}^FS",
         "^PQ1",
         "^XZ",
     ]
@@ -198,13 +204,13 @@ def print_barcode_zebra(
     stage_name: str = "",
 ):
     try:
-        # Latin fields ASCII-only; Arabic uses printer font (^A@) + UTF-8 (^CI28).
+        # Latin fields ASCII-only; Arabic uses printer bound font (^CW1/^A1) + UTF-8 (^CI28).
         # No leading whitespace before ^ — indented triple-quoted f-strings break Zebra parsers.
         client = _zpl_clean_ascii(brand)
         model = _zpl_clean_ascii(model_name)
-        color = _zpl_clean_ascii(color_name)
+        color = _zpl_safe_utf8(color_name)
         qty = str(int(quantity) if quantity is not None else 0)
-        size = _zpl_clean_ascii(size_value)
+        size = _zpl_safe_utf8(size_value)
         # Label says "Serial:" on sticker; value is batch.layers (legacy wording).
         layers_s = str(int(layers) if layers is not None else 1)
         po = _zpl_clean_ascii(job_order_number)
