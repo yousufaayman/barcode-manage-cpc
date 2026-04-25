@@ -594,7 +594,7 @@ const ProductionTrackingPage: React.FC = () => {
       if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
-        const scanned = workerScanBufferRef.current.trim();
+        const scanned = workerScanBufferRef.current;
         if (!scanned) return;
         workerScanBufferRef.current = '';
         if (workerScanTimeoutRef.current) clearTimeout(workerScanTimeoutRef.current);
@@ -610,9 +610,6 @@ const ProductionTrackingPage: React.FC = () => {
       if (workerScanTimeoutRef.current) clearTimeout(workerScanTimeoutRef.current);
       workerScanTimeoutRef.current = setTimeout(() => {
         setIsScanningWorker(false);
-        // Scanner must send Enter; clear stale fragments to avoid
-        // prepending old characters to the next scan.
-        workerScanBufferRef.current = '';
       }, 50);
     };
     globalThis.addEventListener('keydown', handleKeyDown, true);
