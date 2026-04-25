@@ -92,12 +92,18 @@ export const getSizeSortKey = (value?: string | null) => {
   return [2, Number.POSITIVE_INFINITY, normalized] as const;
 };
 
-export const sortSizes = <T extends { size_value?: string | null }>(items: T[]) =>
+export const sortSizes = <T extends { size_value?: string | null; job_order_id?: number | null }>(items: T[]) =>
   [...items].sort((a, b) => {
     const aKey = getSizeSortKey(a.size_value ?? "");
     const bKey = getSizeSortKey(b.size_value ?? "");
     if (aKey[0] !== bKey[0]) return aKey[0] - bKey[0];
     if (aKey[1] !== bKey[1]) return aKey[1] - bKey[1];
+    // For custom/unknown sizes, prefer stable ordering by job order id when available.
+    if (aKey[0] === 2 && bKey[0] === 2) {
+      const aJobOrderId = typeof a.job_order_id === "number" ? a.job_order_id : Number.POSITIVE_INFINITY;
+      const bJobOrderId = typeof b.job_order_id === "number" ? b.job_order_id : Number.POSITIVE_INFINITY;
+      if (aJobOrderId !== bJobOrderId) return aJobOrderId - bJobOrderId;
+    }
     return aKey[2].localeCompare(bKey[2]);
   });
 

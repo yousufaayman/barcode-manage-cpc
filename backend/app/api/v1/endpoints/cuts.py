@@ -7,6 +7,7 @@ from app.crud import cut as cut_crud
 from app import schemas
 from app.db.session import get_db
 from app.core.deps import get_current_user
+from app.crud.user import get_user_roles_in_system
 
 router = APIRouter()
 
@@ -201,12 +202,14 @@ def update_cut(
 ):
     """Update an existing cut."""
     try:
-        role = getattr(current_user, "role", None)
+        roles = [r.role for r in get_user_roles_in_system(db=db, user_id=current_user.id, system_name="OPS")]
+        is_admin_or_general = any(r in roles for r in ("admin", "general_operations"))
+        is_cutting = "cutting" in roles
         update_payload = cut_in.model_dump(exclude_unset=True, exclude_none=True)
-        if role not in {"admin", "general_operations"}:
+        if not is_admin_or_general:
             # Keep non-admin/non-general users from editing cuts, except
             # allowing cutting users to update print status only.
-            if role != "cutting":
+            if not is_cutting:
                 raise HTTPException(status_code=403, detail="Not authorized to edit cuts.")
             allowed_fields_for_cutting = {"print_status"}
             payload_fields = set(update_payload.keys())
