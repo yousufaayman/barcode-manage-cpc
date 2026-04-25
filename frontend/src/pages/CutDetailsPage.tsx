@@ -53,6 +53,7 @@ const CutDetailsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const canEditCut = user?.role === 'admin' || user?.role === 'general_operations';
+  const canUpdatePrintStatus = canEditCut || user?.role === 'cutting';
 
   useEffect(() => {
     if (cutId) {
@@ -564,7 +565,7 @@ const CutDetailsPage: React.FC = () => {
                     <span className="text-xs font-medium text-gray-500 uppercase tracking-wide block mb-2">
                       {t('cutDetailsPage.updateStatus')}
                     </span>
-                    {canEditCut ? (
+                    {canUpdatePrintStatus ? (
                       <Select
                         value={(cut.print_status || 'pending') as CutPrintStatus}
                         onValueChange={(value) => handlePrintStatusChange(value as CutPrintStatus)}

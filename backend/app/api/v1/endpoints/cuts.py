@@ -188,6 +188,7 @@ def get_cut_by_id(
     response_model=schemas.CutDetailsResponse,
     responses={
         400: {"description": "Invalid update payload."},
+        403: {"description": "Not authorized to edit cuts."},
         404: {"description": f"{CUT_NOT_FOUND} or referenced resource not found."},
         500: {"description": "Error updating cut."},
     },
@@ -200,10 +201,29 @@ def update_cut(
 ):
     """Update an existing cut."""
     try:
+        role = getattr(current_user, "role", None)
+        update_payload = cut_in.model_dump(exclude_unset=True, exclude_none=True)
+        if role not in {"admin", "general_operations"}:
+            # Keep non-admin/non-general users from editing cuts, except
+            # allowing cutting users to update print status only.
+            if role != "cutting":
+                raise HTTPException(status_code=403, detail="Not authorized to edit cuts.")
+            allowed_fields_for_cutting = {"print_status"}
+            payload_fields = set(update_payload.keys())
+            if not payload_fields:
+                raise HTTPException(status_code=400, detail="No fields provided for update.")
+            if not payload_fields.issubset(allowed_fields_for_cutting):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Cutting users can only update print status.",
+                )
+
         cut = cut_crud.update_cut(db, cut_id=cut_id, cut_update=cut_in, user_id=current_user.id)
         if not cut:
             raise HTTPException(status_code=404, detail=CUT_NOT_FOUND)
         return schemas.CutDetailsResponse(**cut)
+    except HTTPException:
+        raise
     except ValueError as e:
         message = str(e)
         status_code = 404 if "not found" in message.lower() else 400

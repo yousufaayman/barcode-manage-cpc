@@ -153,6 +153,8 @@ const ProductionTrackingPage: React.FC = () => {
   const [trackingBatchInfo, setTrackingBatchInfo] = useState<{ batch_id: number; barcode: string; quantity: number | null } | null>(null);
   /** Max quantity allowed for this batch at this stage type (null = no limit) */
   const [trackingMaxQuantity, setTrackingMaxQuantity] = useState<number | null>(null);
+  const [trackingWorkerInput, setTrackingWorkerInput] = useState('');
+  const [trackingBatchInput, setTrackingBatchInput] = useState('');
   const [trackingQuantity, setTrackingQuantity] = useState(1);
   const [trackingLoadingAssignments, setTrackingLoadingAssignments] = useState(false);
   const [trackingLoadingWorker, setTrackingLoadingWorker] = useState(false);
@@ -161,7 +163,8 @@ const ProductionTrackingPage: React.FC = () => {
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const [trackingLastRecord, setTrackingLastRecord] = useState<RecordProductionResponse | null>(null);
   const [trackingIsScanning, setTrackingIsScanning] = useState(false);
-  const trackingBarcodeInputRef = useRef<HTMLInputElement>(null);
+  const trackingWorkerInputRef = useRef<HTMLInputElement>(null);
+  const trackingBatchInputRef = useRef<HTMLInputElement>(null);
   const trackingScanBufferRef = useRef('');
   const trackingScanTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const trackingAssignmentsForWorker = useMemo(
@@ -367,8 +370,15 @@ const ProductionTrackingPage: React.FC = () => {
   const resolveTrackingWorker = async (barcode: string) => {
     const code = barcode.trim();
     if (!code) return;
-    const workerId = Number.parseInt(code, 10);
-    if (Number.isNaN(workerId) || workerId < 0) {
+    setTrackingWorkerInput(code);
+    if (!/^\d+$/.test(code)) {
+      setTrackingError(t('productionTracking.workerAssignment.invalidWorkerId'));
+      setTrackingWorker(null);
+      setTrackingAssignment(null);
+      return;
+    }
+    const workerId = Number(code);
+    if (!Number.isSafeInteger(workerId) || workerId < 0) {
       setTrackingError(t('productionTracking.workerAssignment.invalidWorkerId'));
       setTrackingWorker(null);
       setTrackingAssignment(null);
@@ -399,6 +409,7 @@ const ProductionTrackingPage: React.FC = () => {
   const handleTrackingBatchScan = async (barcode: string) => {
     const code = barcode.trim();
     if (!code || !trackingAssignment) return;
+    setTrackingBatchInput(code);
     setTrackingError(null);
     setTrackingLastRecord(null);
     setTrackingBatchBarcode(code);
@@ -414,6 +425,7 @@ const ProductionTrackingPage: React.FC = () => {
         quantity: batch.quantity ?? null,
       });
       setTrackingBatchBarcode(batch.barcode);
+      setTrackingBatchInput(batch.barcode);
 
       const maxRes = await productionApi.getMaxProductionQuantity(
         trackingAssignment.daily_assignment_id,
@@ -461,6 +473,7 @@ const ProductionTrackingPage: React.FC = () => {
       setTrackingBatchBarcode(null);
       setTrackingBatchInfo(null);
       setTrackingMaxQuantity(null);
+      setTrackingBatchInput('');
       setTrackingQuantity(1);
     } catch (err: unknown) {
       const detail = err && typeof err === 'object' && 'response' in err
@@ -482,37 +495,35 @@ const ProductionTrackingPage: React.FC = () => {
     if (activeTab !== 'tracking') return;
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target !== trackingBarcodeInputRef.current && (target?.closest?.('input') || target?.closest?.('select') || target?.closest?.('textarea') || target?.closest?.('[role="combobox"]') || target?.closest?.('[role="listbox"]'))) {
+      const activeInputRef = trackingAssignment == null ? trackingWorkerInputRef.current : trackingBatchInputRef.current;
+      if (target !== activeInputRef && (target?.closest?.('input') || target?.closest?.('select') || target?.closest?.('textarea') || target?.closest?.('[role="combobox"]') || target?.closest?.('[role="listbox"]'))) {
         return;
       }
       const skipKeys = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Escape', 'Backspace', 'Delete', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'];
-      if (skipKeys.includes(e.key) || e.ctrlKey || e.altKey || e.metaKey || e.key.length !== 1) return;
-      e.preventDefault();
-      e.stopPropagation();
+      if (skipKeys.includes(e.key) || e.ctrlKey || e.altKey || e.metaKey) return;
       if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
         const scanned = trackingScanBufferRef.current;
         if (!scanned) return;
         trackingScanBufferRef.current = '';
+        if (trackingScanTimeoutRef.current) clearTimeout(trackingScanTimeoutRef.current);
+        setTrackingIsScanning(false);
         if (trackingAssignment == null) {
-          resolveTrackingWorker(scanned);
+          void resolveTrackingWorker(scanned);
         } else {
-          handleTrackingBatchScan(scanned);
+          void handleTrackingBatchScan(scanned);
         }
         return;
       }
+      if (e.key.length !== 1) return;
+      e.preventDefault();
+      e.stopPropagation();
       trackingScanBufferRef.current += e.key;
       setTrackingIsScanning(true);
       if (trackingScanTimeoutRef.current) clearTimeout(trackingScanTimeoutRef.current);
       trackingScanTimeoutRef.current = setTimeout(() => {
         setTrackingIsScanning(false);
-        const scanned = trackingScanBufferRef.current;
-        if (!scanned) return;
-        trackingScanBufferRef.current = '';
-        if (trackingAssignment == null) {
-          resolveTrackingWorker(scanned);
-        } else {
-          handleTrackingBatchScan(scanned);
-        }
       }, 50);
     };
     globalThis.addEventListener('keydown', handleKeyDown, true);
@@ -523,15 +534,33 @@ const ProductionTrackingPage: React.FC = () => {
   }, [activeTab, trackingAssignment, trackingAssignmentsToday]);
 
   useEffect(() => {
-    if (activeTab === 'tracking') trackingBarcodeInputRef.current?.focus();
-  }, [activeTab]);
+    if (activeTab !== 'tracking') return;
+    const focusTrackingInput = () => {
+      const targetRef = trackingAssignment == null ? trackingWorkerInputRef.current : trackingBatchInputRef.current;
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active !== targetRef) {
+        if (active.tagName === 'SELECT' || active.tagName === 'TEXTAREA') return;
+        if (active.tagName === 'INPUT' && (active as HTMLInputElement).type === 'date') return;
+        if (active.closest?.('[role="combobox"]') || active.closest?.('[role="listbox"]')) return;
+      }
+      targetRef?.focus();
+    };
+    focusTrackingInput();
+    const interval = setInterval(focusTrackingInput, 150);
+    return () => clearInterval(interval);
+  }, [activeTab, trackingAssignment]);
 
   // --- Tab 2: resolve worker from barcode (barcode = worker_id)
   const resolveWorkerFromBarcode = async (barcode: string) => {
     const code = barcode.trim();
     if (!code) return;
-    const workerId = Number.parseInt(code, 10);
-    if (Number.isNaN(workerId) || workerId < 0) {
+    if (!/^\d+$/.test(code)) {
+      setWorkerResolveError(t('productionTracking.workerAssignment.invalidWorkerId'));
+      setResolvedWorker(null);
+      return;
+    }
+    const workerId = Number(code);
+    if (!Number.isSafeInteger(workerId) || workerId < 0) {
       setWorkerResolveError(t('productionTracking.workerAssignment.invalidWorkerId'));
       setResolvedWorker(null);
       return;
@@ -561,27 +590,29 @@ const ProductionTrackingPage: React.FC = () => {
         return;
       }
       const skipKeys = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Escape', 'Backspace', 'Delete', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'];
-      if (skipKeys.includes(e.key) || e.ctrlKey || e.altKey || e.metaKey || e.key.length !== 1) return;
-      e.preventDefault();
-      e.stopPropagation();
+      if (skipKeys.includes(e.key) || e.ctrlKey || e.altKey || e.metaKey) return;
       if (e.key === 'Enter') {
-        const scanned = workerScanBufferRef.current;
-        if (scanned) {
-          resolveWorkerFromBarcode(scanned);
-          workerScanBufferRef.current = '';
-        }
+        e.preventDefault();
+        e.stopPropagation();
+        const scanned = workerScanBufferRef.current.trim();
+        if (!scanned) return;
+        workerScanBufferRef.current = '';
+        if (workerScanTimeoutRef.current) clearTimeout(workerScanTimeoutRef.current);
+        setIsScanningWorker(false);
+        void resolveWorkerFromBarcode(scanned);
         return;
       }
+      if (e.key.length !== 1) return;
+      e.preventDefault();
+      e.stopPropagation();
       workerScanBufferRef.current += e.key;
       setIsScanningWorker(true);
       if (workerScanTimeoutRef.current) clearTimeout(workerScanTimeoutRef.current);
       workerScanTimeoutRef.current = setTimeout(() => {
         setIsScanningWorker(false);
-        const scanned = workerScanBufferRef.current;
-        if (scanned) {
-          resolveWorkerFromBarcode(scanned);
-          workerScanBufferRef.current = '';
-        }
+        // Scanner must send Enter; clear stale fragments to avoid
+        // prepending old characters to the next scan.
+        workerScanBufferRef.current = '';
       }, 50);
     };
     globalThis.addEventListener('keydown', handleKeyDown, true);
@@ -735,14 +766,6 @@ const ProductionTrackingPage: React.FC = () => {
         </div>
 
         <input
-          ref={trackingBarcodeInputRef}
-          type="text"
-          autoComplete="off"
-          className="absolute opacity-0 w-0 h-0 pointer-events-none"
-          aria-label={t('productionTracking.barcodeInputLabel')}
-          readOnly
-        />
-        <input
           ref={workerBarcodeInputRef}
           type="text"
           autoComplete="off"
@@ -801,6 +824,39 @@ const ProductionTrackingPage: React.FC = () => {
 
                 <div>
                   <Label className="text-sm font-medium text-gray-600">{t('productionTracking.scanWorkerFirst')}</Label>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input
+                      ref={trackingWorkerInputRef}
+                      type="text"
+                      value={trackingWorkerInput}
+                      onChange={(e) => setTrackingWorkerInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return;
+                        e.preventDefault();
+                        void resolveTrackingWorker(trackingWorkerInput);
+                      }}
+                      className="input-field flex-1 min-w-[220px]"
+                      placeholder={t('productionTracking.workerAssignment.scanWorkerBarcode')}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setTrackingWorkerInput('');
+                        setTrackingWorker(null);
+                        setTrackingAssignment(null);
+                        setTrackingBatchBarcode(null);
+                        setTrackingBatchInfo(null);
+                        setTrackingMaxQuantity(null);
+                        setTrackingBatchInput('');
+                        setTrackingQuantity(1);
+                        setTrackingError(null);
+                        setTrackingLastRecord(null);
+                      }}
+                    >
+                      {t('common.clear')}
+                    </Button>
+                  </div>
                   {trackingLoadingWorker && (
                     <div className="mt-2 flex items-center gap-2 text-sm text-gray-600">
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -820,7 +876,7 @@ const ProductionTrackingPage: React.FC = () => {
                     </div>
                   )}
                   {trackingAssignmentsForWorker.length > 1 && trackingWorker && !trackingAssignment && (
-                    <div className="mt-2 flex flex-wrap items-end gap-3">
+                    <div className="mt-2 flex flex-col items-stretch gap-3 lg:flex-row lg:items-end">
                       <div className="space-y-1 min-w-0 flex-1">
                         <Label className="text-xs text-gray-500">{t('productionTracking.selectAssignmentPlaceholder')}</Label>
                         <Select
@@ -847,13 +903,15 @@ const ProductionTrackingPage: React.FC = () => {
                         type="button"
                         variant="destructive"
                         size="lg"
-                        className="bg-red-600 hover:bg-red-700 text-white font-medium w-full sm:w-auto shrink-0"
+                        className="bg-red-600 hover:bg-red-700 text-white font-semibold text-base w-full min-h-14 md:min-h-16 lg:w-auto lg:min-h-12 lg:min-w-[180px] shrink-0"
                         onClick={() => {
+                          setTrackingWorkerInput('');
                           setTrackingWorker(null);
                           setTrackingAssignment(null);
                           setTrackingBatchBarcode(null);
                           setTrackingBatchInfo(null);
                           setTrackingMaxQuantity(null);
+                          setTrackingBatchInput('');
                           setTrackingQuantity(1);
                           setTrackingError(null);
                           setTrackingLastRecord(null);
@@ -866,7 +924,7 @@ const ProductionTrackingPage: React.FC = () => {
                     </div>
                   )}
                   {trackingWorker && (trackingAssignment || trackingAssignmentsForWorker.length <= 1) && (
-                    <div className="mt-2 flex flex-wrap items-center gap-3">
+                    <div className="mt-2 flex flex-col items-stretch gap-3 lg:flex-row lg:items-center">
                       <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 flex-1 min-w-0">
                         {trackingAssignmentDisplay}
                       </div>
@@ -874,13 +932,15 @@ const ProductionTrackingPage: React.FC = () => {
                         type="button"
                         variant="destructive"
                         size="lg"
-                        className="bg-red-600 hover:bg-red-700 text-white font-medium w-full sm:w-auto shrink-0"
+                        className="bg-red-600 hover:bg-red-700 text-white font-semibold text-base w-full min-h-14 md:min-h-16 lg:w-auto lg:min-h-12 lg:min-w-[180px] shrink-0"
                         onClick={() => {
+                          setTrackingWorkerInput('');
                           setTrackingWorker(null);
                           setTrackingAssignment(null);
                           setTrackingBatchBarcode(null);
                           setTrackingBatchInfo(null);
                           setTrackingMaxQuantity(null);
+                          setTrackingBatchInput('');
                           setTrackingQuantity(1);
                           setTrackingError(null);
                           setTrackingLastRecord(null);
@@ -898,6 +958,37 @@ const ProductionTrackingPage: React.FC = () => {
                   <>
                     <div>
                       <Label className="text-sm font-medium text-gray-600">{t('productionTracking.scanBatchBarcode')}</Label>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <input
+                          ref={trackingBatchInputRef}
+                          type="text"
+                          value={trackingBatchInput}
+                          onChange={(e) => setTrackingBatchInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key !== 'Enter') return;
+                            e.preventDefault();
+                            void handleTrackingBatchScan(trackingBatchInput);
+                          }}
+                          className="input-field flex-1 min-w-[220px]"
+                          placeholder={t('productionTracking.scanBatchBarcode')}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full sm:w-auto min-h-11"
+                          onClick={() => {
+                            setTrackingBatchInput('');
+                            setTrackingBatchBarcode(null);
+                            setTrackingBatchInfo(null);
+                            setTrackingMaxQuantity(null);
+                            setTrackingQuantity(1);
+                            setTrackingError(null);
+                            setTrackingLastRecord(null);
+                          }}
+                        >
+                          {t('common.clear')}
+                        </Button>
+                      </div>
                       {trackingLoadingBatch && (
                         <div className="mt-2 flex items-center gap-2 text-sm text-gray-600">
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -913,6 +1004,7 @@ const ProductionTrackingPage: React.FC = () => {
                             size="sm"
                             className="h-10 w-10 p-0 text-gray-600 hover:bg-gray-200 hover:text-gray-900"
                             onClick={() => {
+                              setTrackingBatchInput('');
                               setTrackingBatchBarcode(null);
                               setTrackingBatchInfo(null);
                               setTrackingMaxQuantity(null);
@@ -1025,7 +1117,7 @@ const ProductionTrackingPage: React.FC = () => {
                           <Button
                             onClick={handleTrackingSubmit}
                             disabled={trackingRecording || !trackingBatchInfo || trackingQuantity <= 0}
-                            className="min-w-[160px] h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-md"
+                            className="w-full min-h-14 md:min-h-16 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-base font-semibold shadow-md lg:w-auto lg:min-h-12 lg:min-w-[220px]"
                           >
                             {trackingRecording ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                             {trackingRecording ? t('common.loading') : t('productionTracking.submitProduction')}
