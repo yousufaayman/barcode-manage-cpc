@@ -74,25 +74,25 @@ export const getSizeOrderBounds = () => ({
   letterExamples: precedence.slice(0, 5).join(", ")
 });
 
-export const getSizeSortKey = (value?: string | null) => {
+export const getSizeSortKey = (value?: string | null): [number, number, string] => {
   if (!value) {
-    return [3, Number.POSITIVE_INFINITY, "" as const];
+    return [3, Number.POSITIVE_INFINITY, ""];
   }
 
   const normalized = value.trim().toUpperCase();
 
   if (precedenceMap.has(normalized)) {
-    return [0, precedenceMap.get(normalized) ?? 0, normalized] as const;
+    return [0, precedenceMap.get(normalized) ?? 0, normalized];
   }
 
   if (/^\d+(\.\d+)?$/.test(normalized)) {
-    return [1, Number.parseFloat(normalized), normalized] as const;
+    return [1, Number.parseFloat(normalized), normalized];
   }
 
-  return [2, Number.POSITIVE_INFINITY, normalized] as const;
+  return [2, Number.POSITIVE_INFINITY, normalized];
 };
 
-export const sortSizes = <T extends { size_value?: string | null; job_order_id?: number | null }>(items: T[]) =>
+export const sortSizes = <T extends { size_value?: string | null; job_order_id?: number | null; item_id?: number | null }>(items: T[]) =>
   [...items].sort((a, b) => {
     const aKey = getSizeSortKey(a.size_value ?? "");
     const bKey = getSizeSortKey(b.size_value ?? "");
@@ -103,6 +103,10 @@ export const sortSizes = <T extends { size_value?: string | null; job_order_id?:
       const aJobOrderId = typeof a.job_order_id === "number" ? a.job_order_id : Number.POSITIVE_INFINITY;
       const bJobOrderId = typeof b.job_order_id === "number" ? b.job_order_id : Number.POSITIVE_INFINITY;
       if (aJobOrderId !== bJobOrderId) return aJobOrderId - bJobOrderId;
+
+      const aItemId = typeof a.item_id === "number" ? a.item_id : Number.POSITIVE_INFINITY;
+      const bItemId = typeof b.item_id === "number" ? b.item_id : Number.POSITIVE_INFINITY;
+      if (aItemId !== bItemId) return aItemId - bItemId;
     }
     return aKey[2].localeCompare(bKey[2]);
   });
