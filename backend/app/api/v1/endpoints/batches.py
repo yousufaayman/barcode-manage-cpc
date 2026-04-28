@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Dict, Optional, Any, Annotated
+from typing import List, Dict, Optional, Any, Annotated, Literal
 import logging
 from app.crud import (
     get_clients,
@@ -307,7 +307,11 @@ def read_batch(
 @router.put(
     "/{batch_id}",
     response_model=schemas.BatchResponse,
-    responses={404: {"description": BATCH_NOT_FOUND}, 500: {"description": "Internal server error"}},
+    responses={
+        400: {"description": "Invalid update payload"},
+        404: {"description": BATCH_NOT_FOUND},
+        500: {"description": "Internal server error"},
+    },
 )
 def update_batch_endpoint(
     batch_id: int,
@@ -322,11 +326,22 @@ def update_batch_endpoint(
     db_batch_model = db.query(models.Batch).filter(models.Batch.batch_id == batch_id).first()
     if not db_batch_model:
         raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
+    if (
+        batch_in.quantity is not None
+        and batch_in.quantity > db_batch_model.quantity
+        and not bool(db_batch_model.is_second_degree)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Quantity increment is allowed only for second degree batches",
+        )
     
     try:
         # Update the batch
         updated_batch = crud_update_batch(db=db, db_batch=db_batch_model, batch=batch_in)
         return updated_batch
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         # Log the full error for debugging
         import traceback
@@ -368,7 +383,11 @@ def read_batch_by_barcode(
 @router.put(
     "/barcode/{barcode}",
     response_model=schemas.BatchResponse,
-    responses={404: {"description": BATCH_NOT_FOUND}, 500: {"description": "Internal server error"}},
+    responses={
+        400: {"description": "Invalid update payload"},
+        404: {"description": BATCH_NOT_FOUND},
+        500: {"description": "Internal server error"},
+    },
 )
 def update_batch_by_barcode(
     barcode: str,
@@ -385,11 +404,22 @@ def update_batch_by_barcode(
     db_batch_model = db.query(models.Batch).filter(models.Batch.barcode == barcode).first()
     if not db_batch_model:
         raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
+    if (
+        batch_in.quantity is not None
+        and batch_in.quantity > db_batch_model.quantity
+        and not bool(db_batch_model.is_second_degree)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Quantity increment is allowed only for second degree batches",
+        )
     
     try:
         user_id = current_user.id if current_user else None
         updated_batch = crud_update_batch(db=db, db_batch=db_batch_model, batch=batch_in, user_id=user_id)
         return updated_batch
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         # Log the full error for debugging
         import traceback
@@ -915,6 +945,7 @@ def submit_generated_batches(
 class SecondDegreeBatchRequest(BaseModel):
     job_order_id: int
     items: List[Dict[str, int]]
+    initial_phase: Literal["cutting", "qc"] = "qc"
 
 
 def _second_degree_get_qc_phase(db: Session) -> Optional[models.ProductionPhase]:
@@ -922,6 +953,16 @@ def _second_degree_get_qc_phase(db: Session) -> Optional[models.ProductionPhase]
     return (
         db.query(models.ProductionPhase)
         .filter(models.ProductionPhase.phase_name.ilike("qc%"))
+        .order_by(models.ProductionPhase.phase_id)
+        .first()
+    )
+
+
+def _second_degree_get_cutting_phase(db: Session) -> Optional[models.ProductionPhase]:
+    """Return the cutting production phase (exact match), or None."""
+    return (
+        db.query(models.ProductionPhase)
+        .filter(models.ProductionPhase.phase_name == "Cutting")
         .order_by(models.ProductionPhase.phase_id)
         .first()
     )
@@ -939,7 +980,7 @@ def _second_degree_create_one(
     db: Session,
     job_order_id: int,
     job_order_item: models.JobOrderItem,
-    qc_phase: models.ProductionPhase,
+    initial_phase: models.ProductionPhase,
     current_user: Optional[schemas.User],
     duplicate_barcodes: List[Dict[str, Any]],
     created_batches: List[schemas.BatchResponse],
@@ -972,8 +1013,8 @@ def _second_degree_create_one(
         color_id=job_order_item.color_id,
         quantity=0,
         layers=1,
-        current_phase=qc_phase.phase_id,
-        status="Pending",
+        current_phase=initial_phase.phase_id,
+        status=STATUS_IN_PROGRESS,
         is_second_degree=True,
     )
 
@@ -1008,7 +1049,7 @@ def _second_degree_process_item_entry(
     db: Session,
     job_order_id: int,
     item_request: Dict[str, Any],
-    qc_phase: models.ProductionPhase,
+    initial_phase: models.ProductionPhase,
     current_user: Optional[schemas.User],
     duplicate_barcodes: List[Dict[str, Any]],
     created_batches: List[schemas.BatchResponse],
@@ -1040,7 +1081,7 @@ def _second_degree_process_item_entry(
                 db,
                 job_order_id,
                 job_order_item,
-                qc_phase,
+                initial_phase,
                 current_user,
                 duplicate_barcodes,
                 created_batches,
@@ -1071,9 +1112,14 @@ def create_second_degree_batches(
     if not job_order:
         raise HTTPException(status_code=404, detail=f"Job order {request.job_order_id} not found")
 
-    qc_phase = _second_degree_get_qc_phase(db)
-    if not qc_phase:
-        raise HTTPException(status_code=400, detail="QC phase not found")
+    if request.initial_phase == "cutting":
+        initial_phase = _second_degree_get_cutting_phase(db)
+        if not initial_phase:
+            raise HTTPException(status_code=400, detail="Cutting phase not found")
+    else:
+        initial_phase = _second_degree_get_qc_phase(db)
+        if not initial_phase:
+            raise HTTPException(status_code=400, detail="QC phase not found")
 
     created_batches: List[schemas.BatchResponse] = []
     duplicate_barcodes: List[Dict[str, Any]] = []
@@ -1083,7 +1129,7 @@ def create_second_degree_batches(
             db,
             request.job_order_id,
             item_request,
-            qc_phase,
+            initial_phase,
             current_user,
             duplicate_barcodes,
             created_batches,

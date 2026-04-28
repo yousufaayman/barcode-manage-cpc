@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import Layout from '../components/Layout';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -39,6 +40,7 @@ interface MaterialOption {
 }
 
 const AddCutPage: React.FC = () => {
+  const { t } = useTranslation();
   const { toast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -87,7 +89,7 @@ const AddCutPage: React.FC = () => {
     if (m.fabric_code) {
       return `${m.material_name} (${m.fabric_code}${colorPart})`;
     }
-    return `${m.material_name}${colorPart} (No client fabric code)`;
+    return `${m.material_name}${colorPart} (${t('addCutPage.noClientFabricCode')})`;
   };
   const handleRetryLoadCut = () => {
     setInitialCutError(null);
@@ -104,8 +106,8 @@ const AddCutPage: React.FC = () => {
       } catch (error) {
         console.error('Error fetching job orders:', error);
         toast({
-          title: 'Error',
-          description: 'Failed to fetch job orders',
+          title: t('common.error'),
+          description: t('addCutPage.failedToFetchJobOrders'),
           variant: 'destructive',
         });
       }
@@ -129,8 +131,8 @@ const AddCutPage: React.FC = () => {
         } catch (error) {
           console.error('Error fetching job order:', error);
           toast({
-            title: 'Error',
-            description: 'Failed to fetch job order details',
+            title: t('common.error'),
+            description: t('addCutPage.failedToFetchJobOrderDetails'),
             variant: 'destructive',
           });
         } finally {
@@ -161,8 +163,8 @@ const AddCutPage: React.FC = () => {
       } catch (error) {
         console.error('Error fetching material options:', error);
         toast({
-          title: 'Error',
-          description: 'Failed to fetch materials for this client',
+          title: t('common.error'),
+          description: t('addCutPage.failedToFetchMaterialsForClient'),
           variant: 'destructive',
         });
       }
@@ -247,10 +249,10 @@ const AddCutPage: React.FC = () => {
         );
       } catch (error: any) {
         console.error('Error loading cut details:', error);
-        const errorMessage = error.response?.data?.detail || error.message || 'Failed to load cut details';
+        const errorMessage = error.response?.data?.detail || error.message || t('addCutPage.failedToLoadCutDetails');
         setInitialCutError(errorMessage);
         toast({
-          title: 'Error',
+          title: t('common.error'),
           description: errorMessage,
           variant: 'destructive',
         });
@@ -300,8 +302,8 @@ const AddCutPage: React.FC = () => {
   const handleAddTransition = () => {
     if (!colorItems || colorItems.length < 2) {
       toast({
-        title: 'Error',
-        description: 'Need at least 2 sizes to create a transition',
+        title: t('common.error'),
+        description: t('addCutPage.needAtLeastTwoSizesForTransition'),
         variant: 'destructive',
       });
       return;
@@ -332,8 +334,8 @@ const AddCutPage: React.FC = () => {
   const handleSubmit = async () => {
     if (!selectedJobOrderId || !selectedColorId || !selectedMaterialId) {
       toast({
-        title: 'Error',
-        description: 'Please select a job order, material, and color',
+        title: t('common.error'),
+        description: t('addCutPage.selectJobOrderMaterialColor'),
         variant: 'destructive',
       });
       return;
@@ -341,8 +343,8 @@ const AddCutPage: React.FC = () => {
 
     if (Object.keys(ratios).length === 0) {
       toast({
-        title: 'Error',
-        description: 'Please enter at least one ratio',
+        title: t('common.error'),
+        description: t('addCutPage.enterAtLeastOneRatio'),
         variant: 'destructive',
       });
       return;
@@ -352,8 +354,8 @@ const AddCutPage: React.FC = () => {
     for (const roll of rolls) {
       if (!roll.weight || !roll.layer_weight || !roll.num_of_layers) {
         toast({
-          title: 'Error',
-          description: 'Please fill in all roll fields',
+          title: t('common.error'),
+          description: t('addCutPage.fillAllRollFields'),
           variant: 'destructive',
         });
         return;
@@ -364,8 +366,8 @@ const AddCutPage: React.FC = () => {
     for (const transition of transitions) {
       if (!transition.quantity || transition.from_item_id === transition.to_item_id) {
         toast({
-          title: 'Error',
-          description: 'Please fill in all transition fields and ensure from/to are different',
+          title: t('common.error'),
+          description: t('addCutPage.fillTransitionFields'),
           variant: 'destructive',
         });
         return;
@@ -403,17 +405,17 @@ const AddCutPage: React.FC = () => {
         : await cutsApi.createCut(cutData);
       
       toast({
-        title: 'Success',
-        description: isEditMode ? 'Cut updated successfully' : 'Cut created successfully',
+        title: t('common.success'),
+        description: isEditMode ? t('addCutPage.cutUpdatedSuccessfully') : t('addCutPage.cutCreatedSuccessfully'),
       });
       
       navigate(`/cutting/${savedCut.cut_id}`);
     } catch (error: any) {
       console.error(isEditMode ? 'Error updating cut:' : 'Error creating cut:', error);
-      const fallbackMessage = isEditMode ? 'Failed to update cut' : 'Failed to create cut';
+      const fallbackMessage = isEditMode ? t('addCutPage.failedToUpdateCut') : t('addCutPage.failedToCreateCut');
       const errorMessage = error.response?.data?.detail || error.message || fallbackMessage;
       toast({
-        title: 'Error',
+        title: t('common.error'),
         description: errorMessage,
         variant: 'destructive',
       });
@@ -438,16 +440,16 @@ const AddCutPage: React.FC = () => {
         <div className="p-6 min-h-screen flex items-center justify-center">
           <Card className="max-w-md w-full">
             <CardHeader>
-              <CardTitle>Error Loading Cut</CardTitle>
+              <CardTitle>{t('addCutPage.errorLoadingCut')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-gray-600">{initialCutError}</p>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => navigate('/cutting')}>
-                  Back to Cuts
+                  {t('addCutPage.backToCuts')}
                 </Button>
                 <Button onClick={handleRetryLoadCut}>
-                  Retry
+                  {t('common.retry')}
                 </Button>
               </div>
             </CardContent>
@@ -457,13 +459,13 @@ const AddCutPage: React.FC = () => {
     );
   }
 
-  const pageTitle = isEditMode ? 'Edit Cut' : 'Create New Cut';
+  const pageTitle = isEditMode ? t('addCutPage.editCut') : t('addCutPage.createNewCut');
   const pageDescription = isEditMode
-    ? 'Update cut details including ratios, rolls, and transitions'
-    : 'Enter cut details including ratios, rolls, and transitions';
+    ? t('addCutPage.editDescription')
+    : t('addCutPage.createDescription');
 
-  const primaryButtonLabel = isEditMode ? 'Save Changes' : 'Create Cut';
-  const primaryButtonLoadingLabel = isEditMode ? 'Saving...' : 'Creating...';
+  const primaryButtonLabel = isEditMode ? t('addCutPage.saveChanges') : t('addCutPage.createCut');
+  const primaryButtonLoadingLabel = isEditMode ? t('addCutPage.saving') : t('addCutPage.creating');
 
   return (
     <Layout>
@@ -476,7 +478,7 @@ const AddCutPage: React.FC = () => {
               className="mb-4"
             >
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to Cuts
+              {t('addCutPage.backToCuts')}
             </Button>
             
             <div className="flex items-center gap-3 mb-2">
@@ -490,11 +492,11 @@ const AddCutPage: React.FC = () => {
             {/* Job Order Selection */}
             <Card>
               <CardHeader>
-                <CardTitle>Job Order & Color</CardTitle>
+                <CardTitle>{t('addCutPage.jobOrderAndColor')}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
-                  <Label htmlFor="job-order">Job Order *</Label>
+                  <Label htmlFor="job-order">{t('addCutPage.jobOrderRequired')}</Label>
                   <SearchableDropdown
                     options={jobOrders.map(jo => `${jo.job_order_number}${jo.model_name ? ` - ${jo.model_name}` : ''}`)}
                     value={selectedJobOrderId ? (() => {
@@ -505,7 +507,7 @@ const AddCutPage: React.FC = () => {
                       const found = jobOrders.find(jo => `${jo.job_order_number}${jo.model_name ? ` - ${jo.model_name}` : ''}` === value);
                       setSelectedJobOrderId(found ? found.job_order_id : null);
                     }}
-                    placeholder="Select a job order"
+                    placeholder={t('addCutPage.selectJobOrder')}
                     label=""
                   />
                 </div>
@@ -513,9 +515,9 @@ const AddCutPage: React.FC = () => {
                 {jobOrder && (
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <Label htmlFor="material">Material *</Label>
+                      <Label htmlFor="material">{t('addCutPage.materialRequired')}</Label>
                       <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <span>Show non-client materials</span>
+                        <span>{t('addCutPage.showNonClientMaterials')}</span>
                         <Switch
                           checked={includeNonClientMaterials}
                           onCheckedChange={setIncludeNonClientMaterials}
@@ -545,7 +547,7 @@ const AddCutPage: React.FC = () => {
                           setRatios({});
                         }
                       }}
-                      placeholder="Select material"
+                      placeholder={t('addCutPage.selectMaterial')}
                       label=""
                     />
                   </div>
@@ -553,7 +555,7 @@ const AddCutPage: React.FC = () => {
 
                 {jobOrder && (
                   <div>
-                    <Label htmlFor="color">Color *</Label>
+                    <Label htmlFor="color">{t('addCutPage.colorRequired')}</Label>
                     <SearchableDropdown
                       options={availableColors.map(c => c.name)}
                       value={selectedColorId ? availableColors.find(c => c.id === selectedColorId)?.name || '' : ''}
@@ -562,7 +564,7 @@ const AddCutPage: React.FC = () => {
                         setSelectedColorId(found ? found.id : null);
                         setRatios({});
                       }}
-                      placeholder="Select a color"
+                      placeholder={t('addCutPage.selectColor')}
                       label=""
                     />
                   </div>
@@ -574,7 +576,7 @@ const AddCutPage: React.FC = () => {
             {colorItems.length > 0 && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Size Ratios (Pieces per Layer) *</CardTitle>
+                  <CardTitle>{t('addCutPage.sizeRatiosRequired')}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {colorItems.map((item) => (
@@ -586,7 +588,7 @@ const AddCutPage: React.FC = () => {
                         min="0"
                         value={ratios[item.item_id.toString()] ?? ''}
                         onChange={(e) => handleRatioChange(item.item_id, e.target.value)}
-                        placeholder="Ratio"
+                        placeholder={t('addCutPage.ratio')}
                         className="flex-1"
                       />
                     </div>
@@ -599,21 +601,21 @@ const AddCutPage: React.FC = () => {
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <CardTitle>Rolls</CardTitle>
+                  <CardTitle>{t('addCutPage.rolls')}</CardTitle>
                   <Button onClick={handleAddRoll} size="sm" variant="outline">
                     <Plus className="w-4 h-4 mr-2" />
-                    Add Roll
+                    {t('addCutPage.addRoll')}
                   </Button>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 {rolls.length === 0 ? (
-                  <p className="text-gray-500 text-sm">No rolls added. Click "Add Roll" to add one.</p>
+                  <p className="text-gray-500 text-sm">{t('addCutPage.noRollsAdded')}</p>
                 ) : (
                   rolls.map((roll, index) => (
                     <div key={index} className="border rounded-lg p-4 space-y-3">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="font-medium">Roll #{roll.roll_number}</span>
+                        <span className="font-medium">{t('addCutPage.rollNumber', { number: roll.roll_number })}</span>
                         <Button
                           onClick={() => handleRemoveRoll(index)}
                           size="sm"
@@ -624,7 +626,7 @@ const AddCutPage: React.FC = () => {
                       </div>
                       <div className="grid grid-cols-4 gap-3">
                         <div>
-                          <Label>Weight (kg)</Label>
+                          <Label>{t('addCutPage.weightKg')}</Label>
                           <Input
                             type="number"
                             step="0.001"
@@ -635,7 +637,7 @@ const AddCutPage: React.FC = () => {
                           />
                         </div>
                         <div>
-                          <Label>Layer Weight (kg)</Label>
+                          <Label>{t('addCutPage.layerWeightKg')}</Label>
                           <Input
                             type="number"
                             step="0.001"
@@ -646,7 +648,7 @@ const AddCutPage: React.FC = () => {
                           />
                         </div>
                         <div>
-                          <Label>Number of Layers</Label>
+                          <Label>{t('addCutPage.numberOfLayers')}</Label>
                           <Input
                             type="number"
                             step="1"
@@ -657,7 +659,7 @@ const AddCutPage: React.FC = () => {
                           />
                         </div>
                         <div>
-                          <Label>Roll Width (M)</Label>
+                          <Label>{t('addCutPage.rollWidthM')}</Label>
                           <Input
                             type="number"
                             step="0.001"
@@ -679,21 +681,21 @@ const AddCutPage: React.FC = () => {
               <Card>
                 <CardHeader>
                   <div className="flex items-center justify-between">
-                    <CardTitle>Size Transitions</CardTitle>
+                    <CardTitle>{t('addCutPage.sizeTransitions')}</CardTitle>
                     <Button onClick={handleAddTransition} size="sm" variant="outline">
                       <Plus className="w-4 h-4 mr-2" />
-                      Add Transition
+                      {t('addCutPage.addTransition')}
                     </Button>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {transitions.length === 0 ? (
-                    <p className="text-gray-500 text-sm">No transitions added. Click "Add Transition" to add one.</p>
+                    <p className="text-gray-500 text-sm">{t('addCutPage.noTransitionsAdded')}</p>
                   ) : (
                     transitions.map((transition, index) => (
                       <div key={index} className="border rounded-lg p-4 space-y-3">
                         <div className="flex items-center justify-between mb-2">
-                          <span className="font-medium">Transition #{index + 1}</span>
+                          <span className="font-medium">{t('addCutPage.transitionNumber', { number: index + 1 })}</span>
                           <Button
                             onClick={() => handleRemoveTransition(index)}
                             size="sm"
@@ -704,7 +706,7 @@ const AddCutPage: React.FC = () => {
                         </div>
                         <div className="grid grid-cols-3 gap-3">
                           <div>
-                            <Label>From Size</Label>
+                            <Label>{t('addCutPage.fromSize')}</Label>
                             <SearchableDropdown
                               options={colorItems.map(item => item.size_value)}
                               value={colorItems.find(item => item.item_id === transition.from_item_id)?.size_value || ''}
@@ -714,12 +716,12 @@ const AddCutPage: React.FC = () => {
                                   handleTransitionChange(index, 'from_item_id', found.item_id);
                                 }
                               }}
-                              placeholder="Select size"
+                              placeholder={t('addCutPage.selectSize')}
                               label=""
                             />
                           </div>
                           <div>
-                            <Label>To Size</Label>
+                            <Label>{t('addCutPage.toSize')}</Label>
                             <SearchableDropdown
                               options={colorItems.map(item => item.size_value)}
                               value={colorItems.find(item => item.item_id === transition.to_item_id)?.size_value || ''}
@@ -729,12 +731,12 @@ const AddCutPage: React.FC = () => {
                                   handleTransitionChange(index, 'to_item_id', found.item_id);
                                 }
                               }}
-                              placeholder="Select size"
+                              placeholder={t('addCutPage.selectSize')}
                               label=""
                             />
                           </div>
                           <div>
-                            <Label>Quantity</Label>
+                            <Label>{t('addCutPage.quantity')}</Label>
                             <Input
                               type="number"
                               step="1"
@@ -746,11 +748,11 @@ const AddCutPage: React.FC = () => {
                           </div>
                         </div>
                         <div>
-                          <Label>Notes</Label>
+                          <Label>{t('addCutPage.notes')}</Label>
                           <Input
                             value={transition.notes}
                             onChange={(e) => handleTransitionChange(index, 'notes', e.target.value)}
-                            placeholder="Optional notes"
+                            placeholder={t('addCutPage.optionalNotes')}
                           />
                         </div>
                       </div>
@@ -763,11 +765,11 @@ const AddCutPage: React.FC = () => {
             {/* Additional Info */}
             <Card>
               <CardHeader>
-                <CardTitle>Additional Information</CardTitle>
+                <CardTitle>{t('addCutPage.additionalInformation')}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
-                  <Label htmlFor="waste-weight">Waste Fabric Weight (kg)</Label>
+                  <Label htmlFor="waste-weight">{t('addCutPage.wasteFabricWeightKg')}</Label>
                   <Input
                     id="waste-weight"
                     type="number"
@@ -779,7 +781,7 @@ const AddCutPage: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="marker-length">Marker Length (M)</Label>
+                  <Label htmlFor="marker-length">{t('addCutPage.markerLengthM')}</Label>
                   <Input
                     id="marker-length"
                     type="number"
@@ -791,12 +793,12 @@ const AddCutPage: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="notes">Notes</Label>
+                  <Label htmlFor="notes">{t('addCutPage.notes')}</Label>
                   <Textarea
                     id="notes"
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Optional notes about this cut"
+                    placeholder={t('addCutPage.optionalCutNotes')}
                     rows={3}
                   />
                 </div>
@@ -810,7 +812,7 @@ const AddCutPage: React.FC = () => {
                 variant="outline"
                 disabled={loading}
               >
-                Cancel
+                {t('common.cancel')}
               </Button>
               <Button onClick={handleSubmit} disabled={loading}>
                 {loading ? primaryButtonLoadingLabel : primaryButtonLabel}

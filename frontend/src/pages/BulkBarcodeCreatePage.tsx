@@ -67,11 +67,15 @@ const BulkBarcodeCreatePage: React.FC = () => {
   const [jobOrderItems, setJobOrderItems] = useState<{item_id: number; color_id: number; color_name: string; size_id: number; size_value: string; quantity: number}[]>([]);
   const [secondDegreeCounts, setSecondDegreeCounts] = useState<Record<number, number>>({});
   const [isCreatingSecondDegree, setIsCreatingSecondDegree] = useState(false);
+  const [secondDegreeInitialPhase, setSecondDegreeInitialPhase] = useState<'cutting' | 'qc'>('qc');
+  const [isPrintingSecondDegree, setIsPrintingSecondDegree] = useState(false);
   const [selectedSizes, setSelectedSizes] = useState<Set<string>>(new Set());
   const [allPrinters, setAllPrinters] = useState<{name: string, type: 'server' | 'zebra'}[]>([]);
   const [selectedPrinter, setSelectedPrinter] = useState<string>("");
   const [isPrinting, setIsPrinting] = useState(false);
   const [submittedBatches, setSubmittedBatches] = useState<any[]>([]);
+  const [submittedCompensationBatches, setSubmittedCompensationBatches] = useState<any[]>([]);
+  const [isPrintingCompensation, setIsPrintingCompensation] = useState(false);
   const [compensationData, setCompensationData] = useState<Record<string, {phase_id: number; quantity: number}>>({});
   const [isCreatingCompensation, setIsCreatingCompensation] = useState(false);
   const [availablePhases, setAvailablePhases] = useState<{phase_id: number; phase_name: string}[]>([]);
@@ -258,6 +262,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
       setSecondDegreeCounts({});
       setSelectedSizes(new Set());
       setSubmittedBatches([]);
+      setSubmittedCompensationBatches([]);
       setSubmitResult(null);
       setCompensationData({});
       setReworkBatches([]);
@@ -305,6 +310,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
       setJobOrderItems([]);
       setSecondDegreeCounts({});
       setCompensationData({});
+      setSubmittedCompensationBatches([]);
       setReworkBatches([]);
     }
   }, [selectedJobOrderId, jobOrders]);
@@ -431,6 +437,72 @@ const BulkBarcodeCreatePage: React.FC = () => {
     } finally {
       setIsPrintingRework(false);
       setPrintingReworkId(null);
+    }
+  };
+
+  const printCreatedBatches = async (batchesToPrint: any[], setPrintingState: (value: boolean) => void) => {
+    if (!selectedPrinter) {
+      setError(t('batchGeneration.selectPrinterMessage', 'Please select a printer'));
+      return;
+    }
+
+    try {
+      setPrintingState(true);
+      setError('');
+
+      const barcodesToPrint = batchesToPrint.map(batch => ({
+        barcode: batch.barcode,
+        client_name: batch.client_name || '',
+        model: batch.model_name || '',
+        size: batch.size_value || '',
+        color: batch.color_name || '',
+        quantity: batch.quantity || 0,
+        layers: batch.layers || 1,
+        serial: batch.serial || '',
+        job_order_number: selectedJobOrder?.job_order_number || '',
+        is_second_degree: Boolean(batch.is_second_degree),
+      }));
+
+      const selectedPrinterInfo = allPrinters.find(p => p.name === selectedPrinter);
+      const isZebraPrinter = selectedPrinterInfo?.type === 'zebra';
+
+      if (isZebraPrinter) {
+        const zebraPrintData: BarcodePrintData[] = barcodesToPrint.map(item => ({
+          barcode: item.barcode,
+          brand: item.client_name || '',
+          model: item.model,
+          size: item.size,
+          color: item.color,
+          quantity: item.quantity,
+          layers: item.layers,
+          serial: item.serial || undefined,
+          job_order_number: item.job_order_number,
+          is_second_degree: item.is_second_degree,
+        }));
+
+        await zebraPrinterService.printMultipleBarcodes(
+          zebraPrintData,
+          selectedPrinter,
+          1
+        );
+      } else {
+        await barcodeApi.printBarcodes(
+          barcodesToPrint,
+          1,
+          selectedPrinter
+        );
+      }
+
+      alert(
+        t('batchGeneration.printSuccess', { count: batchesToPrint.length, printer: selectedPrinter })
+          .replace('{count}', String(batchesToPrint.length))
+          .replace('{printer}', selectedPrinter)
+      );
+    } catch (error) {
+      console.error('Error printing barcodes:', error);
+      setError(t('batchGeneration.printError', 'Failed to print barcodes. Please try again.'));
+    } finally {
+      setPrintingState(false);
     }
   };
 
@@ -987,69 +1059,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                             </Select>
                           </div>
                           <Button
-                            onClick={async () => {
-                              if (!selectedPrinter) {
-                                setError(t('batchGeneration.selectPrinterMessage', 'Please select a printer'));
-                                return;
-                              }
-                              
-                              try {
-                                setIsPrinting(true);
-                                setError('');
-                                
-                                const barcodesToPrint = submittedBatches.map(batch => ({
-                                  barcode: batch.barcode,
-                                  client_name: batch.client_name || '',
-                                  model: batch.model_name || '',
-                                  size: batch.size_value || '',
-                                  color: batch.color_name || '',
-                                  quantity: batch.quantity || 0,
-                                  layers: batch.layers || 1,
-                                  serial: batch.serial || '',
-                                  job_order_number: selectedJobOrder?.job_order_number || '',
-                                  is_second_degree: Boolean(batch.is_second_degree),
-                                }));
-                                
-                                const selectedPrinterInfo = allPrinters.find(p => p.name === selectedPrinter);
-                                const isZebraPrinter = selectedPrinterInfo?.type === 'zebra';
-                                
-                                if (isZebraPrinter) {
-                                  const zebraPrintData: BarcodePrintData[] = barcodesToPrint.map(item => ({
-                                    barcode: item.barcode,
-                                    brand: item.client_name || '',
-                                    model: item.model,
-                                    size: item.size,
-                                    color: item.color,
-                                    quantity: item.quantity,
-                                    layers: item.layers,
-                                    serial: item.serial || undefined,
-                                    job_order_number: item.job_order_number,
-                                    is_second_degree: item.is_second_degree,
-                                  }));
-                                  
-                                  await zebraPrinterService.printMultipleBarcodes(
-                                    zebraPrintData,
-                                    selectedPrinter,
-                                    1
-                                  );
-                                  
-                                  alert(t('batchGeneration.printSuccess', { count: submittedBatches.length, printer: selectedPrinter }).replace('{count}', String(submittedBatches.length)).replace('{printer}', selectedPrinter));
-                                } else {
-                                  await barcodeApi.printBarcodes(
-                                    barcodesToPrint,
-                                    1,
-                                    selectedPrinter
-                                  );
-                                  
-                                  alert(t('batchGeneration.printSuccess', { count: submittedBatches.length, printer: selectedPrinter }).replace('{count}', String(submittedBatches.length)).replace('{printer}', selectedPrinter));
-                                }
-                              } catch (error) {
-                                console.error('Error printing barcodes:', error);
-                                setError(t('batchGeneration.printError', 'Failed to print barcodes. Please try again.'));
-                              } finally {
-                                setIsPrinting(false);
-                              }
-                            }}
+                            onClick={() => printCreatedBatches(submittedBatches, setIsPrinting)}
                             disabled={isPrinting || !selectedPrinter || submittedBatches.length === 0}
                             className="bg-blue-600 hover:bg-blue-700 text-white"
                           >
@@ -1081,6 +1091,33 @@ const BulkBarcodeCreatePage: React.FC = () => {
                 {jobOrderItems.length > 0 ? (
                   <>
                     <div className="border-b pb-4 mb-6">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div>
+                          <Label className="mb-2 block">{t('batchGeneration.secondDegreeInitialPhase', 'Initialize Second Degree In')}</Label>
+                          <div className="flex items-center gap-6 rounded-md border p-3">
+                            <label className="flex items-center gap-2 text-sm">
+                              <input
+                                type="radio"
+                                name="second-degree-initial-phase"
+                                checked={secondDegreeInitialPhase === 'cutting'}
+                                onChange={() => setSecondDegreeInitialPhase('cutting')}
+                                disabled={isCreatingSecondDegree || isPrintingSecondDegree}
+                              />
+                              <span>{t('batchGeneration.initialCuttingInProgress', 'Cutting (In Progress)')}</span>
+                            </label>
+                            <label className="flex items-center gap-2 text-sm">
+                              <input
+                                type="radio"
+                                name="second-degree-initial-phase"
+                                checked={secondDegreeInitialPhase === 'qc'}
+                                onChange={() => setSecondDegreeInitialPhase('qc')}
+                                disabled={isCreatingSecondDegree || isPrintingSecondDegree}
+                              />
+                              <span>{t('batchGeneration.initialQcInProgress', 'QC (In Progress)')}</span>
+                            </label>
+                          </div>
+                        </div>
+                      </div>
                       <Button
                         onClick={async () => {
                           if (!selectedJobOrderId) {
@@ -1107,7 +1144,8 @@ const BulkBarcodeCreatePage: React.FC = () => {
                           try {
                             const result = await batchApi.createSecondDegree({
                               job_order_id: selectedJobOrderId,
-                              items: itemsToCreate
+                              items: itemsToCreate,
+                              initial_phase: secondDegreeInitialPhase
                             });
                             
                             setSubmitResult({
@@ -1118,6 +1156,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                             
                             if (result.created_batches && result.created_batches.length > 0) {
                               setSecondDegreeCounts({});
+                              setSubmittedBatches(result.created_batches);
                             }
                           } catch (err: any) {
                             setError(err.response?.data?.detail || 'Failed to create second degree batches');
@@ -1125,17 +1164,17 @@ const BulkBarcodeCreatePage: React.FC = () => {
                             setIsCreatingSecondDegree(false);
                           }
                         }}
-                        disabled={isCreatingSecondDegree || jobOrderItems.length === 0}
+                        disabled={isCreatingSecondDegree || isPrintingSecondDegree || jobOrderItems.length === 0}
                         className="btn-primary"
                         size="lg"
                       >
-                        {isCreatingSecondDegree ? (
+                        {isCreatingSecondDegree || isPrintingSecondDegree ? (
                           <span className="flex items-center">
                             <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
-                            {t('batchGeneration.creating', 'Creating...')}
+                            {isPrintingSecondDegree ? t('batchGeneration.printing', 'Printing...') : t('batchGeneration.creating', 'Creating...')}
                           </span>
                         ) : (
                           t('batchGeneration.createSecondDegreeBatches', 'Create Second Degree Batches')
@@ -1146,6 +1185,69 @@ const BulkBarcodeCreatePage: React.FC = () => {
                           <p className="text-base font-medium">
                             {submitResult.message || `${submitResult.created} batches created. ${submitResult.duplicates} duplicates found.`}
                           </p>
+                        </div>
+                      )}
+                      {submittedBatches.length > 0 && (
+                        <div className="mt-4 border rounded-md p-4">
+                          <h4 className="text-md font-semibold mb-3">{t('batchGeneration.generatedSecondDegreeBatches', 'Generated Batches')}</h4>
+                          <div className="border rounded-md overflow-hidden mb-4">
+                            <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
+                              <Table>
+                                <TableHeader className="sticky top-0 bg-gray-50 z-10">
+                                  <TableRow>
+                                    <TableHead>{t('barcode.barcode', 'Barcode')}</TableHead>
+                                    <TableHead>{t('bulkBarcode.color', 'Color')}</TableHead>
+                                    <TableHead>{t('bulkBarcode.size', 'Size')}</TableHead>
+                                    <TableHead>{t('barcode.quantity', 'Quantity')}</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {submittedBatches.map((batch) => (
+                                    <TableRow key={batch.batch_id || batch.barcode}>
+                                      <TableCell className="font-mono text-sm">{batch.barcode}</TableCell>
+                                      <TableCell>{batch.color_name || '-'}</TableCell>
+                                      <TableCell>{batch.size_value || '-'}</TableCell>
+                                      <TableCell>{batch.quantity ?? 0}</TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                            <div className="flex items-center space-x-2">
+                              <Label>{t('batchGeneration.printer', 'Printer')}</Label>
+                              <Select
+                                value={selectedPrinter}
+                                onValueChange={setSelectedPrinter}
+                                disabled={isPrintingSecondDegree}
+                              >
+                                <SelectTrigger className="w-[250px]">
+                                  <SelectValue placeholder={t('batchGeneration.selectPrinter', 'Select Printer')} />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {allPrinters.map((printer) => (
+                                    <SelectItem key={printer.name} value={printer.name}>
+                                      <div className="flex items-center justify-between w-full">
+                                        <span>{printer.name}</span>
+                                        <span className="ml-2 text-xs text-gray-500">
+                                          {printer.type === 'zebra' ? '🖨️ Zebra' : '🖥️ Server'}
+                                        </span>
+                                      </div>
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <Button
+                              onClick={() => printCreatedBatches(submittedBatches, setIsPrintingSecondDegree)}
+                              disabled={isPrintingSecondDegree || !selectedPrinter || submittedBatches.length === 0}
+                              className="bg-blue-600 hover:bg-blue-700 text-white"
+                            >
+                              {isPrintingSecondDegree ? t('batchGeneration.printing', 'Printing...') : t('batchGeneration.print', 'Print')}
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1246,6 +1348,7 @@ const BulkBarcodeCreatePage: React.FC = () => {
                               
                               if (result.created_batches && result.created_batches.length > 0) {
                                 setCompensationData({});
+                                setSubmittedCompensationBatches(result.created_batches);
                               }
                             } catch (err: any) {
                               setError(err.response?.data?.detail || 'Failed to create compensation batches');
@@ -1274,6 +1377,68 @@ const BulkBarcodeCreatePage: React.FC = () => {
                             <p className="text-base font-medium">
                               {submitResult.message || `${submitResult.created} batches created. ${submitResult.duplicates} duplicates found.`}
                             </p>
+                          </div>
+                        )}
+                        {submitResult?.created > 0 && submittedCompensationBatches.length > 0 && (
+                          <div className="mt-4 border rounded-md p-4">
+                            <h4 className="text-md font-semibold mb-3">{t('batchGeneration.generatedCompensationBatches', 'Generated Compensation Batches')}</h4>
+                            <div className="border rounded-md overflow-hidden mb-4">
+                              <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
+                                <Table>
+                                  <TableHeader className="sticky top-0 bg-gray-50 z-10">
+                                    <TableRow>
+                                      <TableHead>{t('barcode.barcode', 'Barcode')}</TableHead>
+                                      <TableHead>{t('bulkBarcode.color', 'Color')}</TableHead>
+                                      <TableHead>{t('bulkBarcode.size', 'Size')}</TableHead>
+                                      <TableHead>{t('barcode.quantity', 'Quantity')}</TableHead>
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
+                                    {submittedCompensationBatches.map((batch) => (
+                                      <TableRow key={batch.batch_id || batch.barcode}>
+                                        <TableCell className="font-mono text-sm">{batch.barcode}</TableCell>
+                                        <TableCell>{batch.color_name || '-'}</TableCell>
+                                        <TableCell>{batch.size_value || '-'}</TableCell>
+                                        <TableCell>{batch.quantity ?? 0}</TableCell>
+                                      </TableRow>
+                                    ))}
+                                  </TableBody>
+                                </Table>
+                              </div>
+                            </div>
+                            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                              <div className="flex items-center space-x-2">
+                                <Label>{t('batchGeneration.printer', 'Printer')}</Label>
+                                <Select
+                                  value={selectedPrinter}
+                                  onValueChange={setSelectedPrinter}
+                                  disabled={isPrintingCompensation}
+                                >
+                                  <SelectTrigger className="w-[250px]">
+                                    <SelectValue placeholder={t('batchGeneration.selectPrinter', 'Select Printer')} />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {allPrinters.map((printer) => (
+                                      <SelectItem key={printer.name} value={printer.name}>
+                                        <div className="flex items-center justify-between w-full">
+                                          <span>{printer.name}</span>
+                                          <span className="ml-2 text-xs text-gray-500">
+                                            {printer.type === 'zebra' ? '🖨️ Zebra' : '🖥️ Server'}
+                                          </span>
+                                        </div>
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <Button
+                                onClick={() => printCreatedBatches(submittedCompensationBatches, setIsPrintingCompensation)}
+                                disabled={isPrintingCompensation || !selectedPrinter || submittedCompensationBatches.length === 0}
+                                className="bg-blue-600 hover:bg-blue-700 text-white"
+                              >
+                                {isPrintingCompensation ? t('batchGeneration.printing', 'Printing...') : t('batchGeneration.print', 'Print')}
+                              </Button>
+                            </div>
                           </div>
                         )}
                       </div>

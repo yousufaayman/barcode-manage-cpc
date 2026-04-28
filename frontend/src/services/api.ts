@@ -727,7 +727,11 @@ export const batchApi = {
     return response.data;
   },
 
-  createSecondDegree: async (request: {job_order_id: number; items: Array<{item_id: number; count: number}>}) => {
+  createSecondDegree: async (request: {
+    job_order_id: number;
+    items: Array<{item_id: number; count: number}>;
+    initial_phase?: 'cutting' | 'qc';
+  }) => {
     const response = await api.post('/batches/create-second-degree', request);
     return response.data;
   },

@@ -252,6 +252,46 @@ def _backward_movement_events_or_raise(
     return True, events_to_reverse
 
 
+def _validate_second_degree_phase_transition(
+    db: Session,
+    phase_changed: bool,
+    old_phase: Optional[int],
+    new_phase: Optional[int],
+    old_second_degree: Any,
+) -> None:
+    if not phase_changed or not bool(old_second_degree):
+        return
+    if old_phase is None or new_phase is None or old_phase == new_phase:
+        return
+
+    old_phase_row = (
+        db.query(models.ProductionPhase)
+        .filter(models.ProductionPhase.phase_id == old_phase)
+        .first()
+    )
+    new_phase_row = (
+        db.query(models.ProductionPhase)
+        .filter(models.ProductionPhase.phase_id == new_phase)
+        .first()
+    )
+    if not old_phase_row or not new_phase_row:
+        return
+
+    old_phase_name = (old_phase_row.phase_name or "").strip().lower()
+    old_phase_type = (old_phase_row.type or "").strip().lower()
+    new_phase_type = (new_phase_row.type or "").strip().lower()
+
+    if old_phase_name == "cutting":
+        raise ValueError(
+            "Second degree batches in Cutting cannot be moved to any other phase"
+        )
+
+    if old_phase_type == "qc" and new_phase_type != "packaging":
+        raise ValueError(
+            "Second degree batches in QC can only be moved to Packaging phases"
+        )
+
+
 def _emit_backward_movement_reversals(
     db: Session,
     db_batch: models.Batch,
@@ -720,6 +760,10 @@ def update_batch(
     new_phase = update_data.get("current_phase", old_phase)
     new_quantity = update_data.get("quantity", old_quantity)
     new_second_degree = update_data.get("is_second_degree", old_second_degree)
+
+    _validate_second_degree_phase_transition(
+        db, phase_changed, old_phase, new_phase, old_second_degree
+    )
 
     backward_movement_detected, events_to_reverse = _backward_movement_events_or_raise(
         db, db_batch, phase_changed, old_phase, new_phase

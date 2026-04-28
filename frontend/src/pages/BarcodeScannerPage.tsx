@@ -88,16 +88,34 @@ const getRejectionDefectsForPhase = (phase: Phase | null) => {
   return [];
 };
 
+const extractApiErrorMessage = (err: any): string | undefined => {
+  const detail = err?.response?.data?.detail;
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  const message = err?.response?.data?.message;
+  if (typeof message === 'string' && message.trim()) return message;
+  if (typeof err?.message === 'string' && err.message.trim()) return err.message;
+  return undefined;
+};
+
+const normalizeBackendError = (message?: string): string => (message || '').trim().toLowerCase();
+const normalizeScannedBarcode = (value: string): string => value.trim().toUpperCase();
+
 interface SessionData {
   phase: number;
   status: string;
   initialBarcode: string;
-  jobOrderId: number | null;
-  colorId: number | null;
-  sizeId: number | null;
-  expectedQuantity: number;
-  scannedQuantity: number;
-  remainingQuantity: number;
+  jobOrderItems: Array<{
+    key: string;
+    jobOrderId: number;
+    jobOrderNumber?: string;
+    colorId: number;
+    colorName?: string;
+    sizeId: number;
+    sizeValue?: string;
+    expectedQuantity: number;
+    scannedQuantity: number;
+    remainingQuantity: number;
+  }>;
   scannedBarcodes: string[];
   isActive: boolean;
 }
@@ -137,6 +155,18 @@ const BarcodeScannerPage: React.FC = () => {
   >([]);
   const [batchProductionHistory, setBatchProductionHistory] = useState<BatchProductionHistoryEntry[]>([]);
   const [isLoadingBatchProductionHistory, setIsLoadingBatchProductionHistory] = useState(false);
+
+  const getLocalizedBatchUpdateError = (message?: string): string | undefined => {
+    const normalized = normalizeBackendError(message);
+    if (!normalized) return undefined;
+    if (normalized === 'second degree batches in cutting cannot be moved to any other phase') {
+      return t('barcode.secondDegreeCuttingPhaseLocked');
+    }
+    if (normalized === 'second degree batches in qc can only be moved to packaging phases') {
+      return t('barcode.secondDegreeQcOnlyToPackaging');
+    }
+    return message;
+  };
   const [isLoadingDecrementStages, setIsLoadingDecrementStages] = useState(false);
   const [visitedPhases, setVisitedPhases] = useState<Phase[]>([]);
   
@@ -158,15 +188,11 @@ const BarcodeScannerPage: React.FC = () => {
     phase: 1,
     status: 'Pending',
     initialBarcode: '',
-    jobOrderId: null,
-    colorId: null,
-    sizeId: null,
-    expectedQuantity: 0,
-    scannedQuantity: 0,
-    remainingQuantity: 0,
+    jobOrderItems: [],
     scannedBarcodes: [],
     isActive: false
   });
+  const sessionScannedBarcodesRef = useRef<Set<string>>(new Set());
 
   // Set initial phase based on user role
   useEffect(() => {
@@ -484,23 +510,7 @@ const BarcodeScannerPage: React.FC = () => {
         try {
           let updateData: any = {};
 
-          if (mode === 'update') {
-            // Validate phase selection for non-admin users
-            if (user && user.role !== 'admin') {
-              const allowedPhases = getAllowedPhasesForRole(user.role);
-              if (!allowedPhases.includes(selectedPhase)) {
-                setError(t('barcode.phaseRestriction', { role: user.role }));
-                return;
-              }
-            }
-
-            if (selectedPhase !== data.current_phase) {
-              updateData.current_phase = selectedPhase;
-            }
-            if (selectedStatus !== data.status) {
-              updateData.status = selectedStatus;
-            }
-          } else if (mode === 'secondDegree') {
+          if (mode === 'secondDegree') {
             // Update the batch to set is_second_degree based on the toggle
             updateData.is_second_degree = secondDegreeToggle;
             console.log('Second Degree mode - updateData:', updateData);
@@ -542,14 +552,16 @@ const BarcodeScannerPage: React.FC = () => {
             console.log('No update data to send - skipping API call');
           }
         } catch (updateErr: any) {
-          // Handle specific error cases
+          const backendError = getLocalizedBatchUpdateError(extractApiErrorMessage(updateErr));
           if (updateErr.response?.status === 404) {
             setError(t('barcode.batchNotFound'));
+          } else if (updateErr.response?.status === 400 && backendError) {
+            setError(backendError);
           } else if (updateErr.response?.status === 500) {
             setError(t('barcode.serverError'));
             console.error('Server error details:', updateErr.response?.data);
           } else {
-            setError(t('barcode.failedToUpdate'));
+            setError(backendError || t('barcode.failedToUpdate'));
           }
           console.error('Failed to update batch:', updateErr);
         }
@@ -573,6 +585,8 @@ const BarcodeScannerPage: React.FC = () => {
 
   // Handle session mode barcode scanning
   const handleSessionModeBarcode = async (data: BarcodeData, barcodeToSubmit: string) => {
+    const normalizedBarcode = normalizeScannedBarcode(barcodeToSubmit);
+
     if (!sessionData.isActive) {
       // First scan - initialize session
       try {
@@ -593,70 +607,100 @@ const BarcodeScannerPage: React.FC = () => {
         );
 
         if (remainingData.job_order_item_quantity > 0) {
+          const itemKey = `${data.job_order_id}-${data.color_id}-${data.size_id}`;
           setSessionData(prev => ({
             ...prev,
             phase: prev.phase,
             status: prev.status,
-            initialBarcode: barcodeToSubmit,
-            jobOrderId: data.job_order_id,
-            colorId: data.color_id,
-            sizeId: data.size_id,
-            expectedQuantity: remainingData.job_order_item_quantity,
-            scannedQuantity: data.quantity,
-            remainingQuantity: remainingData.remaining_quantity,
-            scannedBarcodes: [barcodeToSubmit],
+            initialBarcode: normalizedBarcode,
+            jobOrderItems: [
+              {
+                key: itemKey,
+                jobOrderId: data.job_order_id,
+                jobOrderNumber: data.job_order_number,
+                colorId: data.color_id,
+                colorName: data.color_name,
+                sizeId: data.size_id,
+                sizeValue: data.size_value,
+                expectedQuantity: remainingData.job_order_item_quantity,
+                scannedQuantity: data.quantity,
+                remainingQuantity: remainingData.remaining_quantity,
+              }
+            ],
+            scannedBarcodes: [normalizedBarcode],
             isActive: true
           }));
+          sessionScannedBarcodesRef.current = new Set([normalizedBarcode]);
           setError('');
         } else {
           setError(t('barcode.noJobOrderItemsFound'));
         }
-      } catch (err) {
-        setError(t('barcode.failedToGetJobOrderItem'));
+      } catch (err: any) {
+        setError(getLocalizedBatchUpdateError(extractApiErrorMessage(err)) || t('barcode.failedToGetJobOrderItem'));
         console.error('Failed to get job order items:', err);
       }
     } else {
-      // Subsequent scans - check if barcode matches the session (same job order and color)
+      // Subsequent scans - update progress for the scanned barcode's job-order item
       try {
         // Check if barcode was already scanned
-        if (sessionData.scannedBarcodes.includes(barcodeToSubmit)) {
+        if (sessionScannedBarcodesRef.current.has(normalizedBarcode)) {
           setError(t('barcode.barcodeAlreadyScanned'));
           return;
         }
-        
-        // Check if barcode matches the session (same job order, color, and size)
-        if (data.job_order_id === sessionData.jobOrderId && data.color_id === sessionData.colorId && data.size_id === sessionData.sizeId) {
-          const updatedBatch = await barcodeApi.updateBarcode(barcodeToSubmit, {
-            current_phase: sessionData.phase,
-            status: sessionData.status
-          });
-          setBarcodeData(updatedBatch);
-          setCurrentPhase(updatedBatch.current_phase);
-          setStatus(updatedBatch.status);
-          
-          const remainingData = await calculateRemainingQuantity(
-            data.job_order_id,
-            data.color_id,
-            data.size_id,
-            updatedBatch.current_phase,
-            updatedBatch.status
-          );
-          
-          // Barcode matches - increment quantity counter and update remaining quantity
-          setSessionData(prev => ({
-            ...prev,
-            phase: prev.phase,
-            status: prev.status,
-            scannedQuantity: prev.scannedQuantity + data.quantity,
+
+        const updatedBatch = await barcodeApi.updateBarcode(barcodeToSubmit, {
+          current_phase: sessionData.phase,
+          status: sessionData.status
+        });
+        setBarcodeData(updatedBatch);
+        setCurrentPhase(updatedBatch.current_phase);
+        setStatus(updatedBatch.status);
+
+        const remainingData = await calculateRemainingQuantity(
+          data.job_order_id,
+          data.color_id,
+          data.size_id,
+          updatedBatch.current_phase,
+          updatedBatch.status
+        );
+
+        const itemKey = `${data.job_order_id}-${data.color_id}-${data.size_id}`;
+        setSessionData(prev => {
+          const itemIndex = prev.jobOrderItems.findIndex((item) => item.key === itemKey);
+          const nextItems = [...prev.jobOrderItems];
+          const nextScannedQuantity = itemIndex >= 0
+            ? nextItems[itemIndex].scannedQuantity + data.quantity
+            : data.quantity;
+
+          const nextItem = {
+            key: itemKey,
+            jobOrderId: data.job_order_id,
+            jobOrderNumber: data.job_order_number,
+            colorId: data.color_id,
+            colorName: data.color_name,
+            sizeId: data.size_id,
+            sizeValue: data.size_value,
+            expectedQuantity: remainingData.job_order_item_quantity,
+            scannedQuantity: nextScannedQuantity,
             remainingQuantity: remainingData.remaining_quantity,
-            scannedBarcodes: [...prev.scannedBarcodes, barcodeToSubmit]
-          }));
-          setError('');
-        } else {
-          setError(t('barcode.barcodeNotMatchingSession'));
-        }
-      } catch (err) {
-        setError(t('barcode.failedToValidateBarcode'));
+          };
+
+          if (itemIndex >= 0) {
+            nextItems[itemIndex] = nextItem;
+          } else {
+            nextItems.push(nextItem);
+          }
+
+          return {
+            ...prev,
+            scannedBarcodes: [...prev.scannedBarcodes, normalizedBarcode],
+            jobOrderItems: nextItems,
+          };
+        });
+        sessionScannedBarcodesRef.current.add(normalizedBarcode);
+        setError('');
+      } catch (err: any) {
+        setError(getLocalizedBatchUpdateError(extractApiErrorMessage(err)) || t('barcode.failedToValidateBarcode'));
         console.error('Failed to validate barcode:', err);
       }
     }
@@ -767,24 +811,7 @@ const BarcodeScannerPage: React.FC = () => {
         try {
           let updateData: any = {};
 
-          if (mode === 'update') {
-            // Validate phase selection for non-admin users
-            if (user && user.role !== 'admin') {
-              const allowedPhases = getAllowedPhasesForRole(user.role);
-              if (!allowedPhases.includes(selectedPhase)) {
-                setError(t('barcode.phaseRestriction', { role: user.role }));
-                return;
-              }
-            }
-
-            // Only include fields that have changed
-            if (selectedPhase !== data.current_phase) {
-              updateData.current_phase = selectedPhase;
-            }
-            if (selectedStatus !== data.status) {
-              updateData.status = selectedStatus;
-            }
-          } else if (mode === 'secondDegree') {
+          if (mode === 'secondDegree') {
             // Update the batch to set is_second_degree based on the toggle
             updateData.is_second_degree = secondDegreeToggle;
             console.log('Second Degree mode (handleSubmit) - updateData:', updateData);
@@ -826,16 +853,16 @@ const BarcodeScannerPage: React.FC = () => {
             console.log('No update data to send - skipping API call (handleSubmit)');
           }
         } catch (updateErr: any) {
+          const backendError = getLocalizedBatchUpdateError(extractApiErrorMessage(updateErr));
           if (updateErr.response?.status === 404) {
             setError(t('barcode.batchNotFound'));
           } else if (updateErr.response?.status === 500) {
             setError(t('barcode.serverError'));
             console.error('Server error details:', updateErr.response?.data);
           } else if (updateErr.response?.status === 400) {
-            const errorMessage = updateErr.response?.data?.detail || updateErr.response?.data?.message || updateErr.message;
-            setError(errorMessage || t('barcode.failedToUpdate'));
+            setError(backendError || t('barcode.failedToUpdate'));
           } else {
-            setError(t('barcode.failedToUpdate'));
+            setError(backendError || t('barcode.failedToUpdate'));
           }
           console.error('Failed to update batch:', updateErr);
         }
@@ -905,11 +932,11 @@ const BarcodeScannerPage: React.FC = () => {
         setStatus(updatedData.status);
       }
     } catch (err: any) {
+      const backendError = getLocalizedBatchUpdateError(extractApiErrorMessage(err));
       if (err.response?.status === 400) {
-        const errorMessage = err.response?.data?.detail || err.response?.data?.message || err.message;
-        setError(errorMessage || t('barcode.failedToUpdate'));
+        setError(backendError || t('barcode.failedToUpdate'));
       } else {
-        setError(t('barcode.failedToUpdate'));
+        setError(backendError || t('barcode.failedToUpdate'));
       }
       console.error('Failed to save changes:', err);
     }
@@ -986,7 +1013,8 @@ const BarcodeScannerPage: React.FC = () => {
     }
 
     const batchQty = barcodeData.quantity || 0;
-    if (quantity > batchQty) {
+    const canIncrement = Boolean(barcodeData.is_second_degree);
+    if (!canIncrement && quantity > batchQty) {
       setError(t('barcode.updateQuantityExceedsBatch'));
       return;
     }
@@ -1089,12 +1117,19 @@ const BarcodeScannerPage: React.FC = () => {
         barcodeInputRef.current.focus();
       }
     } catch (updateErr: any) {
+      const backendError = getLocalizedBatchUpdateError(extractApiErrorMessage(updateErr));
       if (updateErr.response?.status === 404) {
         setError(t('barcode.batchNotFound'));
+      } else if (updateErr.response?.status === 400) {
+        if (typeof backendError === 'string' && backendError.toLowerCase().includes('increment is allowed only for second degree')) {
+          setError(t('barcode.incrementOnlyForSecondDegree', 'Quantity increment is allowed only for second degree batches.'));
+        } else {
+          setError(backendError || t('barcode.failedToUpdateQuantity'));
+        }
       } else if (updateErr.response?.status === 500) {
         setError(t('barcode.serverError'));
       } else {
-        setError(t('barcode.failedToUpdateQuantity'));
+        setError(backendError || t('barcode.failedToUpdateQuantity'));
       }
       console.error('Failed to update quantity:', updateErr);
     } finally {
@@ -1102,7 +1137,8 @@ const BarcodeScannerPage: React.FC = () => {
     }
   };
 
-  const updateQuantityCap = barcodeData?.quantity ?? 0;
+  const canIncrementQuantity = Boolean(barcodeData?.is_second_degree);
+  const updateQuantityCap = canIncrementQuantity ? Number.MAX_SAFE_INTEGER : (barcodeData?.quantity ?? 0);
 
   const incrementQuantity = () => {
     setQuantity((prev) => Math.min(updateQuantityCap, prev + 1));
@@ -1308,15 +1344,11 @@ const BarcodeScannerPage: React.FC = () => {
                       phase: selectedPhase,
                       status: selectedStatus,
                       initialBarcode: '',
-                      jobOrderId: null,
-                      colorId: null,
-                      sizeId: null,
-                      expectedQuantity: 0,
-                      scannedQuantity: 0,
-                      remainingQuantity: 0,
+                      jobOrderItems: [],
                       scannedBarcodes: [],
                       isActive: false
                     });
+                    sessionScannedBarcodesRef.current = new Set();
                   }}
                   className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
                     mode === 'update'
@@ -1641,7 +1673,7 @@ const BarcodeScannerPage: React.FC = () => {
                     type="button"
                     onClick={incrementQuantity}
                     className="w-20 h-20 bg-blue-600 text-white rounded-full text-3xl font-bold hover:bg-blue-700 transition-colors flex items-center justify-center shadow-lg border-2 border-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
-                    disabled={quantity >= updateQuantityCap}
+                    disabled={!canIncrementQuantity}
                     aria-label={t('barcode.increaseQuantity')}
                   >
                     <span className="text-white">+</span>
@@ -1670,6 +1702,7 @@ const BarcodeScannerPage: React.FC = () => {
                     <button
                       key={`${type}-${value}`}
                       type="button"
+                      disabled={type === 'add' && !canIncrementQuantity}
                       onClick={() =>
                         setQuantity((prev) =>
                           type === 'add'
@@ -2064,14 +2097,10 @@ const BarcodeScannerPage: React.FC = () => {
                       ...prev,
                       isActive: false,
                       initialBarcode: '',
-                      jobOrderId: null,
-                      colorId: null,
-                      sizeId: null,
-                      expectedQuantity: 0,
-                      scannedQuantity: 0,
-                      remainingQuantity: 0,
+                      jobOrderItems: [],
                       scannedBarcodes: []
                     }));
+                    sessionScannedBarcodesRef.current = new Set();
                     }}
                     className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 transition-colors flex items-center gap-2"
                   >
@@ -2101,50 +2130,42 @@ const BarcodeScannerPage: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {/* Session Info */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-center">
-                      <h4 className="text-sm font-medium text-blue-800 mb-2">{t('barcode.expectedQuantity')}</h4>
-                      <p className="text-2xl font-bold text-blue-900">{sessionData.expectedQuantity}</p>
-                    </div>
-                    <div className="p-4 bg-green-50 border border-green-200 rounded-lg text-center">
-                      <h4 className="text-sm font-medium text-green-800 mb-2">{t('barcode.scannedQuantity')}</h4>
-                      <p className="text-2xl font-bold text-green-900">{sessionData.scannedQuantity}</p>
-                    </div>
-                    <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg text-center">
-                      <h4 className="text-sm font-medium text-purple-800 mb-2">{t('barcode.remaining')}</h4>
-                      <p className="text-2xl font-bold text-purple-900">{sessionData.remainingQuantity}</p>
-                      <p className="text-xs text-purple-600 mt-1">Not in {getPhaseName(sessionData.phase)} - {getStatusName(sessionData.status)}</p>
-                    </div>
-                  </div>
-
-                  {/* Progress Bar */}
-                  <div className="w-full bg-gray-200 rounded-full h-4 relative">
-                    <div 
-                      className={`h-4 rounded-full transition-all duration-300 ${
-                        sessionData.remainingQuantity <= 0 
-                          ? 'bg-green-600' 
-                          : 'bg-blue-600'
-                      }`}
-                      style={{ 
-                        width: `${Math.min(100, ((sessionData.expectedQuantity - sessionData.remainingQuantity) / sessionData.expectedQuantity) * 100)}%` 
-                      }}
-                    ></div>
-                    {sessionData.remainingQuantity <= 0 && (
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <span className="text-white text-xs font-bold">✓ {t('common.complete')}</span>
+                  {/* Per job-order-item progress cards */}
+                  {sessionData.jobOrderItems.map((item) => (
+                    <div key={item.key} className="p-4 bg-gray-50 border border-gray-200 rounded-lg space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-semibold text-gray-800">
+                          {t('barcode.jobOrderNumber')}: {item.jobOrderNumber || item.jobOrderId} | {t('barcode.color')}: {item.colorName || item.colorId} | {t('barcode.size')}: {item.sizeValue || item.sizeId}
+                        </h4>
+                        <span
+                          className={`text-xs font-medium px-2 py-1 rounded-full ${
+                            item.remainingQuantity <= 0
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}
+                        >
+                          {item.remainingQuantity <= 0 ? `✓ ${t('common.complete')}` : t('barcode.inProgress')}
+                        </span>
                       </div>
-                    )}
-                  </div>
-
-                  {/* Initial Barcode Info */}
-                  <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg">
-                    <h4 className="text-sm font-medium text-gray-700 mb-2">{t('barcode.initialBarcode')}</h4>
-                    <p className="text-lg font-semibold text-gray-900">{sessionData.initialBarcode}</p>
-                  </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-center">
+                          <h5 className="text-xs font-medium text-blue-800 mb-1">{t('barcode.expectedQuantity')}</h5>
+                          <p className="text-xl font-bold text-blue-900">{item.expectedQuantity}</p>
+                        </div>
+                        <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-center">
+                          <h5 className="text-xs font-medium text-green-800 mb-1">{t('barcode.scannedQuantity')}</h5>
+                          <p className="text-xl font-bold text-green-900">{item.scannedQuantity}</p>
+                        </div>
+                        <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg text-center">
+                          <h5 className="text-xs font-medium text-purple-800 mb-1">{t('barcode.remaining')}</h5>
+                          <p className="text-xl font-bold text-purple-900">{item.remainingQuantity}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
 
                   {/* Session Summary */}
-                  {sessionData.remainingQuantity <= 0 && (
+                  {sessionData.jobOrderItems.length > 0 && sessionData.jobOrderItems.every((item) => item.remainingQuantity <= 0) && (
                     <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
                       <div className="flex items-center justify-center">
                         <div className="flex-shrink-0">
@@ -2155,7 +2176,10 @@ const BarcodeScannerPage: React.FC = () => {
                         <div className="ml-3">
                           <h4 className="text-lg font-medium text-green-800">{t('barcode.sessionCompleteTitle')}</h4>
                           <p className="text-sm text-green-700">
-                            {t('barcode.sessionCompleteMessage', { scanned: sessionData.scannedQuantity, expected: sessionData.expectedQuantity })}
+                            {t('barcode.sessionCompleteMessage', {
+                              scanned: sessionData.jobOrderItems.reduce((sum, item) => sum + item.scannedQuantity, 0),
+                              expected: sessionData.jobOrderItems.reduce((sum, item) => sum + item.expectedQuantity, 0)
+                            })}
                           </p>
                         </div>
                       </div>

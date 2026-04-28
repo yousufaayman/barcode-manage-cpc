@@ -493,6 +493,17 @@ const ProductionTrackingPage: React.FC = () => {
   // Tab 1: barcode key capture (worker scan then batch scan)
   useEffect(() => {
     if (activeTab !== 'tracking') return;
+    const processTrackingScannedValue = () => {
+      const scanned = trackingScanBufferRef.current.trim();
+      if (!scanned) return;
+      trackingScanBufferRef.current = '';
+      setTrackingIsScanning(false);
+      if (trackingAssignment == null) {
+        void resolveTrackingWorker(scanned);
+      } else {
+        void handleTrackingBatchScan(scanned);
+      }
+    };
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       const activeInputRef = trackingAssignment == null ? trackingWorkerInputRef.current : trackingBatchInputRef.current;
@@ -504,16 +515,8 @@ const ProductionTrackingPage: React.FC = () => {
       if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
-        const scanned = trackingScanBufferRef.current;
-        if (!scanned) return;
-        trackingScanBufferRef.current = '';
         if (trackingScanTimeoutRef.current) clearTimeout(trackingScanTimeoutRef.current);
-        setTrackingIsScanning(false);
-        if (trackingAssignment == null) {
-          void resolveTrackingWorker(scanned);
-        } else {
-          void handleTrackingBatchScan(scanned);
-        }
+        processTrackingScannedValue();
         return;
       }
       if (e.key.length !== 1) return;
@@ -523,13 +526,15 @@ const ProductionTrackingPage: React.FC = () => {
       setTrackingIsScanning(true);
       if (trackingScanTimeoutRef.current) clearTimeout(trackingScanTimeoutRef.current);
       trackingScanTimeoutRef.current = setTimeout(() => {
-        setTrackingIsScanning(false);
-      }, 50);
+        processTrackingScannedValue();
+      }, 80);
     };
     globalThis.addEventListener('keydown', handleKeyDown, true);
     return () => {
       globalThis.removeEventListener('keydown', handleKeyDown, true);
       if (trackingScanTimeoutRef.current) clearTimeout(trackingScanTimeoutRef.current);
+      trackingScanBufferRef.current = '';
+      setTrackingIsScanning(false);
     };
   }, [activeTab, trackingAssignment, trackingAssignmentsToday]);
 
@@ -582,6 +587,13 @@ const ProductionTrackingPage: React.FC = () => {
   // Tab 2: auto-capture barcode for worker scan (same behavior as Barcode Scanner – capture phase, buffer + Enter or 50ms)
   useEffect(() => {
     if (activeTab !== 'worker-assignment') return;
+    const processWorkerScannedValue = () => {
+      const scanned = workerScanBufferRef.current.trim();
+      if (!scanned) return;
+      workerScanBufferRef.current = '';
+      setIsScanningWorker(false);
+      void resolveWorkerFromBarcode(scanned);
+    };
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target === workerBarcodeInputRef.current) {
@@ -594,12 +606,8 @@ const ProductionTrackingPage: React.FC = () => {
       if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
-        const scanned = workerScanBufferRef.current;
-        if (!scanned) return;
-        workerScanBufferRef.current = '';
         if (workerScanTimeoutRef.current) clearTimeout(workerScanTimeoutRef.current);
-        setIsScanningWorker(false);
-        void resolveWorkerFromBarcode(scanned);
+        processWorkerScannedValue();
         return;
       }
       if (e.key.length !== 1) return;
@@ -609,13 +617,15 @@ const ProductionTrackingPage: React.FC = () => {
       setIsScanningWorker(true);
       if (workerScanTimeoutRef.current) clearTimeout(workerScanTimeoutRef.current);
       workerScanTimeoutRef.current = setTimeout(() => {
-        setIsScanningWorker(false);
-      }, 50);
+        processWorkerScannedValue();
+      }, 80);
     };
     globalThis.addEventListener('keydown', handleKeyDown, true);
     return () => {
       globalThis.removeEventListener('keydown', handleKeyDown, true);
       if (workerScanTimeoutRef.current) clearTimeout(workerScanTimeoutRef.current);
+      workerScanBufferRef.current = '';
+      setIsScanningWorker(false);
     };
   }, [activeTab]);
 
