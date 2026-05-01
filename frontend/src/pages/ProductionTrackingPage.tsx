@@ -64,6 +64,20 @@ function getStageItemColor(index: number): string {
   return STAGE_DROPDOWN_COLORS[index % STAGE_DROPDOWN_COLORS.length];
 }
 
+const SCANNER_MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Escape', 'Backspace', 'Delete']);
+const SCANNER_FUNCTION_KEYS = new Set(['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']);
+const SCANNER_NAVIGATION_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
+
+const shouldIgnoreScannerKey = (e: KeyboardEvent): boolean => {
+  if (SCANNER_MODIFIER_KEYS.has(e.key) || SCANNER_FUNCTION_KEYS.has(e.key) || SCANNER_NAVIGATION_KEYS.has(e.key)) {
+    return true;
+  }
+  if (e.ctrlKey || e.altKey || e.metaKey) {
+    return true;
+  }
+  return false;
+};
+
 const SCHEMATIC_VIEW_STAGE_BOX_COLORS = [
   'border-emerald-400/60 bg-emerald-50/50',
   'border-sky-400/60 bg-sky-50/50',
@@ -510,8 +524,7 @@ const ProductionTrackingPage: React.FC = () => {
       if (target !== activeInputRef && (target?.closest?.('input') || target?.closest?.('select') || target?.closest?.('textarea') || target?.closest?.('[role="combobox"]') || target?.closest?.('[role="listbox"]'))) {
         return;
       }
-      const skipKeys = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Escape', 'Backspace', 'Delete', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'];
-      if (skipKeys.includes(e.key) || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (shouldIgnoreScannerKey(e)) return;
       if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
@@ -527,7 +540,7 @@ const ProductionTrackingPage: React.FC = () => {
       if (trackingScanTimeoutRef.current) clearTimeout(trackingScanTimeoutRef.current);
       trackingScanTimeoutRef.current = setTimeout(() => {
         processTrackingScannedValue();
-      }, 80);
+      }, 50);
     };
     globalThis.addEventListener('keydown', handleKeyDown, true);
     return () => {
@@ -601,8 +614,7 @@ const ProductionTrackingPage: React.FC = () => {
       } else if (target?.closest?.('input') || target?.closest?.('select') || target?.closest?.('textarea') || target?.closest?.('[role="combobox"]') || target?.closest?.('[role="listbox"]')) {
         return;
       }
-      const skipKeys = ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Tab', 'Escape', 'Backspace', 'Delete', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'];
-      if (skipKeys.includes(e.key) || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (shouldIgnoreScannerKey(e)) return;
       if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
@@ -618,7 +630,7 @@ const ProductionTrackingPage: React.FC = () => {
       if (workerScanTimeoutRef.current) clearTimeout(workerScanTimeoutRef.current);
       workerScanTimeoutRef.current = setTimeout(() => {
         processWorkerScannedValue();
-      }, 80);
+      }, 50);
     };
     globalThis.addEventListener('keydown', handleKeyDown, true);
     return () => {
