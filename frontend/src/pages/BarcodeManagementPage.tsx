@@ -826,7 +826,7 @@ const BarcodeManagementPage: React.FC = () => {
                       <SelectValue placeholder={t('barcodeManagement.selectPrinter')} />
                     </SelectTrigger>
                     <SelectContent>
-                      {allPrinters.map((printer) => (
+			{allPrinters.filter(printer => printer.name && printer.name.trim() !== "").map((printer) => (
                         <SelectItem key={printer.name} value={printer.name}>
                           <div className="flex items-center justify-between w-full">
                             <span>{printer.name}</span>

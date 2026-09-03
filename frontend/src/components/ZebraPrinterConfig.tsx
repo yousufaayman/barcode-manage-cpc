@@ -149,7 +149,7 @@ const ZebraPrinterConfig: React.FC<ZebraPrinterConfigProps> = ({
                 <SelectValue placeholder={t('zebraPrinter.selectPrinterPlaceholder')} />
               </SelectTrigger>
               <SelectContent>
-                {availablePrinters.map((printer) => (
+		{availablePrinters.filter(p => p.name && p.name.trim() !== "").map((printer) => (
                   <SelectItem key={printer.name} value={printer.name}>
                     <div className="flex items-center justify-between w-full">
                       <span>{printer.name}</span>

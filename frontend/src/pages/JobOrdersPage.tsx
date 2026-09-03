@@ -256,10 +256,10 @@ const JobOrdersPage: React.FC = () => {
     const fetchDropdownOptions = async () => {
       try {
         const response = await jobOrderApi.getAllSimple();
-        // Extract unique job order numbers, model names, and brand names
+        // Extract unique job order numbers, model names, and client names
         const jobOrderNumbers = [...new Set(response.map(jo => jo.job_order_number))];
         const modelNames = [...new Set(response.map(jo => jo.model_name).filter(name => name))];
-        const brandNames = [...new Set(response.map(jo => jo.brand_name).filter(name => name))];
+        const brandNames = [...new Set(response.map(jo => jo.client_name).filter(name => name))];
         setJobOrderOptions(jobOrderNumbers);
         setModelOptions(modelNames);
         setBrandOptions(brandNames);
@@ -281,9 +281,9 @@ const JobOrdersPage: React.FC = () => {
         ]);
         const clientsResponse = await api.get<Array<{ client_id: number; client_name: string }>>('/batches/clients/');
         const clientsData = Array.isArray(clientsResponse.data) ? clientsResponse.data : [];
-        // Fetch brands from jobOrderApi.getAllSimple
+        // Fetch clients from jobOrderApi.getAllSimple
         const simpleJobOrders = await jobOrderApi.getAllSimple();
-        const brands = [...new Set(simpleJobOrders.map(jo => jo.brand_name).filter(name => name))];
+        const brands = [...new Set(simpleJobOrders.map(jo => jo.client_name).filter(name => name))];
         setExistingColors(colors);
         setExistingSizes(sizes);
         setExistingModels(models);

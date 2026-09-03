@@ -1,4 +1,4 @@
-import sizeOrder from "../../../shared/size_order.json";
+import sizeOrder from "../../shared/size_order.json";
 
 type SizeOrderJson = {
   precedence: string[];

@@ -199,15 +199,29 @@ const CuttingSubTab: React.FC = () => {
         }
       }
 
-      const response: CutDetailsListResponse | CutDetails[] = await cutsApi.getAllCuts(
-        1,
-        100,
-        jobOrderId ? { job_order_id: jobOrderId } : undefined
-      );
+      // The backend caps `limit` at 100 per page, so a single request can silently
+      // drop cuts once a job order (or the whole date range) has more than 100 of
+      // them. Page through the full result set instead of only reading page 1.
+      const pageSize = 100;
+      const cuts: CutDetails[] = [];
+      let page = 1;
+      let totalPages = 1;
+      do {
+        const response: CutDetailsListResponse | CutDetails[] = await cutsApi.getAllCuts(
+          page,
+          pageSize,
+          jobOrderId ? { job_order_id: jobOrderId } : undefined
+        );
 
-      const cuts: CutDetails[] = Array.isArray(response)
-        ? response
-        : response.cuts ?? [];
+        if (Array.isArray(response)) {
+          cuts.push(...response);
+          break;
+        }
+
+        cuts.push(...(response.cuts ?? []));
+        totalPages = response.total_pages ?? 1;
+        page += 1;
+      } while (page <= totalPages);
 
       const filteredCuts = cuts.filter((cut) => {
         if (!cut.created_at) return false;

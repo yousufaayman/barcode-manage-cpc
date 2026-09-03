@@ -18,11 +18,10 @@ initial_engine = create_engine(
     max_overflow=10
 )
 try:
-    with initial_engine.connect() as conn:
+    with initial_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         result = conn.execute(text(f"SELECT 1 FROM pg_database WHERE datname = '{settings.POSTGRESQL_DATABASE}'")).fetchone()
         if not result:
             conn.execute(text(f"CREATE DATABASE {settings.POSTGRESQL_DATABASE}"))
-            conn.commit()
 except Exception as e:
     logging.warning(f"Could not create database {settings.POSTGRESQL_DATABASE}: {e}")
 
