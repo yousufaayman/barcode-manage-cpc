@@ -152,6 +152,19 @@ const translatePrintTechnique = (type: string | undefined | null, t: (key: strin
   return String(type ?? '').trim();
 };
 
+const formatRemaining = (remaining: number | null | undefined): string => {
+  if (remaining === null || remaining === undefined) return '-';
+  const rounded = Math.round(remaining * 1000) / 1000;
+  return rounded > 0 ? `+${rounded}` : `${rounded}`;
+};
+
+const remainingClass = (remaining: number | null | undefined): string => {
+  if (remaining === null || remaining === undefined) return 'text-slate-500';
+  if (remaining < 0) return 'text-red-600';
+  if (remaining > 0) return 'text-green-700';
+  return 'text-slate-900';
+};
+
 const JobOrderDetailsPage: React.FC = () => {
   const { jobOrderId } = useParams<{ jobOrderId: string }>();
   const navigate = useNavigate();
@@ -1720,6 +1733,20 @@ const JobOrderDetailsPage: React.FC = () => {
                               {m.measurement_scale ? ` ${m.measurement_scale}` : ''}
                             </dd>
                           </div>
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="text-xs font-medium text-slate-500">{t('jobOrderDetails.fulfilledQuantity')}</dt>
+                            <dd className="font-semibold tabular-nums text-slate-900">
+                              {m.fulfilled_quantity ?? 0}
+                              {m.measurement_scale ? ` ${m.measurement_scale}` : ''}
+                            </dd>
+                          </div>
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="text-xs font-medium text-slate-500">{t('jobOrderDetails.remaining')}</dt>
+                            <dd className={`font-semibold tabular-nums ${remainingClass(m.remaining)}`}>
+                              {formatRemaining(m.remaining)}
+                              {m.measurement_scale ? ` ${m.measurement_scale}` : ''}
+                            </dd>
+                          </div>
                         </dl>
                       </div>
                     ))}
@@ -1734,6 +1761,8 @@ const JobOrderDetailsPage: React.FC = () => {
                           <th className="px-3 py-2 border-b text-left md:px-4">{t('barcode.color')}</th>
                           <th className="px-3 py-2 border-b text-right md:px-4">{t('jobOrderDetails.consumption')}</th>
                           <th className="px-3 py-2 border-b text-right md:px-4">{t('barcode.quantity')}</th>
+                          <th className="px-3 py-2 border-b text-right md:px-4">{t('jobOrderDetails.fulfilledQuantity')}</th>
+                          <th className="px-3 py-2 border-b text-right md:px-4">{t('jobOrderDetails.remaining')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1749,6 +1778,14 @@ const JobOrderDetailsPage: React.FC = () => {
                             </td>
                             <td className="px-3 py-2 border-b text-right tabular-nums md:px-4">
                               {m.quantity}
+                              {m.measurement_scale ? ` ${m.measurement_scale}` : ''}
+                            </td>
+                            <td className="px-3 py-2 border-b text-right tabular-nums md:px-4">
+                              {m.fulfilled_quantity ?? 0}
+                              {m.measurement_scale ? ` ${m.measurement_scale}` : ''}
+                            </td>
+                            <td className={`px-3 py-2 border-b text-right tabular-nums md:px-4 ${remainingClass(m.remaining)}`}>
+                              {formatRemaining(m.remaining)}
                               {m.measurement_scale ? ` ${m.measurement_scale}` : ''}
                             </td>
                           </tr>

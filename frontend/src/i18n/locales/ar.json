@@ -735,6 +735,7 @@
     "requiredMaterials": "القماش المطلوب",
     "material": "قماش",
     "panelType": "نوع القصة",
+    "fulfilledQuantity": "الكمية الموردة",
     "notFound": "لم يتم العثور على أمر شغل.",
     "saveChanges": "حفظ التغييرات",
     "reopen": "إعادة فتح",

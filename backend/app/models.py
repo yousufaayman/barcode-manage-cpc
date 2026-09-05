@@ -304,6 +304,7 @@ class JobOrderMaterialRequest(Base):
     consumption = Column(DECIMAL(10, 3), nullable=False)
     quantity = Column(DECIMAL(10, 3), nullable=True)
     measurement_scale = Column(String(10), nullable=False, default='KG', server_default='KG')
+    fulfilled = Column(Boolean, nullable=False, default=False, server_default='false')
 
     # Relationships
     job_order = relationship("JobOrder", back_populates="material_requests")
@@ -314,6 +315,27 @@ class JobOrderMaterialRequest(Base):
             f"<JobOrderMaterialRequest JO:{self.job_order_id} Fab:{self.fabric_code_id} "
             f"Panel:{self.panel_type} Cons:{self.consumption}>"
         )
+
+class MaterialRequestFulfillment(Base):
+    """Core.material_request_fulfillments - Quantities issued against a job_order_material_requests row"""
+    __tablename__ = "material_request_fulfillments"
+    __table_args__ = {'schema': 'core'}
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    material_request_id = Column(Integer, ForeignKey("core.job_order_material_requests.id", ondelete="CASCADE"), nullable=False)
+    internal_receipt_id = Column(Integer, nullable=True)
+    supplier_receipt_id = Column(Integer, nullable=True)
+    external_receipt_id = Column(Integer, nullable=True)
+    quantity_issued = Column(DECIMAL(10, 4), nullable=False)
+    measurement_scale = Column(String(10), nullable=False, default='KG', server_default='KG')
+    notes = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP, nullable=False, server_default=func.now())
+
+    # Relationships
+    material_request = relationship("JobOrderMaterialRequest", backref="fulfillments")
+
+    def __repr__(self):
+        return f"<MaterialRequestFulfillment Request:{self.material_request_id} Qty:{self.quantity_issued}>"
 
 # ============================================================================
 # OPERATIONS SCHEMA MODELS

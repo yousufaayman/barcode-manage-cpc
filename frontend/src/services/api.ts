@@ -1057,7 +1057,7 @@ export const jobOrderApi = {
     const response = await api.get<JobOrderQcSummary>(`/job-orders/${jobOrderId}/qc-summary`);
     return response.data;
   },
-  getMaterials: async (jobOrderId: number): Promise<{id:number,material_id:number,type?:string,material_name:string,fabric_code?:string|null,panel_type?:string,color_name?:string,quantity?:number,consumption?:number,measurement_scale?:'KG'|'M',notes?:string}[]> => {
+  getMaterials: async (jobOrderId: number): Promise<{id:number,material_id:number,type?:string,material_name:string,fabric_code?:string|null,panel_type?:string,color_name?:string,quantity?:number,consumption?:number,measurement_scale?:'KG'|'M',notes?:string,fulfilled_quantity?:number,remaining?:number|null}[]> => {
     const response = await api.get(`/job-orders/${jobOrderId}/materials`);
     return response.data;
   },

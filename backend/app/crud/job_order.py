@@ -524,19 +524,34 @@ def get_job_order_overall_status(db: Session, job_order_id: int) -> Optional[Dic
     }
 
 def get_job_order_materials(db: Session, job_order_id: int):
+    fulfilled_subq = (
+        db.query(
+            models.MaterialRequestFulfillment.material_request_id.label("material_request_id"),
+            func.sum(models.MaterialRequestFulfillment.quantity_issued).label("fulfilled_quantity"),
+        )
+        .group_by(models.MaterialRequestFulfillment.material_request_id)
+        .subquery()
+    )
+
     materials = db.query(
         models.JobOrderMaterialRequest,
         models.ClientFabricCode.fabric_code,
         models.Material.material_id,
         models.Material.material_name,
         models.Color.color_name,
+        fulfilled_subq.c.fulfilled_quantity,
     ).join(models.ClientFabricCode, models.JobOrderMaterialRequest.fabric_code_id == models.ClientFabricCode.id)
     materials = materials.join(models.Material, models.ClientFabricCode.material_id == models.Material.material_id)
     materials = materials.join(models.Color, models.ClientFabricCode.color_id == models.Color.color_id)
+    materials = materials.outerjoin(
+        fulfilled_subq, fulfilled_subq.c.material_request_id == models.JobOrderMaterialRequest.id
+    )
     materials = materials.filter(models.JobOrderMaterialRequest.job_order_id == job_order_id).all()
     rows = []
     for row in materials:
-        jomr, fabric_code, material_id, material_name, color_name = row[0], row[1], row[2], row[3], row[4]
+        jomr, fabric_code, material_id, material_name, color_name, fulfilled_quantity = row
+        quantity = float(jomr.quantity) if jomr.quantity is not None else None
+        fulfilled_quantity = float(fulfilled_quantity) if fulfilled_quantity is not None else 0.0
         rows.append(
             {
                 "id": jomr.id,
@@ -546,9 +561,11 @@ def get_job_order_materials(db: Session, job_order_id: int):
                 "material_name": material_name,
                 "panel_type": jomr.panel_type,
                 "consumption": float(jomr.consumption) if jomr.consumption is not None else None,
-                "quantity": float(jomr.quantity) if jomr.quantity is not None else None,
+                "quantity": quantity,
                 "measurement_scale": jomr.measurement_scale,
                 "color_name": color_name,
+                "fulfilled_quantity": fulfilled_quantity,
+                "remaining": (fulfilled_quantity - quantity) if quantity is not None else None,
             }
         )
     return rows

@@ -738,6 +738,7 @@
     "requiredMaterials": "Required Materials",
     "material": "Material",
     "panelType": "Panel Type",
+    "fulfilledQuantity": "Fulfilled Qty",
     "notFound": "Job order not found.",
     "saveChanges": "Save Changes",
     "reopen": "Reopen",
