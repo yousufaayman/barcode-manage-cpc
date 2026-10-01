@@ -29,6 +29,9 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 
+# Claude Code local settings (machine-specific, may contain secrets)
+.claude/settings.local.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
