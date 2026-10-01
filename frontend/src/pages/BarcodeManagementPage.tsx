@@ -59,7 +59,7 @@ const BarcodeManagementPage: React.FC = () => {
       if (user.role === 'admin') {
         return {
           barcode: '',
-          brand: '',
+          client: '',
           model: '',
           size: '',
           color: '',
@@ -72,7 +72,7 @@ const BarcodeManagementPage: React.FC = () => {
         // Let them see all phases and filter manually
         return {
           barcode: '',
-          brand: '',
+          client: '',
           model: '',
           size: '',
           color: '',
@@ -84,7 +84,7 @@ const BarcodeManagementPage: React.FC = () => {
     }
     return {
     barcode: '',
-    brand: '',
+    client: '',
     model: '',
     size: '',
     color: '',
@@ -664,8 +664,8 @@ const BarcodeManagementPage: React.FC = () => {
             <div className="form-group">
               <SearchableDropdown
                 options={brandOptions}
-                value={filters.brand}
-                onChange={(value) => handleDropdownFilterChange('brand', value)}
+                value={filters.client}
+                onChange={(value) => handleDropdownFilterChange('client', value)}
                 placeholder={t('bulkBarcode.client')}
                 label={t('bulkBarcode.client')}
               />
