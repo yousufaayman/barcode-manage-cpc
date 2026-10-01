@@ -8,7 +8,7 @@ services:
       - frontend
       - backend
     ports:
-      - "0.0.0.0:81:80"
+      - "0.0.0.0:${APP_PORT:-81}:80"
     volumes:
       - media_files:/app/media:ro
       - /etc/localtime:/etc/localtime:ro
