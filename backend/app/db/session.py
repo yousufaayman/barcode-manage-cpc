@@ -11,7 +11,7 @@ password = quote_plus(settings.POSTGRESQL_PASSWORD)
 
 # First create engine without database name to create the database if it doesn't exist
 initial_engine = create_engine(
-    f"postgresql://{settings.POSTGRESQL_USER}:{password}@{settings.POSTGRESQL_HOST}:{settings.POSTGRESQL_PORT}",
+    f"postgresql+psycopg2://{settings.POSTGRESQL_USER}:{password}@{settings.POSTGRESQL_HOST}:{settings.POSTGRESQL_PORT}",
     pool_pre_ping=settings.DB_POOL_PRE_PING,
     pool_recycle=settings.DB_POOL_RECYCLE,
     pool_size=5,
@@ -25,7 +25,7 @@ try:
 except Exception as e:
     logging.warning(f"Could not create database {settings.POSTGRESQL_DATABASE}: {e}")
 
-SQLALCHEMY_DATABASE_URL = f"postgresql://{settings.POSTGRESQL_USER}:{password}@{settings.POSTGRESQL_HOST}:{settings.POSTGRESQL_PORT}/{settings.POSTGRESQL_DATABASE}"
+SQLALCHEMY_DATABASE_URL = f"postgresql+psycopg2://{settings.POSTGRESQL_USER}:{password}@{settings.POSTGRESQL_HOST}:{settings.POSTGRESQL_PORT}/{settings.POSTGRESQL_DATABASE}"
 
 # Enhanced engine with comprehensive connection pooling
 engine = create_engine(
