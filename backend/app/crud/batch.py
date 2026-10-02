@@ -91,7 +91,8 @@ def get_batch_by_barcode(db: Session, barcode: str):
         models.Model.model_name,
         models.Size.size_value,
         models.Color.color_name,
-        models.ProductionPhase.phase_name
+        models.ProductionPhase.phase_name,
+        models.JobOrder.archived_at
     ).join(
         models.JobOrder, models.Batch.job_order_id == models.JobOrder.job_order_id
     ).join(
@@ -128,7 +129,7 @@ def get_batch_by_barcode(db: Session, barcode: str):
         color_name=batch.color_name,
         phase_name=batch.phase_name,
         last_updated=batch_obj.last_updated,
-        archived_at=None
+        archived_at=batch.archived_at
     )
 
 def get_batches(db: Session, skip: int = 0, limit: int = 100):
@@ -1180,16 +1181,6 @@ def get_detailed_events_by_batch(db: Session, batch_id: int, limit: int = 100):
     ).order_by(models.BarcodeScanEvent.scanned_at.desc()).limit(limit).all()
     
     return events 
-
-def get_archived_job_order_items(db: Session, job_order_id: int):
-    """Get all archived items for a specific job order"""
-    return db.query(models.ArchivedJobOrderItem).filter(
-        models.ArchivedJobOrderItem.job_order_id == job_order_id
-    ).all()
-
-def get_archived_batches(db: Session, skip: int = 0, limit: int = 100):
-    """Get all archived batches with pagination"""
-    return db.query(models.ArchivedBatch).offset(skip).limit(limit).all()
 
 
 def _group_batches_by_size_sorted(

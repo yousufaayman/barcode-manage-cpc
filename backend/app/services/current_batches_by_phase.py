@@ -60,6 +60,7 @@ def _oldest_first_scan_for_model_color(
                 ),
                 models.Model.model_name == model_name,
                 models.Color.color_name == color_name,
+                models.JobOrder.archived_at.is_(None),
             )
             .all()
         )
@@ -220,7 +221,8 @@ def _query_current_batches_for_by_phase(db: Session):
         .filter(
             models.Batch.status.in_(
                 [STATUS_PENDING, STATUS_IN_PROGRESS, STATUS_COMPLETED]
-            )
+            ),
+            models.JobOrder.archived_at.is_(None),
         )
         .order_by(
             models.ProductionPhase.phase_id,

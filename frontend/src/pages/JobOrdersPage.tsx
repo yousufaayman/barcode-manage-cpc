@@ -173,12 +173,12 @@ const JobOrdersPage: React.FC = () => {
   const [priorityModalOpen, setPriorityModalOpen] = useState(false);
   const [allJobOrdersForPriority, setAllJobOrdersForPriority] = useState<JobOrderSummary[]>([]);
   const canManageJobOrders = user?.role === 'admin' || user?.role === 'general_operations';
-  
+
   // Fetch open job orders using summary endpoint
   const fetchOpenJobOrders = async () => {
     try {
       setLoading(true);
-      
+
       // Fetch all open job orders (no skip/limit) - summary aggregates from item-level data
       const allOpenResponse = await jobOrderApi.getSummary({
         limit: 10000,
@@ -186,7 +186,7 @@ const JobOrdersPage: React.FC = () => {
           Object.entries(filters).filter(([_, value]) => value !== '')
         )
       });
-      
+
       // Ensure we have valid data
       if (!allOpenResponse || !allOpenResponse.items) {
         console.warn('No job orders data received from API');
@@ -194,7 +194,7 @@ const JobOrdersPage: React.FC = () => {
         setTotalOpenJobOrders(0);
         return;
       }
-      
+
       // Sort by issues hierarchy first: P > T > L > S > O, then by manual priority
       const sortedOpenItems = [...allOpenResponse.items].sort((a, b) => {
         const aIssues = detectIssues(a);
@@ -708,7 +708,7 @@ const JobOrdersPage: React.FC = () => {
     
     if (window.confirm(confirmMessage)) {
       try {
-        await api.post('/job-orders/archive/bulk', { job_order_ids: selectedJobOrders });
+        await jobOrderApi.archiveBulk(selectedJobOrders);
         setSelectedJobOrders([]);
         await fetchOpenJobOrders(); // Refresh the list
         
@@ -732,7 +732,7 @@ const JobOrdersPage: React.FC = () => {
     
     if (window.confirm(confirmMessage)) {
       try {
-        await api.post(`/job-orders/${jobOrderId}/archive`);
+        await jobOrderApi.archive(jobOrderId);
         await fetchOpenJobOrders(); // Refresh the list
         
         toast({
@@ -1131,7 +1131,7 @@ const JobOrdersPage: React.FC = () => {
             </button>
           </div>
         )}
-        
+
         {/* Mobile Full View Toggle for Open Job Orders */}
         {isMobile && (
           <div className="mb-4">

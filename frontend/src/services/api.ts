@@ -409,6 +409,7 @@ export interface JobOrder {
   total_working_quantity?: number;
   notes?: string;
   priority?: number;
+  archived_at?: string | null;
 }
 
 export interface JobOrderMaterialOption {
@@ -509,6 +510,7 @@ export interface JobOrderSummary {
   last_completion_change?: string;
   last_new_batch?: string;
   last_batch_update?: string;
+  archived_at?: string | null;
 }
 
 export interface JobOrderItemSummary {
@@ -603,20 +605,6 @@ export interface JobOrderQcSummary {
   reject_ratio_pct_job_today?: number | null;
   phases: JobOrderQcPhaseRow[];
   today_phases?: JobOrderQcPhaseRow[];
-}
-
-export interface ArchivedJobOrderItem {
-  item_id: number;
-  job_order_id: number;
-  job_order_number?: string | null;
-  color_id: number;
-  size_id: number;
-  quantity: number;
-  weight?: number | null;
-  notes?: string | null;
-  archived_at: string;
-  color_name?: string | null;
-  size_value?: string | null;
 }
 
 export interface JobOrderListResponse {
@@ -927,8 +915,8 @@ export const jobOrderApi = {
     return response.data;
   },
 
-  getAllSimple: async (): Promise<{job_order_id: number, job_order_number: string, model_name: string | null, client_name: string | null}[]> => {
-    const response = await api.get<{job_order_id: number, job_order_number: string, model_name: string | null, client_name: string | null}[]>('/job-orders/simple/');
+  getAllSimple: async (includeArchived: boolean = false): Promise<{job_order_id: number, job_order_number: string, model_name: string | null, client_name: string | null, archived_at?: string | null}[]> => {
+    const response = await api.get<{job_order_id: number, job_order_number: string, model_name: string | null, client_name: string | null, archived_at?: string | null}[]>('/job-orders/simple/', { params: { include_archived: includeArchived } });
     return response.data;
   },
 
@@ -1074,12 +1062,50 @@ export const jobOrderApi = {
     return response.data;
   },
 
-  archive: async (id: number): Promise<void> => {
-    await api.post(`/job-orders/${id}/archive`);
+  // --- Archiving: a job order is archived/restored as a whole; items, batches
+  // and history ride along implicitly (they're never independently archived). ---
+
+  archive: async (id: number): Promise<{message: string, job_order_id: number}> => {
+    const response = await api.post(`/job-orders/${id}/archive`);
+    return response.data;
   },
 
-  archiveBulk: async (jobOrderIds: number[]): Promise<void> => {
-    await api.post('/job-orders/archive/bulk', { job_order_ids: jobOrderIds });
+  archiveBulk: async (jobOrderIds: number[]): Promise<{message: string, job_order_ids: number[]}> => {
+    const response = await api.post('/job-orders/archive-bulk', { job_order_ids: jobOrderIds });
+    return response.data;
+  },
+
+  restore: async (id: number): Promise<{message: string, job_order_id: number}> => {
+    const response = await api.post(`/job-orders/${id}/restore`);
+    return response.data;
+  },
+
+  restoreBulk: async (jobOrderIds: number[]): Promise<{message: string, job_order_ids: number[]}> => {
+    const response = await api.post('/job-orders/restore-bulk', { job_order_ids: jobOrderIds });
+    return response.data;
+  },
+
+  getAllArchived: async (params?: {
+    skip?: number;
+    limit?: number;
+    job_order_number?: string;
+    model_name?: string;
+    client_name?: string;
+  }): Promise<JobOrderListResponse> => {
+    const response = await api.get<JobOrderListResponse>('/job-orders/archived/', { params });
+    return response.data;
+  },
+
+  /** Permanently delete an already-archived job order and everything that depends on
+   * it (items, batches, scan events, cut details, phase history, etc). No undo. */
+  purge: async (id: number): Promise<{message: string, job_order_id: number, deleted_batches: number, deleted_cut_details: number}> => {
+    const response = await api.delete(`/job-orders/${id}/purge`);
+    return response.data;
+  },
+
+  purgeBulk: async (jobOrderIds: number[]): Promise<{message: string, purged_job_order_ids: number[], total_deleted_batches: number, total_deleted_cut_details: number}> => {
+    const response = await api.post('/job-orders/purge-bulk', { job_order_ids: jobOrderIds });
+    return response.data;
   },
 
   // Item-level API functions
@@ -1138,52 +1164,6 @@ export const jobOrderApi = {
 
   getItemLevelStatistics: async (): Promise<any> => {
     const response = await api.get('/job-orders/items/statistics/');
-    return response.data;
-  },
-
-  archiveItem: async (itemId: number): Promise<{message: string, archived_item_id: number}> => {
-    const response = await api.post(`/job-orders/items/${itemId}/archive`);
-    return response.data;
-  },
-
-  getAllArchivedItems: async (params?: {
-    skip?: number;
-    limit?: number;
-    job_order_id?: number;
-    color_name?: string;
-    size_value?: string;
-  }): Promise<ArchivedJobOrderItem[]> => {
-    const response = await api.get('/job-orders/archive/items/', { params });
-    return response.data;
-  },
-
-  restoreItem: async (itemId: number): Promise<{message: string, restored_item_id: number}> => {
-    const response = await api.post(`/job-orders/items/${itemId}/restore`);
-    return response.data;
-  },
-
-  restoreJobOrder: async (jobOrderId: number): Promise<{message: string, restored_job_order_id: number}> => {
-    const response = await api.post(`/job-orders/archive/${jobOrderId}/restore`);
-    return response.data;
-  },
-
-  deleteArchivedJobOrder: async (jobOrderId: number): Promise<{message: string, job_order_id: number, deleted_items: number, deleted_batches: number}> => {
-    const response = await api.delete(`/job-orders/archive/${jobOrderId}/delete`);
-    return response.data;
-  },
-
-  deleteArchivedItem: async (itemId: number): Promise<{message: string, item_id: number, deleted_batches: number}> => {
-    const response = await api.delete(`/job-orders/items/${itemId}/delete`);
-    return response.data;
-  },
-
-  recoverBatch: async (batchId: number): Promise<{message: string, batch_id: number}> => {
-    const response = await api.post(`/batches/archived/${batchId}/recover`);
-    return response.data;
-  },
-
-  deleteArchivedBatch: async (batchId: number): Promise<{message: string, batch_id: number}> => {
-    const response = await api.delete(`/batches/archived/${batchId}`);
     return response.data;
   },
 
@@ -1292,6 +1272,7 @@ export const cutsApi = {
       model_id?: number;
       color_id?: number;
       print_status?: string;
+      include_archived?: boolean;
     }
   ): Promise<CutDetailsListResponse | CutDetails[]> => {
     const params: any = { page, limit };
@@ -1300,6 +1281,7 @@ export const cutsApi = {
       if (filters.model_id !== undefined) params.model_id = filters.model_id;
       if (filters.color_id !== undefined) params.color_id = filters.color_id;
       if (filters.print_status) params.print_status = filters.print_status;
+      if (filters.include_archived) params.include_archived = true;
     }
     const response = await api.get('/cuts/', { params });
     return response.data;

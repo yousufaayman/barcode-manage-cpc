@@ -262,8 +262,7 @@ const JobOrderDetailsPage: React.FC = () => {
 
   // Archive state
   const [archiving, setArchiving] = useState(false);
-  const [archivingItem, setArchivingItem] = useState<number | null>(null);
-  
+
   // Track if this is the initial page load
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
@@ -1040,7 +1039,7 @@ const JobOrderDetailsPage: React.FC = () => {
   const handleArchiveJobOrder = async () => {
     if (!jobOrderId) return;
 
-    const confirmMessage = 'Are you sure you want to archive this job order? This will also archive all associated items and batches. This action cannot be undone.';
+    const confirmMessage = 'Are you sure you want to archive this job order? It will be hidden from active views along with its items and batches. You can restore it later from the Archive page.';
     
     if (window.confirm(confirmMessage)) {
       try {
@@ -1067,39 +1066,34 @@ const JobOrderDetailsPage: React.FC = () => {
     }
   };
 
-  const handleArchiveItem = async (itemId: number) => {
-    const confirmMessage = 'Are you sure you want to archive this item? This action cannot be undone.';
-    
-    if (window.confirm(confirmMessage)) {
+  const handleRestoreJobOrder = async () => {
+    if (!jobOrderId) return;
+
+    if (window.confirm('Restore this job order? It will reappear in active views.')) {
       try {
-        setArchivingItem(itemId);
-        await jobOrderApi.archiveItem(itemId);
-        
+        setArchiving(true);
+        await jobOrderApi.restore(parseInt(jobOrderId));
+
         toast({
           title: t('common.success'),
-          description: 'Item archived successfully',
+          description: 'Job order restored successfully',
         });
-        
-        // Refresh the data
+
         const jobOrder = await jobOrderApi.getById(Number(jobOrderId));
         setViewJobOrder(jobOrder);
-        
-        const itemSummaries = await jobOrderApi.getItemSummaries({
-          job_order_id: Number(jobOrderId)
-        });
-        setViewTrackingData(itemSummaries.items || []);
       } catch (error: any) {
-        console.error('Error archiving item:', error);
+        console.error('Error restoring job order:', error);
         toast({
           title: t('common.error'),
-          description: error?.response?.data?.detail || 'Failed to archive item',
+          description: error?.response?.data?.detail || 'Failed to restore job order',
           variant: 'destructive'
         });
       } finally {
-        setArchivingItem(null);
+        setArchiving(false);
       }
     }
   };
+
 
 
   // Helper to group items by color
@@ -1202,10 +1196,15 @@ const JobOrderDetailsPage: React.FC = () => {
     <Layout>
       <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4 rounded-2xl border border-slate-200/80 bg-gradient-to-r from-white to-slate-50 px-4 py-4 shadow-sm">
         <div>
-          <h1 className="text-xl md:text-3xl font-bold mb-1 text-slate-900 tracking-tight">
+          <h1 className="text-xl md:text-3xl font-bold mb-1 text-slate-900 tracking-tight flex items-center gap-2 flex-wrap">
             {viewJobOrder
               ? t('jobOrderDetails.productionDetailsWithNumber', { jobOrderNumber: viewJobOrder.job_order_number })
               : t('jobOrders.title')}
+            {viewJobOrder?.archived_at && (
+              <span className="inline-flex items-center rounded-full border border-orange-300 bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
+                Archived
+              </span>
+            )}
           </h1>
           <p className="text-slate-600 text-sm md:text-base">{t('jobOrderDetails.subtitle')}</p>
           {/* Date Created Display */}
@@ -1238,22 +1237,26 @@ const JobOrderDetailsPage: React.FC = () => {
                 </Button>
               )}
               
-              {/* Archive Button - Only for Admin users */}
+              {/* Archive / Restore Button - Only for Admin users */}
               {user?.role === 'admin' && (
                 <Button
                   variant="outline"
-                  onClick={handleArchiveJobOrder}
+                  onClick={viewJobOrder?.archived_at ? handleRestoreJobOrder : handleArchiveJobOrder}
                   disabled={archiving}
-                  className="flex items-center gap-1 text-sm px-3 py-2 md:px-4 md:py-2 border-orange-300 text-orange-700 hover:bg-orange-50"
+                  className={viewJobOrder?.archived_at
+                    ? "flex items-center gap-1 text-sm px-3 py-2 md:px-4 md:py-2 border-green text-green hover:bg-gray-50"
+                    : "flex items-center gap-1 text-sm px-3 py-2 md:px-4 md:py-2 border-orange-300 text-orange-700 hover:bg-orange-50"}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
                   </svg>
                   <span className="hidden sm:inline">
-                    {archiving ? t('common.archiving') : t('common.archive')}
+                    {archiving
+                      ? (viewJobOrder?.archived_at ? 'Restoring...' : t('common.archiving'))
+                      : (viewJobOrder?.archived_at ? 'Restore' : t('common.archive'))}
                   </span>
                   <span className="sm:hidden">
-                    {archiving ? '...' : t('common.archive')}
+                    {archiving ? '...' : (viewJobOrder?.archived_at ? 'Restore' : t('common.archive'))}
                   </span>
                 </Button>
               )}
@@ -1568,9 +1571,6 @@ const JobOrderDetailsPage: React.FC = () => {
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">{t('jobOrderDetails.secondDegreeCut')}</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Consumption (KG)</th>
                   <th className="px-4 py-2 border-b border-gray-200 font-semibold text-right">Consumption (M)</th>
-                  {user?.role === 'admin' && (
-                    <th className="px-4 py-2 border-b border-gray-200 font-semibold text-center">Actions</th>
-                  )}
                 </tr>
               </thead>
               <tbody>
@@ -1626,18 +1626,6 @@ const JobOrderDetailsPage: React.FC = () => {
                               ? item.true_consumption_m.toFixed(4)
                               : '—'}
                           </td>
-                          {user?.role === 'admin' && (
-                            <td className="px-4 py-2 border-b border-gray-200 text-center">
-                              <button
-                                onClick={() => handleArchiveItem(item.item_id)}
-                                disabled={archivingItem === item.item_id}
-                                className="px-2 py-1 text-xs bg-orange-100 text-orange-700 border border-orange-300 rounded hover:bg-orange-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                title="Archive this item"
-                              >
-                                {archivingItem === item.item_id ? 'Archiving...' : 'Archive'}
-                              </button>
-                            </td>
-                          )}
                         </tr>
                       );
                     });

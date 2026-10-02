@@ -44,6 +44,8 @@ const CuttingSubTab: React.FC = () => {
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
   const [allDates, setAllDates] = useState(false);
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [archivedJobOrderNumbers, setArchivedJobOrderNumbers] = useState<Set<string>>(new Set());
   const [cutRows, setCutRows] = useState<CutRow[]>([]);
   const [cutDetailsForBreakdown, setCutDetailsForBreakdown] = useState<CutDetails[]>([]);
   const [loadingCuts, setLoadingCuts] = useState(false);
@@ -137,28 +139,42 @@ const CuttingSubTab: React.FC = () => {
 
     const loadOptions = async () => {
       try {
-        const items = await jobOrderApi.getAllSimple();
+        const items = await jobOrderApi.getAllSimple(true);
         if (!isMounted) return;
 
         const clients = new Set<string>();
         const jobOrders = new Set<string>();
+        const archived = new Set<string>();
         const clientMap: Record<string, string> = {};
 
         for (const jo of items) {
+          if (jo.archived_at && jo.job_order_number) {
+            archived.add(jo.job_order_number);
+          }
+          // Client map always covers archived job orders so archived cuts still resolve a client
+          if (jo.job_order_number && jo.client_name) {
+            clientMap[jo.job_order_number] = jo.client_name;
+          }
+          if (jo.archived_at && !includeArchived) {
+            continue;
+          }
           if (jo.client_name) {
             clients.add(jo.client_name);
           }
           if (jo.job_order_number) {
             jobOrders.add(jo.job_order_number);
-            if (jo.client_name) {
-              clientMap[jo.job_order_number] = jo.client_name;
-            }
           }
         }
 
         setClientOptions(Array.from(clients).sort((a, b) => a.localeCompare(b)));
         setJobOrderOptions(Array.from(jobOrders).sort((a, b) => a.localeCompare(b)));
         setJobOrderClientByNumber(clientMap);
+        setArchivedJobOrderNumbers(archived);
+
+        // If the selected job order just became hidden, clear it
+        if (!includeArchived) {
+          setJobOrderSearch(prev => (prev && archived.has(prev) ? '' : prev));
+        }
 
         const models = await jobOrderApi.getExistingModels();
         if (!isMounted) return;
@@ -173,7 +189,7 @@ const CuttingSubTab: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [includeArchived]);
 
   useEffect(() => {
     const today = new Date();
@@ -210,7 +226,7 @@ const CuttingSubTab: React.FC = () => {
         const response: CutDetailsListResponse | CutDetails[] = await cutsApi.getAllCuts(
           page,
           pageSize,
-          jobOrderId ? { job_order_id: jobOrderId } : undefined
+          { ...(jobOrderId ? { job_order_id: jobOrderId } : {}), include_archived: includeArchived }
         );
 
         if (Array.isArray(response)) {
@@ -224,6 +240,7 @@ const CuttingSubTab: React.FC = () => {
       } while (page <= totalPages);
 
       const filteredCuts = cuts.filter((cut) => {
+        if (!includeArchived && archivedJobOrderNumbers.has(cut.job_order_number)) return false;
         if (!cut.created_at) return false;
         const d = new Date(cut.created_at);
         if (Number.isNaN(d.getTime())) return false;
@@ -883,6 +900,13 @@ const CuttingSubTab: React.FC = () => {
                   onCheckedChange={(checked) => setAllDates(Boolean(checked))}
                 />
                 <span>All dates</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-gray-600">
+                <Switch
+                  checked={includeArchived}
+                  onCheckedChange={(checked) => setIncludeArchived(Boolean(checked))}
+                />
+                <span>Include archived</span>
               </div>
               <Button
                 className="px-6 w-full md:flex-1"
