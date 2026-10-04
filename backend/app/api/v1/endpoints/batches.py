@@ -46,6 +46,7 @@ class BatchQueryParams(BaseModel):
     job_order_id: Optional[int] = None
     color_id: Optional[int] = None
     is_second_degree: Optional[bool] = None
+    archived: Optional[bool] = False
 
 # Client endpoints (renamed from Brand)
 @router.get("/clients/", response_model=List[schemas.Client])
@@ -126,7 +127,8 @@ def read_batches(
         models.Size.size_value.label('size_value'),
         models.Color.color_name.label('color_name'),
         models.ProductionPhase.phase_name.label('phase_name'),
-        models.JobOrder.job_order_number.label('job_order_number')
+        models.JobOrder.job_order_number.label('job_order_number'),
+        models.JobOrder.archived_at.label('job_order_archived_at')
     ).join(
         models.JobOrder,
         base_table.job_order_id == models.JobOrder.job_order_id
@@ -170,6 +172,14 @@ def read_batches(
         params.is_second_degree is not None,
         lambda q: q.filter(base_table.is_second_degree == params.is_second_degree),
     )
+    _apply_filter(
+        not params.archived,
+        lambda q: q.filter(models.JobOrder.archived_at.is_(None)),
+    )
+    _apply_filter(
+        bool(params.archived),
+        lambda q: q.filter(models.JobOrder.archived_at.isnot(None)),
+    )
 
     # Get total count before pagination
     total_count = query.count()
@@ -199,7 +209,7 @@ def read_batches(
                 color_name=batch[4] if batch[4] else "Unknown",
                 phase_name=batch[5] if batch[5] else "Unknown",
                 last_updated=batch[0].last_updated,
-                archived_at=None,
+                archived_at=batch[7],
                 is_second_degree=bool(batch[0].is_second_degree)
             )
             for batch in batches
@@ -209,12 +219,17 @@ def read_batches(
 
 @router.get("/stats", response_model=schemas.BatchStats)
 def get_batch_stats(db: Annotated[Session, Depends(get_db)]):
-    """Get batch statistics"""
-    total_batches = db.query(func.count(models.Batch.batch_id)).scalar()
-    in_production = db.query(func.count(models.Batch.batch_id)).filter(
+    """Get batch statistics (active job orders only)"""
+    def _active_batch_count():
+        return db.query(func.count(models.Batch.batch_id)).join(
+            models.JobOrder, models.Batch.job_order_id == models.JobOrder.job_order_id
+        ).filter(models.JobOrder.archived_at.is_(None))
+
+    total_batches = _active_batch_count().scalar()
+    in_production = _active_batch_count().filter(
         models.Batch.status.in_([STATUS_PENDING, STATUS_IN_PROGRESS])
     ).scalar()
-    completed = db.query(func.count(models.Batch.batch_id)).filter(
+    completed = _active_batch_count().filter(
         models.Batch.status == STATUS_COMPLETED
     ).scalar()
     
@@ -236,6 +251,11 @@ def get_phase_stats(db: Annotated[Session, Depends(get_db)]):
     ).join(
         models.ProductionPhase,
         models.Batch.current_phase == models.ProductionPhase.phase_id
+    ).join(
+        models.JobOrder,
+        models.Batch.job_order_id == models.JobOrder.job_order_id
+    ).filter(
+        models.JobOrder.archived_at.is_(None)
     ).group_by(
         models.ProductionPhase.phase_id,
         models.ProductionPhase.phase_name,
@@ -399,7 +419,12 @@ def update_batch_by_barcode(
     db_batch = crud_get_batch_by_barcode(db, barcode=barcode)
     if db_batch is None:
         raise HTTPException(status_code=404, detail=BATCH_NOT_FOUND)
-    
+    if db_batch.archived_at is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot modify a batch belonging to an archived job order. Restore the job order first.",
+        )
+
     # Get the SQLAlchemy model instance
     db_batch_model = db.query(models.Batch).filter(models.Batch.barcode == barcode).first()
     if not db_batch_model:

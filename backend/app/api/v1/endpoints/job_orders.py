@@ -28,6 +28,14 @@ from app.crud.job_order import (
     get_job_order_summary as crud_get_job_order_summary,
     refresh_job_order_items_summary,
     update_job_order as crud_update_job_order,
+    archive_job_order as crud_archive_job_order,
+    archive_job_orders_bulk as crud_archive_job_orders_bulk,
+    restore_job_order as crud_restore_job_order,
+    restore_job_orders_bulk as crud_restore_job_orders_bulk,
+    get_archived_job_orders as crud_get_archived_job_orders,
+    get_archived_job_orders_count as crud_get_archived_job_orders_count,
+    purge_job_order as crud_purge_job_order,
+    purge_job_orders_bulk as crud_purge_job_orders_bulk,
 )
 import os
 import asyncio
@@ -113,6 +121,7 @@ def _build_job_order_list_item(db: Session, job_order: models.JobOrder) -> Dict:
         "image_url": job_order.image_url,
         "print_config": job_order.print_config,
         "priority": job_order.priority or 0,
+        "archived_at": job_order.archived_at,
     }
 
 
@@ -267,9 +276,13 @@ def read_job_orders(
     job_order_number: Optional[str] = None,
     model_name: Optional[str] = None,
     client_name: Optional[str] = None,
+    include_archived: bool = False,
 ):
-    """Get all job orders with optional filtering"""
+    """Get all job orders with optional filtering. Archived job orders are
+    excluded by default -- pass include_archived=true to include them."""
     query = db.query(models.JobOrder)
+    if not include_archived:
+        query = query.filter(models.JobOrder.archived_at.is_(None))
     query = _apply_read_job_orders_filters(
         query, model_id, job_order_number, model_name, client_name
     )
@@ -277,7 +290,7 @@ def read_job_orders(
     job_orders = query.offset(skip).limit(limit).all()
     result_items = [_build_job_order_list_item(db, jo) for jo in job_orders]
     result_items.sort(key=lambda x: (-x.get("priority", 0), x["job_order_number"]))
-    
+
     return {
         "items": result_items,
         "total": total_count
@@ -286,21 +299,35 @@ def read_job_orders(
 @router.get("/simple/", response_model=List[Dict])
 def read_job_orders_simple(
     db: Annotated[Session, Depends(get_db)],
-    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)]
+    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)],
+    include_archived: bool = False,
 ):
-    """Get all job orders with basic information (for dropdowns)"""
-    job_orders = db.query(models.JobOrder).all()
-    result_items = []
-    for job_order in job_orders:
-        model = db.query(models.Model).filter(models.Model.model_id == job_order.model_id).first()
-        brand = db.query(models.Client).filter(models.Client.client_id == job_order.client_id).first() if job_order.client_id else None
-        result_items.append({
-            "job_order_id": job_order.job_order_id,
-            "job_order_number": job_order.job_order_number,
-            "model_name": model.model_name if model else None,
-            "client_name": brand.client_name if brand else None
-        })
-    return result_items
+    """Get all job orders with basic information (for dropdowns). Archived job
+    orders are excluded by default so they can't be selected for new work."""
+    # Single joined query -- avoids two lookups per job order (N+1).
+    query = (
+        db.query(
+            models.JobOrder.job_order_id,
+            models.JobOrder.job_order_number,
+            models.Model.model_name,
+            models.Client.client_name,
+            models.JobOrder.archived_at,
+        )
+        .outerjoin(models.Model, models.Model.model_id == models.JobOrder.model_id)
+        .outerjoin(models.Client, models.Client.client_id == models.JobOrder.client_id)
+    )
+    if not include_archived:
+        query = query.filter(models.JobOrder.archived_at.is_(None))
+    return [
+        {
+            "job_order_id": row.job_order_id,
+            "job_order_number": row.job_order_number,
+            "model_name": row.model_name,
+            "client_name": row.client_name,
+            "archived_at": row.archived_at,
+        }
+        for row in query.all()
+    ]
 
 @router.get(
     "/{job_order_id}/compensations",
@@ -780,18 +807,121 @@ async def update_job_order_form(
     }
 
 
-@router.delete("/{job_order_id}", responses=_OPENAPI_404)
+@router.delete("/{job_order_id}", responses=_OPENAPI_404_400)
 def delete_job_order(
     job_order_id: int,
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[schemas.User, Depends(get_current_user)]
 ):
-    """Delete a job order"""
-    success = crud_delete_job_order(db, job_order_id=job_order_id)
-    if not success:
+    """Permanently delete a job order. The job order must be archived first --
+    use POST /{job_order_id}/archive, then this (or /{job_order_id}/purge)."""
+    if not get_job_order(db, job_order_id):
         raise HTTPException(status_code=404, detail=MSG_JOB_ORDER_NOT_FOUND)
-    
+    try:
+        crud_delete_job_order(db, job_order_id=job_order_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     return {"message": "Job order deleted successfully"}
+
+@router.post("/{job_order_id}/archive", response_model=schemas.JobOrderArchiveActionResponse, responses=_OPENAPI_404)
+def archive_job_order_endpoint(
+    job_order_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
+):
+    """Archive a job order. Items, batches, and history are archived implicitly --
+    they stay in place and are simply excluded from default active-only queries."""
+    job_order = crud_archive_job_order(db, job_order_id)
+    if not job_order:
+        raise HTTPException(status_code=404, detail=MSG_JOB_ORDER_NOT_FOUND)
+    return {"message": "Job order archived successfully", "job_order_id": job_order_id}
+
+@router.post("/archive-bulk", response_model=schemas.JobOrderBulkArchiveActionResponse)
+def archive_job_orders_bulk_endpoint(
+    payload: schemas.JobOrderIdsRequest,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
+):
+    """Archive multiple job orders in one set-based operation."""
+    archived_ids = crud_archive_job_orders_bulk(db, payload.job_order_ids)
+    return {"message": f"Archived {len(archived_ids)} job order(s)", "job_order_ids": archived_ids}
+
+@router.post("/{job_order_id}/restore", response_model=schemas.JobOrderArchiveActionResponse, responses=_OPENAPI_404)
+def restore_job_order_endpoint(
+    job_order_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
+):
+    """Restore (un-archive) a job order."""
+    job_order = crud_restore_job_order(db, job_order_id)
+    if not job_order:
+        raise HTTPException(status_code=404, detail=MSG_JOB_ORDER_NOT_FOUND)
+    return {"message": "Job order restored successfully", "job_order_id": job_order_id}
+
+@router.post("/restore-bulk", response_model=schemas.JobOrderBulkArchiveActionResponse)
+def restore_job_orders_bulk_endpoint(
+    payload: schemas.JobOrderIdsRequest,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_user)],
+):
+    """Restore multiple job orders in one set-based operation."""
+    restored_ids = crud_restore_job_orders_bulk(db, payload.job_order_ids)
+    return {"message": f"Restored {len(restored_ids)} job order(s)", "job_order_ids": restored_ids}
+
+@router.get("/archived/", response_model=JobOrderListResponse)
+def read_archived_job_orders(
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[Optional[schemas.User], Depends(get_optional_current_user)],
+    skip: int = 0,
+    limit: int = 100,
+    job_order_number: Optional[str] = None,
+    model_name: Optional[str] = None,
+    client_name: Optional[str] = None,
+):
+    """List archived job orders only (for the Archive page)."""
+    total_count = crud_get_archived_job_orders_count(db, job_order_number, model_name, client_name)
+    job_orders = crud_get_archived_job_orders(db, skip, limit, job_order_number, model_name, client_name)
+    result_items = [_build_job_order_list_item(db, jo) for jo in job_orders]
+    return {"items": result_items, "total": total_count}
+
+@router.delete("/{job_order_id}/purge", response_model=schemas.JobOrderPurgeResponse, responses=_OPENAPI_404_400)
+def purge_job_order_endpoint(
+    job_order_id: int,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_active_superuser)],
+):
+    """Permanently delete an archived job order and everything that depends on
+    it (items, batches, scan events, cut details, phase history, etc). The job
+    order must already be archived. There is no undo."""
+    if not get_job_order(db, job_order_id):
+        raise HTTPException(status_code=404, detail=MSG_JOB_ORDER_NOT_FOUND)
+    try:
+        result = crud_purge_job_order(db, job_order_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "message": "Job order permanently deleted",
+        "job_order_id": result["job_order_id"],
+        "deleted_batches": result["deleted_batches"],
+        "deleted_cut_details": result["deleted_cut_details"],
+    }
+
+@router.post("/purge-bulk", response_model=schemas.JobOrderBulkPurgeResponse)
+def purge_job_orders_bulk_endpoint(
+    payload: schemas.JobOrderIdsRequest,
+    db: Annotated[Session, Depends(get_db)],
+    current_user: Annotated[schemas.User, Depends(get_current_active_superuser)],
+):
+    """Permanently delete multiple archived job orders in one transaction.
+    Any ids that aren't archived are silently skipped. There is no undo."""
+    result = crud_purge_job_orders_bulk(db, payload.job_order_ids)
+    return {
+        "message": f"Permanently deleted {len(result['purged_job_order_ids'])} job order(s)",
+        "purged_job_order_ids": result["purged_job_order_ids"],
+        "total_deleted_batches": result["total_deleted_batches"],
+        "total_deleted_cut_details": result["total_deleted_cut_details"],
+    }
 
 @router.get(
     "/{job_order_id}/summary",
@@ -1128,11 +1258,24 @@ def get_job_orders_summary(
     job_order_number: Optional[str] = None,
     model_name: Optional[str] = None,
     client_name: Optional[str] = None,
+    include_archived: bool = False,
 ):
-    """Get job order summaries from the job_orders_summary table"""
-    # Build query from job_orders_summary table
-    query = db.query(models.JobOrderSummary)
-    
+    """Get job order summaries from the job_orders_summary table. Archived job
+    orders are excluded by default -- pass include_archived=true to include them."""
+    # Build query from job_orders_summary table; priority/archived_at come from
+    # the joined job order so no per-row lookup is needed.
+    query = db.query(
+        models.JobOrderSummary,
+        models.JobOrder.priority,
+        models.JobOrder.archived_at,
+    ).join(
+        models.JobOrder,
+        models.JobOrderSummary.job_order_id == models.JobOrder.job_order_id,
+        isouter=include_archived,
+    )
+    if not include_archived:
+        query = query.filter(models.JobOrder.archived_at.is_(None))
+
     # Apply filters
     if job_order_number:
         query = query.filter(models.JobOrderSummary.job_order_number.ilike(f"%{job_order_number}%"))
@@ -1144,52 +1287,63 @@ def get_job_orders_summary(
     # Get total count
     total = query.count()
     
-    # Apply pagination
-    results = query.offset(skip).limit(limit).all()
-    
-    # Also need to check for stalled batches and notes which are not in the summary table
-    summaries = []
-    for result in results:
-        # Check for items with notes
-        items_with_notes = db.query(models.JobOrderItemSummary).filter(
-            models.JobOrderItemSummary.job_order_id == result.job_order_id,
-            models.JobOrderItemSummary.notes.isnot(None),
-            models.JobOrderItemSummary.notes != ''
-        ).all()
-        
-        # Detect stalled batches
+    # Sort in SQL so pagination returns the right page (priority desc, then number)
+    rows = (
+        query.order_by(
+            sa_func.coalesce(models.JobOrder.priority, 0).desc(),
+            models.JobOrderSummary.job_order_number,
+        )
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    job_order_ids = [row[0].job_order_id for row in rows]
+
+    # Notes and stalled batches aren't in the summary table -- fetch them for the
+    # whole page in one query each instead of per job order.
+    notes_by_job_order: Dict[int, List[str]] = {}
+    stalled_job_order_ids: set = set()
+    if job_order_ids:
+        note_rows = (
+            db.query(models.JobOrderItemSummary.job_order_id, models.JobOrderItemSummary.notes)
+            .filter(
+                models.JobOrderItemSummary.job_order_id.in_(job_order_ids),
+                models.JobOrderItemSummary.notes.isnot(None),
+                models.JobOrderItemSummary.notes != '',
+            )
+            .order_by(models.JobOrderItemSummary.item_id)
+            .all()
+        )
+        for jo_id, note in note_rows:
+            notes_by_job_order.setdefault(jo_id, []).append(note)
+
+        # A color/size is stalled when its batches are spread across >1 phase group
         phase_group_case = case(
             (models.Batch.current_phase == 1, 'Cutting'),
             (models.Batch.current_phase.in_([2, 3, 4, 7]), 'Sewing'),
             (models.Batch.current_phase == 8, 'Packaging'),
             else_='Other'
         )
-        
-        stalled_subq = db.query(
-            models.Batch.color_id.label('color_id'),
-            models.Batch.size_id.label('size_id'),
-            sa_func.count(sa_func.distinct(phase_group_case)).label('group_count')
-        ).filter(
-            models.Batch.job_order_id == result.job_order_id,
-            models.Batch.is_second_degree == False
-        ).group_by(
-            models.Batch.color_id,
-            models.Batch.size_id
-        ).subquery()
-        
-        has_stalled_batches = db.query(stalled_subq).filter(stalled_subq.c.group_count > 1).first() is not None
-        
-        # Update has_issues if notes exist
-        has_issues = result.has_issues or len(items_with_notes) > 0
-        
-        # Get notes text
-        notes_text = ""
-        if items_with_notes:
-            notes_list = [item.notes for item in items_with_notes if item.notes]
-            notes_text = "; ".join(notes_list)
-        
-        job_order = db.query(models.JobOrder).filter(models.JobOrder.job_order_id == result.job_order_id).first()
-        
+        stalled_rows = (
+            db.query(models.Batch.job_order_id)
+            .filter(
+                models.Batch.job_order_id.in_(job_order_ids),
+                models.Batch.is_second_degree == False,
+            )
+            .group_by(models.Batch.job_order_id, models.Batch.color_id, models.Batch.size_id)
+            .having(sa_func.count(sa_func.distinct(phase_group_case)) > 1)
+            .distinct()
+            .all()
+        )
+        stalled_job_order_ids = {r.job_order_id for r in stalled_rows}
+
+    summaries = []
+    for result, priority, archived_at in rows:
+        notes_list = notes_by_job_order.get(result.job_order_id, [])
+        has_issues = result.has_issues or len(notes_list) > 0
+        notes_text = "; ".join(notes_list)
+        has_stalled_batches = result.job_order_id in stalled_job_order_ids
+
         summaries.append({
             "job_order_id": result.job_order_id,
             "job_order_number": result.job_order_number,
@@ -1210,11 +1364,10 @@ def get_job_orders_summary(
             "overproduction_quantity": result.overproduction_quantity,
             "notes": notes_text,
             "last_calculated_at": result.last_calculated_at,
-            "priority": job_order.priority if job_order else 0
+            "priority": priority or 0,
+            "archived_at": archived_at
         })
-    
-    summaries.sort(key=lambda x: (-x.get("priority", 0), x["job_order_number"]))
-    
+
     return {
         "items": summaries,
         "total": total

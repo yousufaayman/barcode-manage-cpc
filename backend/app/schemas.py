@@ -644,6 +644,7 @@ class JobOrder(JobOrderBase):
     batches: Optional[List[Dict[str, str]]] = None
     image_url: Optional[str] = None
     date_created: Optional[datetime] = None
+    archived_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -928,77 +929,31 @@ class BarcodeScanEventResponse(BarcodeScanEventBase):
         from_attributes = True
 
 # ============================================================================
-# ARCHIVE SCHEMA MODELS
+# JOB ORDER ARCHIVING
 # ============================================================================
 
-class ArchivedBatchBase(BaseModel):
+class JobOrderIdsRequest(BaseModel):
+    job_order_ids: List[int]
+
+class JobOrderArchiveActionResponse(BaseModel):
+    message: str
     job_order_id: int
-    barcode: str
-    size_id: int
-    color_id: int
-    quantity: int
-    layers: int
-    serial: str
-    current_phase: int
-    status: str
-    last_updated: Optional[datetime] = None
-    archived_at: Optional[datetime] = None
 
-class ArchivedBatchCreate(ArchivedBatchBase):
-    pass
+class JobOrderBulkArchiveActionResponse(BaseModel):
+    message: str
+    job_order_ids: List[int]
 
-class ArchivedBatchResponse(ArchivedBatchBase):
-    batch_id: int
-    size_value: Optional[str] = None
-    color_name: Optional[str] = None
-    phase_name: Optional[str] = None
-
-    class Config:
-        from_attributes = True
-
-# Archived Job Order schemas
-class ArchivedJobOrderBase(BaseModel):
-    model_id: int
-    job_order_number: str
-    client_id: Optional[int] = None
-    image_url: Optional[str] = None
-    notes: Optional[str] = None
-    print_config: Optional[JobOrderPrintConfig] = None
-    date_created: datetime
-    archived_at: Optional[datetime] = None
-
-class ArchivedJobOrderCreate(ArchivedJobOrderBase):
-    pass
-
-class ArchivedJobOrderResponse(ArchivedJobOrderBase):
+class JobOrderPurgeResponse(BaseModel):
+    message: str
     job_order_id: int
-    model_name: Optional[str] = None
-    client_name: Optional[str] = None
+    deleted_batches: int
+    deleted_cut_details: int
 
-    class Config:
-        from_attributes = True
-
-# Archived Job Order Item schemas
-class ArchivedJobOrderItemBase(BaseModel):
-    job_order_id: int
-    color_id: int
-    size_id: int
-    quantity: int
-    weight: Optional[float] = None
-    notes: Optional[str] = None
-    archived_at: datetime
-
-class ArchivedJobOrderItemCreate(ArchivedJobOrderItemBase):
-    pass
-
-class ArchivedJobOrderItemResponse(ArchivedJobOrderItemBase):
-    item_id: int
-    job_order_number: Optional[str] = None
-    color_name: Optional[str] = None
-    size_value: Optional[str] = None
-
-    class Config:
-        from_attributes = True
+class JobOrderBulkPurgeResponse(BaseModel):
+    message: str
+    purged_job_order_ids: List[int]
+    total_deleted_batches: int
+    total_deleted_cut_details: int
 
 # ============================================================================
 # REPORTING SCHEMA MODELS
@@ -1066,6 +1021,7 @@ class JobOrderSummary(BaseModel):
     last_calculated_at: Optional[datetime] = None
     notes: Optional[str] = None
     image_url: Optional[str] = None
+    archived_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

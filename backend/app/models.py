@@ -251,6 +251,7 @@ class JobOrder(Base):
     print_config = Column(JSONB, nullable=True)  # Replaces job_order_prints table
     date_created = Column(DateTime, server_default=func.now(), nullable=False)
     priority = Column(Integer, nullable=True, default=0)
+    archived_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     # Relationships
     model = relationship("Model", back_populates="job_orders")
@@ -678,128 +679,6 @@ class WorkerOvertimeHistory(Base):
 
     applied_by_user_id = Column(Integer, ForeignKey("core.users.id"), nullable=False, index=True)
     applied_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
-
-# ============================================================================
-# ARCHIVE SCHEMA MODELS
-# ============================================================================
-
-class ArchivedBatch(Base):
-    """Archive.batches - Enhanced structure for archived data"""
-    __tablename__ = "batches"
-    __table_args__ = {'schema': 'archive'}
-
-    batch_id = Column(Integer, primary_key=True, index=True)
-    job_order_id = Column(Integer, nullable=False)  # No foreign key for archived data
-    barcode = Column(String(255), unique=True, index=True, nullable=False)
-    size_id = Column(Integer, nullable=True)  # No foreign key for archived data
-    color_id = Column(Integer, nullable=True)  # No foreign key for archived data
-    quantity = Column(Integer, nullable=True)
-    layers = Column(Integer, nullable=True)
-    serial = Column(String(3), nullable=False)
-    current_phase = Column(Integer, nullable=True)  # No foreign key for archived data
-    status = Column(String(50), nullable=True)
-    last_updated = Column(DateTime, nullable=True)
-    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
-    is_second_degree = Column(Boolean, nullable=False, default=False, server_default='false')
-    notes = Column(Text, nullable=True)
-
-class ArchivedJobOrder(Base):
-    """Archive.job_orders - Enhanced structure for archived data"""
-    __tablename__ = "job_orders"
-    __table_args__ = {'schema': 'archive'}
-
-    job_order_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    model_id = Column(Integer, nullable=False)  # No foreign key for archived data
-    job_order_number = Column(String(100), unique=True, nullable=False, index=True)
-    client_id = Column(Integer, nullable=True)  # No foreign key for archived data
-    image_url = Column(String(255), nullable=True)
-    notes = Column(Text, nullable=True)
-    print_config = Column(JSONB, nullable=True)  # Preserve print configuration
-    date_created = Column(DateTime, nullable=False)
-    priority = Column(Integer, nullable=True, default=0)
-    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
-
-class ArchivedJobOrderItem(Base):
-    """Archive.job_order_items - Enhanced structure for archived data"""
-    __tablename__ = "job_order_items"
-    __table_args__ = {'schema': 'archive'}
-
-    item_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    job_order_id = Column(Integer, nullable=False)  # No foreign key for archived data
-    color_id = Column(Integer, nullable=False)  # No foreign key for archived data
-    size_id = Column(Integer, nullable=False)  # No foreign key for archived data
-    quantity = Column(Integer, nullable=False)
-    weight = Column(DECIMAL(10,2), nullable=True)
-    notes = Column(Text, nullable=True)
-    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
-
-class ArchivedBarcodeScanEvent(Base):
-    """Archive.barcode_scan_events - New table for archived scan events"""
-    __tablename__ = "barcode_scan_events"
-    __table_args__ = {'schema': 'archive'}
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    batch_id = Column(Integer, nullable=False)  # No foreign key for archived data
-    action_type = Column(String(50), nullable=False)
-    phase_id = Column(Integer, nullable=False)  # No foreign key for archived data
-    old_status = Column(String(50), nullable=True)
-    new_status = Column(String(50), nullable=True)
-    old_quantity = Column(Integer, nullable=True)
-    new_quantity = Column(Integer, nullable=True)
-    old_phase = Column(Integer, nullable=True)
-    new_phase = Column(Integer, nullable=True)
-    scanned_at = Column(DateTime, nullable=False)
-    user_id = Column(Integer, nullable=True)  # No foreign key for archived data
-    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
-
-class ArchivedCutDetail(Base):
-    """Archive.cut_details - Archived cut details"""
-    __tablename__ = "cut_details"
-    __table_args__ = {'schema': 'archive'}
-
-    cut_id = Column(Integer, primary_key=True, index=True)
-    job_order_id = Column(Integer, nullable=False)
-    color_id = Column(Integer, nullable=False)
-    num_of_rolls_used = Column(Integer, nullable=False, default=0)
-    total_layers = Column(Integer, nullable=False, default=0)
-    job_order_items_ratios = Column(JSONB, nullable=False)
-    waste_fabric_weight = Column(DECIMAL(10, 3), nullable=True)
-    marker_length = Column(DECIMAL(10, 3), nullable=True)
-    created_at = Column(DateTime, nullable=False)
-    updated_at = Column(DateTime, nullable=True)
-    created_by_user_id = Column(Integer, nullable=True)
-    notes = Column(Text, nullable=True)
-    print_status = Column(String(50), nullable=True)
-    material_id = Column(Integer, nullable=True)
-    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
-
-class ArchivedCutRoll(Base):
-    """Archive.cut_rolls - Archived cut rolls"""
-    __tablename__ = "cut_rolls"
-    __table_args__ = {'schema': 'archive'}
-
-    roll_id = Column(Integer, primary_key=True, index=True)
-    cut_id = Column(Integer, nullable=False, index=True)
-    roll_number = Column(Integer, nullable=False)
-    weight = Column(DECIMAL(10, 3), nullable=False)
-    layer_weight = Column(DECIMAL(10, 3), nullable=False)
-    num_of_layers = Column(Integer, nullable=False)
-    roll_width = Column(DECIMAL(10, 3), nullable=True)
-    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
-
-class ArchivedCutSizeTransition(Base):
-    """Archive.cut_size_transitions - Archived cut size transitions"""
-    __tablename__ = "cut_size_transitions"
-    __table_args__ = {'schema': 'archive'}
-
-    transition_id = Column(Integer, primary_key=True, index=True)
-    cut_id = Column(Integer, nullable=False, index=True)
-    from_item_id = Column(Integer, nullable=False)
-    to_item_id = Column(Integer, nullable=False)
-    quantity = Column(Integer, nullable=False)
-    notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=True)
-    archived_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 # ============================================================================
 # REPORTING SCHEMA MODELS

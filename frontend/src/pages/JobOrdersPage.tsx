@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { useAuth } from '../contexts/AuthContext';
@@ -41,14 +41,13 @@ const JobOrdersPage: React.FC = () => {
   const { t } = useTranslation();
   const { toast } = useToast();
   const navigate = useNavigate();
-  const [openJobOrders, setOpenJobOrders] = useState<any[]>([]);
+  const [allOpenJobOrders, setAllOpenJobOrders] = useState<any[]>([]);
   const [closedJobOrders, setClosedJobOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingClosed, setLoadingClosed] = useState(false);
   const [showClosedOrders, setShowClosedOrders] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [currentPageClosed, setCurrentPageClosed] = useState(1);
-  const [totalOpenJobOrders, setTotalOpenJobOrders] = useState(0);
   const [totalClosedJobOrders, setTotalClosedJobOrders] = useState(0);
   
   // Filter states
@@ -154,6 +153,13 @@ const JobOrdersPage: React.FC = () => {
   const itemsPerPage = 50;
   
   // Calculate total pages
+  // Open orders are sorted client-side by issue severity, so the full list is
+  // fetched once and paged locally -- changing page doesn't hit the API.
+  const totalOpenJobOrders = allOpenJobOrders.length;
+  const openJobOrders = useMemo(
+    () => allOpenJobOrders.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage),
+    [allOpenJobOrders, currentPage]
+  );
   const totalPagesOpen = Math.ceil(totalOpenJobOrders / itemsPerPage);
   const totalPagesClosed = Math.ceil(totalClosedJobOrders / itemsPerPage);
   
@@ -166,19 +172,17 @@ const JobOrdersPage: React.FC = () => {
   // Add selected job orders state for archiving
   const [selectedJobOrders, setSelectedJobOrders] = useState<number[]>([]);
   
-  // Track if this is the initial page load
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   // Priority modal state
   const [priorityModalOpen, setPriorityModalOpen] = useState(false);
   const [allJobOrdersForPriority, setAllJobOrdersForPriority] = useState<JobOrderSummary[]>([]);
   const canManageJobOrders = user?.role === 'admin' || user?.role === 'general_operations';
-  
+
   // Fetch open job orders using summary endpoint
   const fetchOpenJobOrders = async () => {
     try {
       setLoading(true);
-      
+
       // Fetch all open job orders (no skip/limit) - summary aggregates from item-level data
       const allOpenResponse = await jobOrderApi.getSummary({
         limit: 10000,
@@ -186,15 +190,14 @@ const JobOrdersPage: React.FC = () => {
           Object.entries(filters).filter(([_, value]) => value !== '')
         )
       });
-      
+
       // Ensure we have valid data
       if (!allOpenResponse || !allOpenResponse.items) {
         console.warn('No job orders data received from API');
-        setOpenJobOrders([]);
-        setTotalOpenJobOrders(0);
+        setAllOpenJobOrders([]);
         return;
       }
-      
+
       // Sort by issues hierarchy first: P > T > L > S > O, then by manual priority
       const sortedOpenItems = [...allOpenResponse.items].sort((a, b) => {
         const aIssues = detectIssues(a);
@@ -225,10 +228,7 @@ const JobOrdersPage: React.FC = () => {
         
         return a.job_order_number.localeCompare(b.job_order_number);
       });
-      // Apply pagination after sorting
-      const pagedOpenItems = sortedOpenItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-      setOpenJobOrders(pagedOpenItems);
-      setTotalOpenJobOrders(sortedOpenItems.length);
+      setAllOpenJobOrders(sortedOpenItems);
     } catch (error) {
       console.error('Error fetching open job orders:', error);
       toast({
@@ -243,15 +243,10 @@ const JobOrdersPage: React.FC = () => {
 
   useEffect(() => {
     if (!showOpenOrders) return;
-    // Only auto-refresh on initial page load, not on filter changes or pagination
-    const shouldRefresh = isInitialLoad;
     fetchOpenJobOrders();
-    if (isInitialLoad) {
-      setIsInitialLoad(false);
-    }
-  }, [showOpenOrders, currentPage, filters, t, toast, isInitialLoad]);
+  }, [showOpenOrders, filters]);
 
-  // Fetch dropdown options
+  // Fetch dropdown options (filter dropdowns + create form) -- one /simple/ call feeds both
   useEffect(() => {
     const fetchDropdownOptions = async () => {
       try {
@@ -263,6 +258,7 @@ const JobOrdersPage: React.FC = () => {
         setJobOrderOptions(jobOrderNumbers);
         setModelOptions(modelNames);
         setBrandOptions(brandNames);
+        setExistingBrands(brandNames);
       } catch (error) {
         console.error('Error fetching dropdown options:', error);
       }
@@ -279,15 +275,9 @@ const JobOrdersPage: React.FC = () => {
           jobOrderApi.getExistingSizes(),
           jobOrderApi.getExistingModels(),
         ]);
-        const clientsResponse = await api.get<Array<{ client_id: number; client_name: string }>>('/batches/clients/');
-        const clientsData = Array.isArray(clientsResponse.data) ? clientsResponse.data : [];
-        // Fetch clients from jobOrderApi.getAllSimple
-        const simpleJobOrders = await jobOrderApi.getAllSimple();
-        const brands = [...new Set(simpleJobOrders.map(jo => jo.client_name).filter(name => name))];
         setExistingColors(colors);
         setExistingSizes(sizes);
         setExistingModels(models);
-        setExistingBrands(brands);
       } catch (error) {
         console.error('Error fetching existing options:', error);
       }
@@ -708,7 +698,7 @@ const JobOrdersPage: React.FC = () => {
     
     if (window.confirm(confirmMessage)) {
       try {
-        await api.post('/job-orders/archive/bulk', { job_order_ids: selectedJobOrders });
+        await jobOrderApi.archiveBulk(selectedJobOrders);
         setSelectedJobOrders([]);
         await fetchOpenJobOrders(); // Refresh the list
         
@@ -732,7 +722,7 @@ const JobOrdersPage: React.FC = () => {
     
     if (window.confirm(confirmMessage)) {
       try {
-        await api.post(`/job-orders/${jobOrderId}/archive`);
+        await jobOrderApi.archive(jobOrderId);
         await fetchOpenJobOrders(); // Refresh the list
         
         toast({
@@ -1131,7 +1121,7 @@ const JobOrdersPage: React.FC = () => {
             </button>
           </div>
         )}
-        
+
         {/* Mobile Full View Toggle for Open Job Orders */}
         {isMobile && (
           <div className="mb-4">

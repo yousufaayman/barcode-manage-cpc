@@ -490,7 +490,13 @@ const BarcodeScannerPage: React.FC = () => {
       setCurrentPhase(data.current_phase);
       setStatus(data.status);
       setScanned(true);
-      
+
+      // Archived job orders are viewable in 'view' mode only; every other mode mutates
+      if (data.archived_at && mode !== 'view') {
+        setError('This batch belongs to an archived job order and is read-only. Switch to View mode, or restore the job order first.');
+        return;
+      }
+
       // Set initial quantity to batch quantity for update quantity mode
       if (mode === 'updateQuantity') {
         setQuantity(data.quantity);
@@ -770,7 +776,13 @@ const BarcodeScannerPage: React.FC = () => {
       setCurrentPhase(data.current_phase);
       setStatus(data.status);
       setScanned(true);
-      
+
+      // Archived job orders are viewable in 'view' mode only; every other mode mutates
+      if (data.archived_at && mode !== 'view') {
+        setError('This batch belongs to an archived job order and is read-only. Switch to View mode, or restore the job order first.');
+        return;
+      }
+
       // Set initial quantity to batch quantity for update quantity mode
       if (mode === 'updateQuantity') {
         setQuantity(data.quantity);
@@ -2320,7 +2332,14 @@ const BarcodeScannerPage: React.FC = () => {
                     <div className="grid grid-cols-1 gap-4">
                       <div>
                         <h4 className="text-sm font-medium text-gray-500 mb-1">{t('barcode.jobOrderNumber')}</h4>
-                        <p className="text-lg font-semibold text-gray-900">{barcodeData.job_order_number || 'N/A'}</p>
+                        <p className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                          {barcodeData.job_order_number || 'N/A'}
+                          {barcodeData.archived_at && (
+                            <span className="inline-flex items-center rounded-full border border-orange-300 bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
+                              Archived
+                            </span>
+                          )}
+                        </p>
                       </div>
                     </div>
                   </div>
@@ -2338,8 +2357,9 @@ const BarcodeScannerPage: React.FC = () => {
                           </svg>
                         </div>
                         <div className="ml-3">
-                          <h4 className="text-sm font-medium text-yellow-800">{t('barcode.archivedBatch')}</h4>
+                          <h4 className="text-sm font-medium text-yellow-800">This batch's job order is archived (read-only)</h4>
                           <p className="text-sm text-yellow-700">{t('barcode.archivedAt')}: {new Date(barcodeData.archived_at).toLocaleString()}</p>
+                          <p className="text-xs text-yellow-700 mt-1">Restore the job order from the Archive page to scan or update this batch.</p>
                         </div>
                       </div>
                     </div>

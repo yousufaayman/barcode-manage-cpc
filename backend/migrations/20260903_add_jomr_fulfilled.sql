@@ -1,6 +1,0 @@
-BEGIN;
-
-ALTER TABLE IF EXISTS core.job_order_material_requests
-    ADD COLUMN IF NOT EXISTS fulfilled BOOLEAN NOT NULL DEFAULT FALSE;
-
-COMMIT;

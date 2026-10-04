@@ -34,21 +34,24 @@ def get_all_cuts(
             description="Filter by print status (pending, in_progress, completed, no_printing)"
         ),
     ] = None,
+    include_archived: Annotated[bool, Query(description="Include cuts from archived job orders")] = False,
 ):
     """Get all cuts with their details from cut_details_view with pagination and filtering.
-    
+    Cuts from archived job orders are excluded unless include_archived=true.
+
     Returns cuts sorted by created_at descending (newest first).
     """
     try:
         skip = (page - 1) * limit
         cuts, total_count = cut_crud.get_all_cut_details(
-            db, 
-            skip=skip, 
+            db,
+            skip=skip,
             limit=limit,
             job_order_id=job_order_id,
             model_id=model_id,
             color_id=color_id,
-            print_status=print_status
+            print_status=print_status,
+            include_archived=include_archived,
         )
         total_pages = ceil(total_count / limit) if total_count > 0 else 0
         
@@ -74,12 +77,15 @@ def get_filter_options(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[schemas.User, Depends(get_current_user)],
 ):
-    """Get filter options for cuts (unique job orders, models, colors, print statuses)"""
+    """Get filter options for cuts (unique job orders, models, colors, print statuses).
+    Options only reflect cuts from active (non-archived) job orders."""
+    active_only = "job_order_id IN (SELECT job_order_id FROM core.job_orders WHERE archived_at IS NULL)"
     try:
         job_orders_result = db.execute(
-            text("""
+            text(f"""
                 SELECT DISTINCT job_order_id, job_order_number
                 FROM ops.cut_details_view
+                WHERE {active_only}
                 ORDER BY job_order_number
             """)
         )
@@ -89,10 +95,10 @@ def get_filter_options(
         ]
         
         models_result = db.execute(
-            text("""
+            text(f"""
                 SELECT DISTINCT model_id, model_name
                 FROM ops.cut_details_view
-                WHERE model_name IS NOT NULL
+                WHERE model_name IS NOT NULL AND {active_only}
                 ORDER BY model_name
             """)
         )
@@ -102,10 +108,10 @@ def get_filter_options(
         ]
         
         colors_result = db.execute(
-            text("""
+            text(f"""
                 SELECT DISTINCT color_id, color_name
                 FROM ops.cut_details_view
-                WHERE color_name IS NOT NULL
+                WHERE color_name IS NOT NULL AND {active_only}
                 ORDER BY color_name
             """)
         )

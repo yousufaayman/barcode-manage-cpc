@@ -352,33 +352,7 @@ const BarcodeManagementPage: React.FC = () => {
       }
     }
   };
-  
-  // Handle archive selected
-  const handleArchiveSelected = async () => {
-    if (selectedBarcodes.length === 0) {
-      alert(t('barcodeManagement.selectBarcodesToArchive'));
-      return;
-    }
-    
-    const confirmMessage = t('barcodeManagement.confirmBulkArchive', { count: selectedBarcodes.length })
-      .replace('{count}', String(selectedBarcodes.length));
-    
-    if (window.confirm(confirmMessage)) {
-      try {
-        await api.post('/batches/archive/bulk', { batch_ids: selectedBarcodes });
-        setBarcodes(prev => prev.filter(barcode => !selectedBarcodes.includes(barcode.batch_id)));
-        setSelectedBarcodes([]);
-        
-        const successMessage = t('barcodeManagement.successfullyArchived', { count: selectedBarcodes.length })
-          .replace('{count}', String(selectedBarcodes.length));
-        alert(successMessage);
-      } catch (error) {
-        console.error('Error archiving barcodes:', error);
-        alert(t('barcodeManagement.failedToArchive'));
-      }
-    }
-  };
-  
+
   // Handle print selected
   const handlePrintSelected = async () => {
     if (selectedBarcodes.length === 0) {
@@ -762,40 +736,17 @@ const BarcodeManagementPage: React.FC = () => {
               </select>
             </div>
             
-            {/* Delete and Archive Buttons - moved here to be in same row as status filter */}
+            {/* Delete Button - moved here to be in same row as status filter */}
             {user?.role === 'admin' && (
               <div className="form-group">
                 <label className="text-sm font-medium text-gray-700">{t('common.actions')}</label>
                 <div className="flex gap-2">
-                  <button 
-                    className="btn-outline text-sm text-red-600 border-red-600 hover:bg-red-600 hover:text-white flex-1" 
+                  <button
+                    className="btn-outline text-sm text-red-600 border-red-600 hover:bg-red-600 hover:text-white flex-1"
                     onClick={handleBulkDelete}
                     disabled={selectedBarcodes.length === 0}
                   >
                     {t('barcodeManagement.deleteSelected')}
-                  </button>
-                  
-                  <button 
-                    className="btn-outline text-sm text-orange-600 border-orange-600 hover:bg-orange-600 hover:text-white flex-1" 
-                    onClick={handleArchiveSelected}
-                    disabled={selectedBarcodes.length === 0}
-                  >
-                    {t('barcodeManagement.archiveSelected')}
-                  </button>
-                </div>
-              </div>
-            )}
-            
-            {user?.role === 'general_operations' && (
-              <div className="form-group">
-                <label className="text-sm font-medium text-gray-700">{t('common.actions')}</label>
-                <div className="flex gap-2">
-                  <button 
-                    className="btn-outline text-sm text-orange-600 border-orange-600 hover:bg-orange-600 hover:text-white flex-1" 
-                    onClick={handleArchiveSelected}
-                    disabled={selectedBarcodes.length === 0}
-                  >
-                    {t('barcodeManagement.archiveSelected')}
                   </button>
                 </div>
               </div>
